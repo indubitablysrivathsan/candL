@@ -29,7 +29,7 @@ def extract_date(file):
 
 
 def ensure_dirs(base):
-    dirs = ['DATA', 'OI', 'CHNGOI', 'VOLUME']
+    dirs = ['OI', 'CHNGOI', 'VOLUME']
     for d in dirs:
         os.makedirs(os.path.join(base, d), exist_ok=True)
 
@@ -63,40 +63,6 @@ def compute_max_pain(df):
         pain[strike] = total_loss
 
     return min(pain, key=pain.get)
-
-def update_analytics_csv(base_path, date, pe, ce, pcr, underlying, max_pain):
-    file_path = os.path.join(base_path, "analytics.csv")
-
-    new_row = pd.DataFrame([{
-        'trade_date': date,
-        'pe': pe,
-        'ce': ce,
-        'pcr': pcr,
-        'underlying': underlying,
-        'max_pain': max_pain
-    }])
-
-    if os.path.exists(file_path):
-        existing = pd.read_csv(file_path)
-
-        # combine old + new
-        updated = pd.concat([existing, new_row], ignore_index=True)
-
-        # remove duplicate trade dates
-        updated = updated.drop_duplicates(
-            subset=['trade_date'],
-            keep='last'
-        )
-
-    else:
-        updated = new_row
-
-    # sort by date
-    updated['trade_date'] = pd.to_datetime(updated['trade_date'])
-    updated = updated.sort_values(by='trade_date')
-
-    updated.to_csv(file_path, index=False)
-
 
 def plot_metric(strikes, ce, pe, underlying, max_pain, ticker, expiry, date, col, label, out_dir):
     x = np.arange(len(strikes))
@@ -227,9 +193,6 @@ def process_file(file):
         c, p, pcr = compute_pcr(g)
         max_pain = compute_max_pain(g)
 
-        # Save DATA
-        g.to_csv(os.path.join(base, 'DATA', f"{date}.csv"), index=False)
-
         # Plots
         plot_metric(strikes, ce, pe, underlying, max_pain, ticker, expiry, date,
                     'OpnIntrst', 'OI', os.path.join(base, 'OI'))
@@ -239,8 +202,6 @@ def process_file(file):
 
         plot_metric(strikes, ce, pe, underlying, max_pain, ticker, expiry, date,
                     'TtlTradgVol', 'VOLUME', os.path.join(base, 'VOLUME'))
-
-        update_analytics_csv(base, date, c, p, pcr, underlying, max_pain)
 
 
 files = glob.glob(os.path.join(INPUT_FOLDER, "*.csv"))
