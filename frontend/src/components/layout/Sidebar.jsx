@@ -78,6 +78,22 @@ export default function Sidebar({
     }
   };
 
+  // Date range is only disabled in Time Series mode (ts shows full series).
+  // Daily Expiry Summary still navigates by date, so date range stays active.
+  const isTimeSeries =
+    selectedMetric === 'ts';
+
+  const isDailySnapshot =
+    selectedMetric === 'daily_expiry_snapshot';
+
+  const dateRangeDisabled = isTimeSeries;
+
+  const disableTicker =
+    isDailySnapshot;
+
+  const disableEndDate =
+    isTimeSeries || isDailySnapshot;
+
   const metricOptions = [
     {
       label: 'Open Interest',
@@ -94,6 +110,10 @@ export default function Sidebar({
     {
       label: 'Time Series',
       value: 'ts'
+    },
+    {
+      label: 'Daily Expiry Snapshot',
+      value: 'daily_expiry_snapshot'
     }
   ];
 
@@ -122,7 +142,10 @@ export default function Sidebar({
             </h2>
 
             <p className="text-xs text-white/45 mt-1">
-              Search NSE derivative symbols
+              {isDailySnapshot
+                ? 'Disabled in market-wide snapshot mode'
+                : 'Search NSE derivative symbols'
+              }
             </p>
           </div>
 
@@ -133,18 +156,29 @@ export default function Sidebar({
             <input
               type="text"
               value={search}
+              disabled={disableTicker}
               placeholder={
                 selectedTicker ||
                 'Search ticker...'
               }
-              onFocus={() =>
-                setShowDropdown(true)
-              }
+              onFocus={() => {
+                if (!disableTicker) {
+                  setShowDropdown(true);
+                }
+              }}
               onChange={(event) => {
+                if (disableTicker) return;
+
                 setSearch(event.target.value);
                 setShowDropdown(true);
               }}
-              className="w-full"
+              className={`
+                w-full
+                ${disableTicker
+                  ? 'opacity-40 cursor-not-allowed'
+                  : ''
+                }
+              `}
             />
 
             {showDropdown && (
@@ -238,10 +272,14 @@ export default function Sidebar({
                   return;
                 }
 
-                onExpiriesChange([
-                  ...selectedExpiries,
-                  value
-                ]);
+                if (isDailySnapshot) {
+                  onExpiriesChange([value]);
+                } else {
+                  onExpiriesChange([
+                    ...selectedExpiries,
+                    value
+                  ]);
+                }
               }}
               value=""
               className="w-full"
@@ -261,47 +299,49 @@ export default function Sidebar({
             </select>
 
             {/* Selected Expiries */}
-            <div className="flex flex-wrap gap-2">
-              {selectedExpiries.map(
-                (expiry) => (
-                  <div
-                    key={expiry}
-                    className="
-                      flex
-                      items-center
-                      gap-2
-                      rounded-lg
-                      border
-                      border-[#00B0F0]/20
-                      bg-[#00B0F0]/10
-                      px-3
-                      py-2
-                      text-xs
-                      text-[#00B0F0]
-                    "
-                  >
-                    <span>{expiry}</span>
-
-                    <button
-                      onClick={() =>
-                        onExpiriesChange(
-                          selectedExpiries.filter(
-                            (e) => e !== expiry
-                          )
-                        )
-                      }
+            {!isDailySnapshot && (
+              <div className="flex flex-wrap gap-2">
+                {selectedExpiries.map(
+                  (expiry) => (
+                    <div
+                      key={expiry}
                       className="
-                        text-white/60
-                        hover:text-white
-                        transition
+                        flex
+                        items-center
+                        gap-2
+                        rounded-lg
+                        border
+                        border-[#00B0F0]/20
+                        bg-[#00B0F0]/10
+                        px-3
+                        py-2
+                        text-xs
+                        text-[#00B0F0]
                       "
                     >
-                      ✕
-                    </button>
-                  </div>
-                )
-              )}
-            </div>
+                      <span>{expiry}</span>
+
+                      <button
+                        onClick={() =>
+                          onExpiriesChange(
+                            selectedExpiries.filter(
+                              (e) => e !== expiry
+                            )
+                          )
+                        }
+                        className="
+                          text-white/60
+                          hover:text-white
+                          transition
+                        "
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )
+                )}
+              </div>
+            )}
           </div>
         </section>
 
@@ -336,10 +376,15 @@ export default function Sidebar({
                   ${
                     selectedMetric ===
                     option.value
-                      ? `
-                        border-[#00B0F0]/30
-                        bg-[#00B0F0]/10
-                      `
+                      ? option.value === 'daily_expiry_snapshot'
+                        ? `
+                          border-[#FFA726]/30
+                          bg-[#FFA726]/10
+                        `
+                        : `
+                          border-[#00B0F0]/30
+                          bg-[#00B0F0]/10
+                        `
                       : `
                         border-white/8
                         bg-[#151922]
@@ -368,9 +413,21 @@ export default function Sidebar({
                   "
                 />
 
-                <span className="text-sm text-white/85">
+                <span
+                  className={`
+                    text-sm
+                    ${
+                      selectedMetric === option.value
+                        ? option.value === 'daily_expiry_snapshot'
+                          ? 'text-[#FFA726]'
+                          : 'text-[#00B0F0]'
+                        : 'text-white/85'
+                    }
+                  `}
+                >
                   {option.label}
                 </span>
+
               </label>
             ))}
           </div>
@@ -394,7 +451,7 @@ export default function Sidebar({
             className={`
               space-y-4
               ${
-                selectedMetric === 'ts'
+                dateRangeDisabled
                   ? 'opacity-40 pointer-events-none'
                   : ''
               }
@@ -402,7 +459,7 @@ export default function Sidebar({
           >
             <div>
               <label className="block mb-2 text-xs text-white/55">
-                Start Date
+                {isDailySnapshot ? 'Date' : 'Start Date'}
               </label>
 
               <input
@@ -417,7 +474,13 @@ export default function Sidebar({
               />
             </div>
 
-            <div>
+            <div
+              className={
+                disableEndDate
+                  ? 'opacity-40 pointer-events-none'
+                  : ''
+              }
+            >
               <label className="block mb-2 text-xs text-white/55">
                 End Date
               </label>
@@ -425,6 +488,7 @@ export default function Sidebar({
               <input
                 type="date"
                 value={endDate || ''}
+                disabled={disableEndDate}
                 onChange={(event) =>
                   onEndDateChange(
                     event.target.value

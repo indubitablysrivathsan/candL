@@ -18,6 +18,7 @@ from api.db import (
     get_options_data,
     get_options_analytics,
     get_options_analytics_full,
+    get_daily_expiry_snapshot,
     get_chart_scale,
 )
 from api.schemas import (
@@ -108,6 +109,47 @@ def options_analytics(
     rows = [AnalyticsRow(**r) for r in df.to_dict(orient="records")]
     return AnalyticsResponse(ticker=ticker, expiry=expiry, rows=rows)
 
+# ── Daily expiry snapshot ────────────────────────────────────────────────────
+
+@router.get("/daily-expiry-snapshot/{expiry}/{trade_date}")
+def daily_expiry_snapshot(
+    expiry: str,
+    trade_date: str,
+):
+    """
+    Returns analytics snapshot rows across ALL tickers
+    for ONE expiry and ONE trade date.
+    """
+
+    df = get_daily_expiry_snapshot(
+        expiry,
+        trade_date,
+    )
+
+    if df.empty:
+        raise HTTPException(
+            404,
+            f"No snapshot data found for {expiry} on {trade_date}"
+        )
+
+    if "trade_date" in df.columns:
+        df["trade_date"] = (
+            df["trade_date"]
+            .dt.strftime("%Y-%m-%d")
+        )
+
+    df = df.replace(
+        [float("inf"), float("-inf")],
+        None
+    )
+
+    df = df.where(df.notna(), None)
+
+    return {
+        "expiry": expiry,
+        "trade_date": trade_date,
+        "rows": df.to_dict(orient="records"),
+    }
 
 # ── Strike snapshot (single day — the main chart endpoint) ───────────────────
 

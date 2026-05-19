@@ -124,6 +124,25 @@ export async function getAnalytics(
 }
 
 /* =========================================
+   DAILY EXPIRY SNAPSHOT
+========================================= */
+
+export async function getDailyExpirySnapshot(
+  expiry,
+  tradeDate
+) {
+  if (!expiry || !tradeDate) {
+    throw new Error('Expiry and trade date required');
+  }
+
+  return request(
+    `/api/v1/options/daily-expiry-snapshot/${encodeURIComponent(
+      expiry
+    )}/${encodeURIComponent(tradeDate)}`
+  );
+}
+
+/* =========================================
    RAW DATA
 ========================================= */
 
@@ -233,6 +252,7 @@ export function getMetricLabel(metric) {
     case 'oi_chng': return 'OI Change';
     case 'vol':     return 'Volume';
     case 'ts':      return 'Time Series';
+    case 'daily_expiry_snapshot':  return 'Daily Expiry Snapshot';
     default:        return metric;
   }
 }

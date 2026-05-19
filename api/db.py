@@ -170,6 +170,87 @@ def get_options_analytics_full(ticker: str, expiry: str) -> pd.DataFrame:
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
     return df.dropna(subset=["trade_date"])
 
+def get_daily_expiry_snapshot(
+    expiry: str,
+    trade_date: str,
+) -> pd.DataFrame:
+    """
+    Aggregate analytics.csv rows across ALL tickers
+    for ONE expiry and ONE trade date.
+    """
+
+    rows = []
+
+    print(f"\n[SNAPSHOT DEBUG]")
+    print(f"expiry={expiry}")
+    print(f"trade_date={trade_date}")
+
+    for ticker_dir in OPTIONS_ROOT.iterdir():
+        if not ticker_dir.is_dir():
+            continue
+
+        ticker = ticker_dir.name
+
+        analytics_path = (
+            OPTIONS_ROOT /
+            ticker /
+            expiry /
+            "analytics.csv"
+        )
+
+        if not analytics_path.exists():
+            continue
+
+        path_str = str(analytics_path).replace("\\", "/")
+
+        conn = get_conn()
+
+        try:
+            df = conn.execute(f"""
+                SELECT *
+                FROM read_csv_auto(
+                    '{path_str}',
+                    ignore_errors = true
+                )
+                WHERE CAST(trade_date AS DATE)
+                    = DATE '{trade_date}'
+                LIMIT 1
+            """).df()
+
+        finally:
+            conn.close()
+
+        if df.empty:
+            continue
+
+        row = df.iloc[0].to_dict()
+
+        row["ticker"] = ticker
+        row["expiry"] = expiry
+
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(rows)
+
+    if "trade_date" in result.columns:
+        result["trade_date"] = pd.to_datetime(
+            result["trade_date"],
+            errors="coerce"
+        )
+
+    # Optional but useful:
+    # sort strongest PCR first
+    if "pcr" in result.columns:
+        result = result.sort_values(
+            by="pcr",
+            ascending=False,
+            na_position="last"
+        )
+
+    return result
 
 # ── Available date range for an expiry ───────────────────────────────────────
 

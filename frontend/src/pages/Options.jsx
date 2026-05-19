@@ -22,6 +22,7 @@ import {
   getDates,
   getSnapshot,
   getAnalytics,
+  getDailyExpirySnapshot,
   getChartScale,
 
   formatCurrency,
@@ -54,6 +55,11 @@ function ExpiryPanel({
   const [analyticsData, setAnalyticsData] =
     useState([]);
 
+  // ── Daily Expiry Summary state ──────────
+  const [summaryRow, setSummaryRow]         = useState(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  // ────────────────────────────────────────
+
   const [loadingDates, setLoadingDates] =
     useState(true);
 
@@ -64,7 +70,7 @@ function ExpiryPanel({
     useState(false);
 
   const [yDomain, setYDomain] = useState(null);
-  const [xScale,  setXScale]  = useState(null); // { x_min, x_max, strike_gap }
+  const [xScale,  setXScale]  = useState(null);
 
   const [error, setError] = useState('');
 
@@ -115,6 +121,7 @@ function ExpiryPanel({
   ===================================== */
 
   const filteredDates = useMemo(() => {
+    // ts shows full series — no date filter
     if (metric === 'ts') return availableDates;
 
     return availableDates.filter((date) => {
@@ -138,10 +145,11 @@ function ExpiryPanel({
 
   /* =====================================
       FETCH SNAPSHOT
+      (skip for ts and daily_expiry_snapshot)
   ===================================== */
 
   useEffect(() => {
-    if (metric === 'ts' || !selectedDate) return;
+    if (metric === 'ts' || metric === 'daily_expiry_snapshot' || !selectedDate) return;
 
     let mounted = true;
 
@@ -168,10 +176,11 @@ function ExpiryPanel({
 
   /* =====================================
       FETCH CHART SCALE
+      (skip for ts and daily_expiry_snapshot)
   ===================================== */
 
   useEffect(() => {
-    if (metric === 'ts' || !filteredDates.length) return;
+    if (metric === 'ts' || metric === 'daily_expiry_snapshot' || !filteredDates.length) return;
 
     let mounted = true;
 
@@ -190,7 +199,6 @@ function ExpiryPanel({
           strike_gap: res.strike_gap,
         });
       } catch {
-        // non-fatal — chart falls back to auto
         if (mounted) {
           setYDomain(null);
           setXScale(null);
@@ -203,7 +211,7 @@ function ExpiryPanel({
   }, [ticker, expiry, metric, filteredDates]);
 
   /* =====================================
-      FETCH ANALYTICS
+      FETCH ANALYTICS (time series mode)
   ===================================== */
 
   useEffect(() => {
@@ -233,7 +241,46 @@ function ExpiryPanel({
   }, [ticker, expiry, metric]);
 
   /* =====================================
-      TOTALS
+      FETCH SUMMARY ROW (daily_expiry_snapshot mode)
+      Re-fetches whenever the date changes.
+  ===================================== */
+
+  useEffect(() => {
+    if (metric !== 'daily_expiry_snapshot' || !selectedDate) return;
+
+    let mounted = true;
+
+    async function loadSummary() {
+      try {
+        setLoadingSummary(true);
+        setSummaryRow(null);
+        setError('');
+
+        // Reuse existing analytics endpoint:
+        // pass start_date == end_date == selectedDate to get a single row.
+        const response = await getAnalytics(
+          ticker,
+          expiry,
+          selectedDate,
+          selectedDate
+        );
+
+        if (!mounted) return;
+        setSummaryRow(response?.rows?.[0] ?? null);
+      } catch (err) {
+        if (!mounted) return;
+        setError(err.message || 'Failed to load summary');
+      } finally {
+        if (mounted) setLoadingSummary(false);
+      }
+    }
+
+    loadSummary();
+    return () => { mounted = false; };
+  }, [ticker, expiry, selectedDate, metric]);
+
+  /* =====================================
+      TOTALS  (normal modes only)
   ===================================== */
 
   const totals = useMemo(() => {
@@ -287,7 +334,7 @@ function ExpiryPanel({
   }, [snapshotData, metric]);
 
   /* =====================================
-      ERROR
+      ERROR STATE
   ===================================== */
 
   if (error) {
@@ -302,7 +349,7 @@ function ExpiryPanel({
   }
 
   /* =====================================
-      LOADING
+      LOADING (initial dates / analytics)
   ===================================== */
 
   if (loadingDates || loadingAnalytics) {
@@ -314,10 +361,14 @@ function ExpiryPanel({
   }
 
   /* =====================================
-      EMPTY
+      EMPTY (normal modes, no snapshot yet)
   ===================================== */
 
-  if (metric !== 'ts' && !snapshotData) {
+  if (
+    metric !== 'ts' &&
+    metric !== 'daily_expiry_snapshot' &&
+    !snapshotData
+  ) {
     return (
       <div className="card p-8">
         <p className="text-white/60">No snapshot data available</p>
@@ -369,7 +420,200 @@ function ExpiryPanel({
   }
 
   /* =====================================
-      NORMAL VIEW
+      DAILY EXPIRY SUMMARY VIEW
+  ===================================== */
+
+  if (metric === 'daily_expiry_snapshot') {
+    return (
+      <div className="space-y-5">
+        {/* ================================
+            METRIC CARDS  (sourced from summaryRow)
+        ================================= */}
+        <div className="grid grid-cols-1 xl:grid-cols-4 md:grid-cols-2 gap-4">
+          <MetricCard
+            title="Underlying"
+            value={formatCurrency(summaryRow?.underlying, 2)}
+            accent="#FFD700"
+          />
+
+          <MetricCard
+            title="Max Pain"
+            value={formatCurrency(summaryRow?.max_pain, 2)}
+            accent="#FF69B4"
+          />
+
+          <MetricCard
+            title="PCR"
+            value={
+              summaryRow?.pcr != null
+                ? Number(summaryRow.pcr).toFixed(3)
+                : '--'
+            }
+            accent="#FFA726"
+          />
+
+          <MetricCard
+            title="CE | PE Total"
+            value={
+              summaryRow?.ce != null && summaryRow?.pe != null
+                ? `${formatNumber(summaryRow.ce)} | ${formatNumber(summaryRow.pe)}`
+                : '--'
+            }
+            accent="#00B0F0"
+          />
+        </div>
+
+        {/* ================================
+            DATE SLIDER
+        ================================= */}
+        <DateSlider
+          dates={filteredDates}
+          selectedDate={selectedDate}
+          onChange={setSelectedDate}
+        />
+
+        {/* ================================
+            SUMMARY TABLE  (or spinner)
+        ================================= */}
+        {loadingSummary ? (
+          <div className="card min-h-[200px] flex items-center justify-center">
+            <LoadingSpinner />
+          </div>
+        ) : (
+
+          <div className="card overflow-hidden">
+            <div
+              className="
+                flex items-center justify-between
+                px-5 py-4
+                border-b border-white/8
+              "
+            >
+              <div>
+                <h3 className="text-sm font-semibold text-white">
+                  Daily Expiry Snapshot
+                </h3>
+
+                <p className="mt-0.5 text-xs text-white/45">
+                  {ticker} · {expiry} · {selectedDate}
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  if (!summaryRow) return;
+
+                  const headers = [
+                    'Ticker',
+                    'Expiry',
+                    'Trade Date',
+                    'Underlying',
+                    'Max Pain',
+                    'PCR',
+                    'CE',
+                    'PE',
+                  ];
+
+                  const values = [
+                    ticker,
+                    expiry,
+                    selectedDate,
+                    summaryRow.underlying ?? '',
+                    summaryRow.max_pain ?? '',
+                    summaryRow.pcr ?? '',
+                    summaryRow.ce ?? '',
+                    summaryRow.pe ?? '',
+                  ];
+
+                  const csv = [
+                    headers.join(','),
+                    values.join(',')
+                  ].join('\n');
+
+                  const blob = new Blob(
+                    [csv],
+                    { type: 'text/csv;charset=utf-8;' }
+                  );
+
+                  const url = URL.createObjectURL(blob);
+
+                  const a = document.createElement('a');
+
+                  a.href = url;
+
+                  a.download =
+                    `${ticker}_${expiry}_${selectedDate}_daily_expiry_snapshot.csv`;
+
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+
+                  URL.revokeObjectURL(url);
+                }}
+                className="
+                  px-4 py-2
+                  rounded-xl
+                  border border-[#00B0F0]/25
+                  bg-[#00B0F0]/10
+                  text-[#00B0F0]
+                  text-sm
+                  transition
+                  hover:bg-[#00B0F0]/20
+                "
+              >
+                Download CSV
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Field</th>
+                    <th>Value</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  <tr>
+                    <td>Underlying</td>
+                    <td>{formatCurrency(summaryRow?.underlying, 2)}</td>
+                  </tr>
+
+                  <tr>
+                    <td>Max Pain</td>
+                    <td>{formatCurrency(summaryRow?.max_pain, 2)}</td>
+                  </tr>
+
+                  <tr>
+                    <td>PCR</td>
+                    <td>
+                      {summaryRow?.pcr != null
+                        ? Number(summaryRow.pcr).toFixed(3)
+                        : '--'}
+                    </td>
+                  </tr>
+
+                  <tr>
+                    <td>CE Total</td>
+                    <td>{formatNumber(summaryRow?.ce)}</td>
+                  </tr>
+
+                  <tr>
+                    <td>PE Total</td>
+                    <td>{formatNumber(summaryRow?.pe)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /* =====================================
+      NORMAL VIEW  (oi / oi_chng / vol)
   ===================================== */
 
   return (
@@ -512,7 +756,11 @@ export default function Options() {
   const [endDate, setEndDate]                 = useState('');
   const [activeExpiry, setActiveExpiry]       = useState('');
   const [loading, setLoading]                 = useState(true);
+  const [snapshotRows, setSnapshotRows] = useState([]);
+  const [loadingSnapshot, setLoadingSnapshot] = useState(false);
   const [error, setError]                     = useState('');
+  const isDailySnapshot =
+    selectedMetric === 'daily_expiry_snapshot';
 
   /* =====================================
       FETCH TICKERS
@@ -574,6 +822,61 @@ export default function Options() {
   }, [selectedTicker]);
 
   /* =====================================
+    FETCH DAILY EXPIRY SNAPSHOT
+===================================== */
+
+useEffect(() => {
+  if (
+    !isDailySnapshot ||
+    !selectedExpiries.length ||
+    !startDate
+  ) {
+    return;
+  }
+
+  let mounted = true;
+
+  async function loadSnapshot() {
+    try {
+      setLoadingSnapshot(true);
+
+      const response =
+        await getDailyExpirySnapshot(
+          selectedExpiries[0],
+          startDate
+        );
+
+      if (!mounted) return;
+
+      setSnapshotRows(
+        response?.rows || []
+      );
+    } catch (err) {
+      if (!mounted) return;
+
+      setError(
+        err.message ||
+        'Failed to load daily snapshot'
+      );
+    } finally {
+      if (mounted) {
+        setLoadingSnapshot(false);
+      }
+    }
+  }
+
+  loadSnapshot();
+
+  return () => {
+    mounted = false;
+  };
+}, [
+  isDailySnapshot,
+  selectedExpiries,
+  startDate
+]);
+
+  /* =====================================
       KEEP ACTIVE EXPIRY VALID
   ===================================== */
 
@@ -582,6 +885,28 @@ export default function Options() {
       setActiveExpiry(selectedExpiries[0] || '');
     }
   }, [selectedExpiries, activeExpiry]);
+
+  /* =====================================
+    FORCE SINGLE EXPIRY
+    IN SNAPSHOT MODE
+===================================== */
+
+useEffect(() => {
+  if (
+    !isDailySnapshot ||
+    selectedExpiries.length <= 1
+  ) {
+    return;
+  }
+
+  setSelectedExpiries([
+    selectedExpiries[0]
+  ]);
+
+  setActiveExpiry(
+    selectedExpiries[0]
+  );
+}, [isDailySnapshot, selectedExpiries]);
 
   /* =====================================
       LOADING
@@ -647,8 +972,168 @@ export default function Options() {
             <p className="text-white/60">Select at least one expiry</p>
           </div>
         )}
+        
+        {isDailySnapshot && (
+          <div className="space-y-5">
+            {/* =====================================
+                SNAPSHOT HEADER
+            ===================================== */}
+            <div className="card p-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-white">
+                    Daily Expiry Snapshot
+                  </h2>
 
-        {selectedExpiries.length > 0 && (
+                  <p className="mt-1 text-sm text-white/45">
+                    Expiry: {selectedExpiries[0] || '--'}
+                    {' • '}
+                    Date: {startDate || '--'}
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => {
+                    if (!snapshotRows.length) return;
+
+                    const headers = [
+                      'Ticker',
+                      'Underlying',
+                      'Max Pain',
+                      'PCR',
+                      'CE',
+                      'PE'
+                    ];
+
+                    const csvRows = snapshotRows.map((row) => [
+                      row.ticker,
+                      row.underlying,
+                      row.max_pain,
+                      row.pcr,
+                      row.ce,
+                      row.pe
+                    ]);
+
+                    const csv = [
+                      headers.join(','),
+                      ...csvRows.map((r) => r.join(','))
+                    ].join('\n');
+
+                    const blob = new Blob(
+                      [csv],
+                      {
+                        type: 'text/csv;charset=utf-8;'
+                      }
+                    );
+
+                    const url =
+                      URL.createObjectURL(blob);
+
+                    const a =
+                      document.createElement('a');
+
+                    a.href = url;
+
+                    a.download =
+                      `${selectedExpiries[0]}_${startDate}_daily_expiry_snapshot.csv`;
+
+                    document.body.appendChild(a);
+
+                    a.click();
+
+                    document.body.removeChild(a);
+
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="
+                    px-4 py-2
+                    rounded-xl
+                    border border-[#00B0F0]/25
+                    bg-[#00B0F0]/10
+                    text-[#00B0F0]
+                    text-sm
+                    transition
+                    hover:bg-[#00B0F0]/20
+                  "
+                >
+                  Download CSV
+                </button>
+              </div>
+            </div>
+
+            {/* =====================================
+                LOADING
+            ===================================== */}
+            {loadingSnapshot ? (
+              <div className="card min-h-[300px] flex items-center justify-center">
+                <LoadingSpinner />
+              </div>
+            ) : (
+              <div className="card overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Ticker</th>
+                        <th>Underlying</th>
+                        <th>Max Pain</th>
+                        <th>PCR</th>
+                        <th>CE</th>
+                        <th>PE</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {snapshotRows.map((row) => (
+                        <tr key={row.ticker}>
+                          <td className="font-semibold text-[#00B0F0]">
+                            {row.ticker}
+                          </td>
+
+                          <td>
+                            {formatCurrency(
+                              row.underlying,
+                              2
+                            )}
+                          </td>
+
+                          <td className="text-[#FF69B4]">
+                            {formatCurrency(
+                              row.max_pain,
+                              2
+                            )}
+                          </td>
+
+                          <td
+                            className={
+                              row.pcr >= 1
+                                ? 'text-[#26a69a]'
+                                : 'text-[#ef5350]'
+                            }
+                          >
+                            {row.pcr != null
+                              ? Number(row.pcr).toFixed(3)
+                              : '--'}
+                          </td>
+
+                          <td>
+                            {formatNumber(row.ce)}
+                          </td>
+
+                          <td>
+                            {formatNumber(row.pe)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!isDailySnapshot && selectedExpiries.length > 0 && (
           <>
             <div className="flex items-center gap-2 mb-5 overflow-x-auto pb-1">
               {selectedExpiries.map((expiry) => (
