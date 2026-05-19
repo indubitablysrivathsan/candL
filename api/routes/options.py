@@ -5,6 +5,7 @@ NSE Platform — Options routes
 
 import math
 import numpy as np
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 
@@ -139,11 +140,14 @@ def daily_expiry_snapshot(
         )
 
     df = df.replace(
-        [float("inf"), float("-inf")],
+        [np.inf, -np.inf],
         None
     )
 
-    df = df.where(df.notna(), None)
+    df = df.astype(object).where(
+        pd.notnull(df),
+        None
+    )
 
     return {
         "expiry": expiry,
