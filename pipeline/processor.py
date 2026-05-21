@@ -17,6 +17,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import OPTIONS_ROOT
+from config import FO_RAW_ROOT
 
 KEEP_COLS = [
     "TradDt", "FinInstrmId", "TckrSymb", "XpryDt", "StrkPric", "OptnTp",
@@ -68,6 +69,50 @@ def update_analytics(base: Path, date: str, pe, ce, pcr, underlying, max_pain):
     updated["trade_date"] = pd.to_datetime(updated["trade_date"])
     updated = updated.sort_values("trade_date")
     updated.to_csv(file_path, index=False)
+
+
+def get_raw_fo_path(trade_date: str) -> Path:
+
+    dt = pd.to_datetime(trade_date)
+
+    year = dt.strftime("%Y")
+    month = dt.strftime("%m")
+
+    return (
+        Path(FO_RAW_ROOT)
+        / year
+        / month
+        / f"{trade_date}.csv"
+    )
+
+
+def process_trade_date(trade_date: str):
+
+    raw_file = get_raw_fo_path(trade_date)
+
+    if not raw_file.exists():
+        raise FileNotFoundError(raw_file)
+
+    process_file(str(raw_file))
+    
+
+def already_processed(trade_date: str) -> bool:
+    """
+    Checks whether this trade date already exists
+    anywhere inside processed options data.
+    """
+
+    pattern = (
+        OPTIONS_ROOT
+        / "*"
+        / "*"
+        / "DATA"
+        / f"{trade_date}.csv"
+    )
+
+    matches = glob.glob(str(pattern))
+
+    return len(matches) > 0
 
 
 def process_file(file: str, target_ticker: str | None = None):

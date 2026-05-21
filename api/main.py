@@ -33,10 +33,10 @@ log = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Runs the download + processing pipeline on startup, then yields to serve."""
     try:
-        from pipeline.startup import run_startup_pipeline
+        from pipeline.startup_sync import run_startup_sync
         import asyncio
         # Run in a thread so it doesn't block the event loop
-        await asyncio.get_event_loop().run_in_executor(None, run_startup_pipeline)
+        await asyncio.get_event_loop().run_in_executor(None, run_startup_sync)
     except Exception as e:
         log.error(f"Startup pipeline error (non-fatal): {e}")
     yield   # app is now running

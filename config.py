@@ -7,22 +7,41 @@ Everything else is derived from it automatically.
 
 from pathlib import Path
 
-# ─── EDIT THIS ────────────────────────────────────────────────────────────────
-DATA_ROOT = Path(r"D:\candL\output")   # <── change to your path
-# ──────────────────────────────────────────────────────────────────────────────
+# ─── DATA ─────────────────────────────────────────────────────────────────────
+DATA_ROOT = Path(r"D:\candL\data")   # <── change to your path
 
-# Asset sub-roots  (create these folders as you add asset types)
+# Asset sub-roots
 OPTIONS_ROOT = DATA_ROOT / "options"   # options/TICKER/EXPIRY/DATA/*.csv
 FUTURES_ROOT = DATA_ROOT / "futures"   # futures/TICKER/EXPIRY/DATA/*.csv
 STOCKS_ROOT  = DATA_ROOT / "stocks"    # stocks/TICKER/DATA/*.csv
 INDEXES_ROOT = DATA_ROOT / "indexes"   # indexes/TICKER/DATA/*.csv
 
-# ── Migration note ─────────────────────────────────────────────────────────
-# Your CURRENT data lives flat at DATA_ROOT/TICKER/EXPIRY/...
-# Point OPTIONS_ROOT at that same folder for now:
-#   OPTIONS_ROOT = DATA_ROOT
-# Once you reorganise into sub-folders just update the path above.
-# ──────────────────────────────────────────────────────────────────────────
+# ─── RAW DATA ─────────────────────────────────────────────────────────────────
+
+RAW_ROOT = "raw"
+
+FO_RAW_ROOT = f"{RAW_ROOT}/fo"
+
+MANIFEST_PATH = f"{RAW_ROOT}/manifest.csv"
+
+
+# ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
+
+SYNC_ON_STARTUP = True
+
+SYNC_START_DATE = "2026-01-01"
+
+
+# ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
+
+NSE_BASE_URL = "https://nsearchives.nseindia.com"
+
+
+# ─── PROCESSING ───────────────────────────────────────────────────────────────
+
+AUTO_PROCESS_AFTER_DOWNLOAD = False
+
+# ──────────────────────────────────────────────────────────────────────────────
 
 # API
 API_HOST = "127.0.0.1"
