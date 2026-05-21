@@ -1,56 +1,88 @@
 """
-NSE Platform — Futures routes
-/api/v1/futures/...
-
-Stub — ready to fill once the futures pipeline is built.
-The structure mirrors options exactly so adding logic is minimal.
+NSE Platform — Futures API routes
+===================================
+GET /api/v1/futures/tickers
+GET /api/v1/futures/expiries/{ticker}
+GET /api/v1/futures/dates/{ticker}/{expiry}
+GET /api/v1/futures/analytics/{ticker}/{expiry}
+GET /api/v1/futures/rollup/{trade_date}
 """
 
 from fastapi import APIRouter, HTTPException, Query
-from api.db import list_tickers, list_expiries, get_available_dates, get_futures_data
-from api.schemas import (
-    TickerListResponse, ExpiriesResponse,
-    AvailableDatesResponse, FuturesDataResponse, FuturesRow,
+from typing import Optional
+
+from api.db import (
+    list_tickers,
+    list_expiries,
+    get_available_dates,
+    get_futures_analytics,
+    get_futures_rollup,
+    get_futures_market_dates
 )
 
 router = APIRouter(prefix="/futures", tags=["futures"])
 
 
-@router.get("/tickers", response_model=TickerListResponse)
+@router.get("/tickers")
 def futures_tickers():
-    return TickerListResponse(asset_type="futures", tickers=list_tickers("futures"))
+    tickers = list_tickers("futures")
+    return {"asset_type": "futures", "tickers": tickers}
 
 
-@router.get("/expiries/{ticker}", response_model=ExpiriesResponse)
+@router.get("/expiries/{ticker}")
 def futures_expiries(ticker: str):
-    exp = list_expiries("futures", ticker)
-    if not exp:
-        raise HTTPException(404, f"No expiries found for {ticker}")
-    return ExpiriesResponse(asset_type="futures", ticker=ticker, expiries=exp)
+    expiries = list_expiries("futures", ticker)
+    if not expiries:
+        raise HTTPException(404, f"No futures data for ticker: {ticker}")
+    return {"asset_type": "futures", "ticker": ticker, "expiries": expiries}
 
 
-@router.get("/dates/{ticker}/{expiry}", response_model=AvailableDatesResponse)
+@router.get("/dates/{ticker}/{expiry}")
 def futures_dates(ticker: str, expiry: str):
-    return AvailableDatesResponse(
-        asset_type="futures", ticker=ticker, expiry=expiry,
-        dates=get_available_dates("futures", ticker, expiry),
-    )
+    dates = get_available_dates("futures", ticker, expiry)
+    return {
+        "asset_type": "futures",
+        "ticker":     ticker,
+        "expiry":     expiry,
+        "dates":      dates,
+    }
 
 
-@router.get("/data/{ticker}/{expiry}", response_model=FuturesDataResponse)
-def futures_data(
-    ticker:     str,
-    expiry:     str,
-    start_date: str = Query(..., description="YYYY-MM-DD"),
-    end_date:   str = Query(..., description="YYYY-MM-DD"),
-):
-    df = get_futures_data(ticker, expiry, start_date, end_date)
+@router.get("/analytics/{ticker}/{expiry}")
+def futures_analytics(ticker: str, expiry: str):
+    df = get_futures_analytics(ticker, expiry)
     if df.empty:
-        raise HTTPException(404, "No futures data found.")
-    df["trade_date"] = df["trade_date"].astype(str)
-    df = df.replace([float("inf"), float("-inf")], None).where(df.notna(), None)
-    return FuturesDataResponse(
-        ticker=ticker, expiry=expiry,
-        start_date=start_date, end_date=end_date,
-        rows=[FuturesRow(**r) for r in df.to_dict(orient="records")],
-    )
+        raise HTTPException(404, f"No analytics for {ticker} / {expiry}")
+
+    df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
+
+    rows = df.where(df.notna(), other=None).to_dict(orient="records")
+
+    return {
+        "ticker": ticker,
+        "expiry": expiry,
+        "rows": rows,
+    }
+
+
+@router.get("/rollup/{trade_date}")
+def futures_rollup(trade_date: str):
+    df = get_futures_rollup(trade_date)
+    if df.empty:
+        raise HTTPException(404, f"No futures data for date: {trade_date}")
+
+    df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
+
+    # NaN → None so JSON serialises cleanly
+    rows = df.where(df.notna(), other=None).to_dict(orient="records")
+
+    return {
+        "trade_date": trade_date,
+        "rows":       rows,
+    }
+
+@router.get("/market-dates")
+def futures_market_dates():
+    return {
+        "dates": get_futures_market_dates()
+    }

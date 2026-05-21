@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 export default function Sidebar({
+  assetType = 'options',
+  mode = 'analytics',
   tickerList = [],
   selectedTicker,
   onTickerChange,
@@ -24,6 +26,15 @@ export default function Sidebar({
     useState(false);
 
   const containerRef = useRef(null);
+
+  const isFutures =
+    assetType === 'futures';
+
+  const isFuturesScreener =
+    isFutures && mode === 'screener';
+
+  const isFuturesAnalytics =
+    isFutures && mode === 'expiry';
 
   const filteredTickers = useMemo(() => {
     if (!search.trim()) {
@@ -89,7 +100,8 @@ export default function Sidebar({
   const dateRangeDisabled = isTimeSeries;
 
   const disableTicker =
-    isDailySnapshot;
+    isDailySnapshot ||
+    isFuturesScreener;
 
   const disableEndDate =
     isTimeSeries || isDailySnapshot;
@@ -249,256 +261,262 @@ export default function Sidebar({
         {/* =====================================
             EXPIRIES
         ===================================== */}
-        <section>
-          <div className="mb-3">
-            <h2 className="text-sm font-semibold text-white">
-              Expiries
-            </h2>
+        {!isFuturesScreener && (
+          <section>
+            <div className="mb-3">
+              <h2 className="text-sm font-semibold text-white">
+                Expiries
+              </h2>
 
-            <p className="text-xs text-white/45 mt-1">
-              Select expiries to display
-            </p>
-          </div>
+              <p className="text-xs text-white/45 mt-1">
+                Select expiries to display
+              </p>
+            </div>
 
-          <div className="space-y-3">
-            <select
-              onChange={(e) => {
-                const value = e.target.value;
+            <div className="space-y-3">
+              <select
+                onChange={(e) => {
+                  const value = e.target.value;
 
-                if (
-                  !value ||
-                  selectedExpiries.includes(value)
-                ) {
-                  return;
-                }
+                  if (
+                    !value ||
+                    selectedExpiries.includes(value)
+                  ) {
+                    return;
+                  }
 
-                if (isDailySnapshot) {
-                  onExpiriesChange([value]);
-                } else {
-                  onExpiriesChange([
-                    ...selectedExpiries,
-                    value
-                  ]);
-                }
-              }}
-              value=""
-              className="w-full"
-            >
-              <option value="">
-                Add Expiry...
-              </option>
-
-              {expiries.map((expiry) => (
-                <option
-                  key={expiry}
-                  value={expiry}
-                >
-                  {expiry}
+                  if (isDailySnapshot) {
+                    onExpiriesChange([value]);
+                  } else {
+                    onExpiriesChange([
+                      ...selectedExpiries,
+                      value
+                    ]);
+                  }
+                }}
+                value=""
+                className="w-full"
+              >
+                <option value="">
+                  Add Expiry...
                 </option>
-              ))}
-            </select>
 
-            {/* Selected Expiries */}
-            {!isDailySnapshot && (
-              <div className="flex flex-wrap gap-2">
-                {selectedExpiries.map(
-                  (expiry) => (
-                    <div
-                      key={expiry}
-                      className="
-                        flex
-                        items-center
-                        gap-2
-                        rounded-lg
-                        border
-                        border-[#00B0F0]/20
-                        bg-[#00B0F0]/10
-                        px-3
-                        py-2
-                        text-xs
-                        text-[#00B0F0]
-                      "
-                    >
-                      <span>{expiry}</span>
+                {expiries.map((expiry) => (
+                  <option
+                    key={expiry}
+                    value={expiry}
+                  >
+                    {expiry}
+                  </option>
+                ))}
+              </select>
 
-                      <button
-                        onClick={() =>
-                          onExpiriesChange(
-                            selectedExpiries.filter(
-                              (e) => e !== expiry
-                            )
-                          )
-                        }
+              {/* Selected Expiries */}
+              {!isDailySnapshot && (
+                <div className="flex flex-wrap gap-2">
+                  {selectedExpiries.map(
+                    (expiry) => (
+                      <div
+                        key={expiry}
                         className="
-                          text-white/60
-                          hover:text-white
-                          transition
+                          flex
+                          items-center
+                          gap-2
+                          rounded-lg
+                          border
+                          border-[#00B0F0]/20
+                          bg-[#00B0F0]/10
+                          px-3
+                          py-2
+                          text-xs
+                          text-[#00B0F0]
                         "
                       >
-                        ✕
-                      </button>
-                    </div>
-                  )
-                )}
-              </div>
-            )}
-          </div>
-        </section>
+                        <span>{expiry}</span>
+
+                        <button
+                          onClick={() =>
+                            onExpiriesChange(
+                              selectedExpiries.filter(
+                                (e) => e !== expiry
+                              )
+                            )
+                          }
+                          className="
+                            text-white/60
+                            hover:text-white
+                            transition
+                          "
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         {/* =====================================
             METRIC
         ===================================== */}
-        <section>
-          <div className="mb-3">
-            <h2 className="text-sm font-semibold text-white">
-              Metric
-            </h2>
+        {!isFutures && (
+          <section>
+            <div className="mb-3">
+              <h2 className="text-sm font-semibold text-white">
+                Metric
+              </h2>
 
-            <p className="text-xs text-white/45 mt-1">
-              Select chart mode
-            </p>
-          </div>
+              <p className="text-xs text-white/45 mt-1">
+                Select chart mode
+              </p>
+            </div>
 
-          <div className="space-y-2">
-            {metricOptions.map((option) => (
-              <label
-                key={option.value}
-                className={`
-                  flex
-                  items-center
-                  gap-3
-                  rounded-xl
-                  border
-                  px-3
-                  py-3
-                  cursor-pointer
-                  transition
-                  ${
-                    selectedMetric ===
-                    option.value
-                      ? option.value === 'daily_expiry_snapshot'
-                        ? `
-                          border-[#FFA726]/30
-                          bg-[#FFA726]/10
-                        `
-                        : `
-                          border-[#00B0F0]/30
-                          bg-[#00B0F0]/10
-                        `
-                      : `
-                        border-white/8
-                        bg-[#151922]
-                        hover:bg-white/5
-                      `
-                  }
-                `}
-              >
-                <input
-                  type="radio"
-                  name="metric"
-                  value={option.value}
-                  checked={
-                    selectedMetric ===
-                    option.value
-                  }
-                  onChange={() =>
-                    onMetricChange(
-                      option.value
-                    )
-                  }
-                  className="
-                    w-4
-                    h-4
-                    accent-[#00B0F0]
-                  "
-                />
-
-                <span
+            <div className="space-y-2">
+              {metricOptions.map((option) => (
+                <label
+                  key={option.value}
                   className={`
-                    text-sm
+                    flex
+                    items-center
+                    gap-3
+                    rounded-xl
+                    border
+                    px-3
+                    py-3
+                    cursor-pointer
+                    transition
                     ${
-                      selectedMetric === option.value
+                      selectedMetric ===
+                      option.value
                         ? option.value === 'daily_expiry_snapshot'
-                          ? 'text-[#FFA726]'
-                          : 'text-[#00B0F0]'
-                        : 'text-white/85'
+                          ? `
+                            border-[#FFA726]/30
+                            bg-[#FFA726]/10
+                          `
+                          : `
+                            border-[#00B0F0]/30
+                            bg-[#00B0F0]/10
+                          `
+                        : `
+                          border-white/8
+                          bg-[#151922]
+                          hover:bg-white/5
+                        `
                     }
                   `}
                 >
-                  {option.label}
-                </span>
+                  <input
+                    type="radio"
+                    name="metric"
+                    value={option.value}
+                    checked={
+                      selectedMetric ===
+                      option.value
+                    }
+                    onChange={() =>
+                      onMetricChange(
+                        option.value
+                      )
+                    }
+                    className="
+                      w-4
+                      h-4
+                      accent-[#00B0F0]
+                    "
+                  />
 
-              </label>
-            ))}
-          </div>
-        </section>
+                  <span
+                    className={`
+                      text-sm
+                      ${
+                        selectedMetric === option.value
+                          ? option.value === 'daily_expiry_snapshot'
+                            ? 'text-[#FFA726]'
+                            : 'text-[#00B0F0]'
+                          : 'text-white/85'
+                      }
+                    `}
+                  >
+                    {option.label}
+                  </span>
+
+                </label>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* =====================================
             DATE RANGE
         ===================================== */}
-        <section>
-          <div className="mb-3">
-            <h2 className="text-sm font-semibold text-white">
-              Date Range
-            </h2>
+        {!isFuturesAnalytics && (
+          <section>
+            <div className="mb-3">
+              <h2 className="text-sm font-semibold text-white">
+                Date Range
+              </h2>
 
-            <p className="text-xs text-white/45 mt-1">
-              Filter available trading dates
-            </p>
-          </div>
-
-          <div
-            className={`
-              space-y-4
-              ${
-                dateRangeDisabled
-                  ? 'opacity-40 pointer-events-none'
-                  : ''
-              }
-            `}
-          >
-            <div>
-              <label className="block mb-2 text-xs text-white/55">
-                {isDailySnapshot ? 'Date' : 'Start Date'}
-              </label>
-
-              <input
-                type="date"
-                value={startDate || ''}
-                onChange={(event) =>
-                  onStartDateChange(
-                    event.target.value
-                  )
-                }
-                className="w-full"
-              />
+              <p className="text-xs text-white/45 mt-1">
+                Filter available trading dates
+              </p>
             </div>
 
             <div
-              className={
-                disableEndDate
-                  ? 'opacity-40 pointer-events-none'
-                  : ''
-              }
-            >
-              <label className="block mb-2 text-xs text-white/55">
-                End Date
-              </label>
-
-              <input
-                type="date"
-                value={endDate || ''}
-                disabled={disableEndDate}
-                onChange={(event) =>
-                  onEndDateChange(
-                    event.target.value
-                  )
+              className={`
+                space-y-4
+                ${
+                  dateRangeDisabled
+                    ? 'opacity-40 pointer-events-none'
+                    : ''
                 }
-                className="w-full"
-              />
+              `}
+            >
+              <div>
+                <label className="block mb-2 text-xs text-white/55">
+                  {isDailySnapshot ? 'Date' : 'Start Date'}
+                </label>
+
+                <input
+                  type="date"
+                  value={startDate || ''}
+                  onChange={(event) =>
+                    onStartDateChange(
+                      event.target.value
+                    )
+                  }
+                  className="w-full"
+                />
+              </div>
+
+              <div
+                className={
+                  disableEndDate
+                    ? 'opacity-40 pointer-events-none'
+                    : ''
+                }
+              >
+                <label className="block mb-2 text-xs text-white/55">
+                  End Date
+                </label>
+
+                <input
+                  type="date"
+                  value={endDate || ''}
+                  disabled={disableEndDate}
+                  onChange={(event) =>
+                    onEndDateChange(
+                      event.target.value
+                    )
+                  }
+                  className="w-full"
+                />
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
       </div>
     </aside>
   );

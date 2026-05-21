@@ -7,16 +7,22 @@ from config import (
 from pipeline.manifest import (
     load_manifest,
     mark_downloaded,
-    mark_processed,
+    mark_options_processed,
+    mark_futures_processed,
     mark_market_closed,
     mark_failed,
-    get_unprocessed_dates,
-    
+    get_options_unprocessed_dates,
+    get_futures_unprocessed_dates,
 )
 
-from pipeline.processor import (
+from pipeline.options_processor import (
     process_trade_date,
     already_processed,
+)
+
+from pipeline.futures_processor import (
+    process_futures_trade_date,
+    already_futures_processed,
 )
 
 from pipeline.trading_dates import get_missing_dates
@@ -70,34 +76,36 @@ def run_startup_sync():
 
                 print(f"✗ Failed: {trade_date}")
 
-    print("\nChecking processing state...\n")
+    print("\nChecking options processing state...\n")
 
-    unprocessed = get_unprocessed_dates()
-
-    for trade_date in unprocessed:
-
+    for trade_date in get_options_unprocessed_dates():
         try:
-
-            # migration-safe reconciliation
             if already_processed(trade_date):
-
-                print(f"✓ Already processed: {trade_date}")
-
-                mark_processed(trade_date)
-
+                print(f"✓ Already processed (options): {trade_date}")
+                mark_options_processed(trade_date)
                 continue
-
-            print(f"Processing {trade_date} ...")
-
+            print(f"Processing options {trade_date} ...")
             process_trade_date(trade_date)
-
-            mark_processed(trade_date)
-
-            print(f"✓ Processed: {trade_date}")
-
+            mark_options_processed(trade_date)
+            print(f"✓ Options processed: {trade_date}")
         except Exception as e:
+            print(f"✗ Options processing failed: {trade_date}")
+            print(e)
 
-            print(f"✗ Processing failed: {trade_date}")
+    print("\nChecking futures processing state...\n")
+
+    for trade_date in get_futures_unprocessed_dates():
+        try:
+            if already_futures_processed(trade_date):
+                print(f"✓ Already processed (futures): {trade_date}")
+                mark_futures_processed(trade_date)
+                continue
+            print(f"Processing futures {trade_date} ...")
+            process_futures_trade_date(trade_date)
+            mark_futures_processed(trade_date)
+            print(f"✓ Futures processed: {trade_date}")
+        except Exception as e:
+            print(f"✗ Futures processing failed: {trade_date}")
             print(e)
 
     print("\n✓ Startup sync complete.\n")

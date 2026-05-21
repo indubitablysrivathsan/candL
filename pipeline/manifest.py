@@ -8,7 +8,8 @@ COLUMNS = [
     "trade_date",
     "status",
     "fo",
-    "fo_process",
+    "options_process",
+    "futures_process",
 ]
 
 
@@ -94,7 +95,6 @@ def update_date(
     trade_date: str,
     status: str,
     fo: int = 0,
-    fo_process: int = 0,
 ):
     """
     Insert or update a manifest row.
@@ -105,7 +105,6 @@ def update_date(
         "trade_date": trade_date,
         "status": status,
         "fo": fo,
-        "fo_process": 0,
     }
 
     if trade_date in df["trade_date"].values:
@@ -123,19 +122,27 @@ def mark_downloaded(trade_date: str):
         trade_date=trade_date,
         status="complete",
         fo=1,
-        fo_process=0
     )
 
-def mark_processed(trade_date: str):
-
+def mark_options_processed(trade_date: str):
     df = load_manifest()
-
-    df.loc[
-        df["trade_date"] == trade_date,
-        "fo_process"
-    ] = 1
-
+    df.loc[df["trade_date"] == trade_date, "options_process"] = 1
     save_manifest(df)
+
+def mark_futures_processed(trade_date: str):
+    df = load_manifest()
+    df.loc[df["trade_date"] == trade_date, "futures_process"] = 1
+    save_manifest(df)
+
+def get_options_unprocessed_dates():
+    df = load_manifest()
+    rows = df[(df["fo"] == 1) & (df["options_process"] != 1)]
+    return rows["trade_date"].tolist()
+
+def get_futures_unprocessed_dates():
+    df = load_manifest()
+    rows = df[(df["fo"] == 1) & (df["futures_process"] != 1)]
+    return rows["trade_date"].tolist()
 
 def mark_market_closed(trade_date: str):
     update_date(
@@ -151,14 +158,3 @@ def mark_failed(trade_date: str):
         status="failed",
         fo=0,
     )
-
-def get_unprocessed_dates():
-
-    df = load_manifest()
-
-    rows = df[
-        (df["fo"] == 1) &
-        (df["fo_process"] != 1)
-    ]
-
-    return rows["trade_date"].tolist()

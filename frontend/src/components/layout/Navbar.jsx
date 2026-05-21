@@ -5,7 +5,7 @@ import { NavLink } from 'react-router-dom';
 const navItems = [
   {
     label: 'Options',
-    path: '/'
+    path: '/options'
   },
   {
     label: 'Futures',

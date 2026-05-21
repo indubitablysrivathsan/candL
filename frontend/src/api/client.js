@@ -200,6 +200,22 @@ export async function getChartScale(ticker, expiry, startDate, endDate, metric) 
 }
 
 /* =========================================
+   FUTURES
+========================================= */
+
+export async function getFuturesAnalytics(ticker, expiry) {
+  if (!ticker || !expiry) throw new Error('Ticker and expiry required');
+  return request(
+    `/api/v1/futures/analytics/${encodeURIComponent(ticker)}/${encodeURIComponent(expiry)}`
+  );
+}
+
+export async function getFuturesRollup(tradeDate) {
+  if (!tradeDate) throw new Error('Trade date required');
+  return request(`/api/v1/futures/rollup/${encodeURIComponent(tradeDate)}`);
+}
+
+/* =========================================
    HELPERS
 ========================================= */
 
@@ -270,6 +286,13 @@ export function getMetricColors(metric) {
   }
 }
 
+export const QUADRANT_META = {
+  long_buildup:   { label: 'Long Buildup',   color: '#92D050', desc: '+OI  +Price' },
+  short_buildup:  { label: 'Short Buildup',  color: '#ef5350', desc: '+OI  −Price' },
+  short_covering: { label: 'Short Covering', color: '#26a69a', desc: '−OI  +Price' },
+  long_unwinding: { label: 'Long Unwinding', color: '#FFA726', desc: '−OI  −Price' },
+};
+
 export function calculateTotals(snapshotData, metric) {
   if (!snapshotData?.strikes?.length) {
     return { ceTotal: 0, peTotal: 0 };
@@ -304,4 +327,8 @@ export function findATMStrike(strikes, underlying) {
   }
 
   return closest?.strike ?? null;
+}
+
+export async function getFuturesMarketDates() {
+  return request('/api/v1/futures/market-dates');
 }
