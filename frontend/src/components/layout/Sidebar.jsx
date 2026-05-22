@@ -27,8 +27,7 @@ export default function Sidebar({
 
   const containerRef = useRef(null);
 
-  const isFutures =
-    assetType === 'futures';
+  const isFutures = ['stock_futures', 'index_futures'].includes(assetType);
 
   const isFuturesScreener =
     isFutures && mode === 'screener';
@@ -261,103 +260,101 @@ export default function Sidebar({
         {/* =====================================
             EXPIRIES
         ===================================== */}
-        {!isFuturesScreener && (
-          <section>
-            <div className="mb-3">
-              <h2 className="text-sm font-semibold text-white">
-                Expiries
-              </h2>
+        <section>
+          <div className="mb-3">
+            <h2 className="text-sm font-semibold text-white">
+              Expiries
+            </h2>
 
-              <p className="text-xs text-white/45 mt-1">
-                Select expiries to display
-              </p>
-            </div>
+            <p className="text-xs text-white/45 mt-1">
+              Select expiries to display
+            </p>
+          </div>
 
-            <div className="space-y-3">
-              <select
-                onChange={(e) => {
-                  const value = e.target.value;
+          <div className="space-y-3">
+            <select
+              onChange={(e) => {
+                const value = e.target.value;
 
-                  if (
-                    !value ||
-                    selectedExpiries.includes(value)
-                  ) {
-                    return;
-                  }
+                if (
+                  !value ||
+                  selectedExpiries.includes(value)
+                ) {
+                  return;
+                }
 
-                  if (isDailySnapshot) {
-                    onExpiriesChange([value]);
-                  } else {
-                    onExpiriesChange([
-                      ...selectedExpiries,
-                      value
-                    ]);
-                  }
-                }}
-                value=""
-                className="w-full"
-              >
-                <option value="">
-                  Add Expiry...
+                if (isDailySnapshot) {
+                  onExpiriesChange([value]);
+                } else {
+                  onExpiriesChange([
+                    ...selectedExpiries,
+                    value
+                  ]);
+                }
+              }}
+              value=""
+              className="w-full"
+            >
+              <option value="">
+                Add Expiry...
+              </option>
+
+              {expiries.map((expiry) => (
+                <option
+                  key={expiry}
+                  value={expiry}
+                >
+                  {expiry}
                 </option>
+              ))}
+            </select>
 
-                {expiries.map((expiry) => (
-                  <option
-                    key={expiry}
-                    value={expiry}
-                  >
-                    {expiry}
-                  </option>
-                ))}
-              </select>
+            {/* Selected Expiries */}
+            {!isDailySnapshot && (
+              <div className="flex flex-wrap gap-2">
+                {selectedExpiries.map(
+                  (expiry) => (
+                    <div
+                      key={expiry}
+                      className="
+                        flex
+                        items-center
+                        gap-2
+                        rounded-lg
+                        border
+                        border-[#00B0F0]/20
+                        bg-[#00B0F0]/10
+                        px-3
+                        py-2
+                        text-xs
+                        text-[#00B0F0]
+                      "
+                    >
+                      <span>{expiry}</span>
 
-              {/* Selected Expiries */}
-              {!isDailySnapshot && (
-                <div className="flex flex-wrap gap-2">
-                  {selectedExpiries.map(
-                    (expiry) => (
-                      <div
-                        key={expiry}
+                      <button
+                        onClick={() =>
+                          onExpiriesChange(
+                            selectedExpiries.filter(
+                              (e) => e !== expiry
+                            )
+                          )
+                        }
                         className="
-                          flex
-                          items-center
-                          gap-2
-                          rounded-lg
-                          border
-                          border-[#00B0F0]/20
-                          bg-[#00B0F0]/10
-                          px-3
-                          py-2
-                          text-xs
-                          text-[#00B0F0]
+                          text-white/60
+                          hover:text-white
+                          transition
                         "
                       >
-                        <span>{expiry}</span>
-
-                        <button
-                          onClick={() =>
-                            onExpiriesChange(
-                              selectedExpiries.filter(
-                                (e) => e !== expiry
-                              )
-                            )
-                          }
-                          className="
-                            text-white/60
-                            hover:text-white
-                            transition
-                          "
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    )
-                  )}
-                </div>
-              )}
-            </div>
-          </section>
-        )}
+                        ✕
+                      </button>
+                    </div>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+        </section>
 
         {/* =====================================
             METRIC
@@ -452,7 +449,7 @@ export default function Sidebar({
         {/* =====================================
             DATE RANGE
         ===================================== */}
-        {!isFuturesAnalytics && (
+        {!isFutures && (
           <section>
             <div className="mb-3">
               <h2 className="text-sm font-semibold text-white">

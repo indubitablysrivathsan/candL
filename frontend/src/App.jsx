@@ -11,7 +11,6 @@ import Navbar from './components/layout/Navbar';
 import Options from './pages/Options';
 import Futures from './pages/Futures';
 import Stocks from './pages/Stocks';
-import Indexes from './pages/Indexes';
 
 export default function App() {
   return (
@@ -20,25 +19,16 @@ export default function App() {
         <Navbar />
 
         <Routes>
-          <Route
-            path="/options"
-            element={<Options />}
-          />
-
-          <Route
-            path="/futures"
-            element={<Futures />}
-          />
-
+          <Route path="/sto" element={<Options key="stock-options" assetType="stock_options" />} />
+          <Route path="/stf" element={<Futures key="stock-futures" assetType="stock_futures" />} />
+          <Route path="/ido" element={<Options key="index-options" assetType="index_options" />} />
+          <Route path="/idf" element={<Futures key="index-futures" assetType="index_futures" />} />
+          <Route path="/stocks" element={<Stocks />} />
           <Route
             path="/stocks"
             element={<Stocks />}
           />
 
-          <Route
-            path="/indexes"
-            element={<Indexes />}
-          />
         </Routes>
       </div>
     </BrowserRouter>

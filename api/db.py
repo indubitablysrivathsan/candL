@@ -56,16 +56,16 @@ def _rollup_read_conn() -> duckdb.DuckDBPyConnection:
 # ── Asset root resolver ───────────────────────────────────────────────────────
 
 _ASSET_ROOTS = {
-    "options":       OPTIONS_ROOT,
+    "stock_options":       OPTIONS_ROOT,
     "index_options": INDEX_OPTIONS_ROOT,
-    "futures":       FUTURES_ROOT,
+    "stock_futures":       FUTURES_ROOT,
     "index_futures": INDEX_FUTURES_ROOT,
-    "stocks":        STOCKS_ROOT,
+    "stocks":               STOCKS_ROOT,
 }
 
 # Map asset_type → instrument_type stored in rollup DB
 _FUTURES_INSTRUMENT_TYPE = {
-    "futures":       "STF",
+    "stock_futures": "STF",
     "index_futures": "IDF",
 }
 
@@ -101,7 +101,7 @@ def get_available_dates(asset_type: str, ticker: str, expiry: str) -> list[str]:
         date, already aggregated — no need to scan the DATA directory).
     Options / index_options: scans the DATA/ directory for dated CSV filenames.
     """
-    if asset_type in ("futures", "index_futures"):
+    if asset_type in ("stock_futures", "index_futures"):
         path = asset_root(asset_type) / ticker / expiry / "analytics.csv"
         if not path.exists():
             return []
@@ -116,7 +116,7 @@ def get_available_dates(asset_type: str, ticker: str, expiry: str) -> list[str]:
         )
 
     # options / index_options / stocks — DATA/ directory scan
-    if asset_type in ("options", "index_options"):
+    if asset_type in ("stock_options", "index_options"):
         data_dir = asset_root(asset_type) / ticker / expiry / "DATA"
     else:
         data_dir = asset_root(asset_type) / ticker / "DATA"
@@ -355,7 +355,7 @@ def get_futures_analytics(asset_type: str, ticker: str, expiry: str) -> pd.DataF
 
 def get_futures_rollup(
     trade_date: str,
-    asset_type: str = "futures",
+    asset_type: str = "stock_futures",
 ) -> pd.DataFrame:
     """
     All contracts for a given trade date from the persistent rollup DB,
@@ -388,7 +388,7 @@ def get_futures_rollup(
     return df.replace([np.nan, np.inf, -np.inf], None)
 
 
-def get_futures_market_dates(asset_type: str = "futures") -> list[str]:
+def get_futures_market_dates(asset_type: str = "stock_futures") -> list[str]:
     """
     All unique trade dates present in the rollup DB for a given asset_type.
     """

@@ -32,16 +32,16 @@ export async function healthCheck() {
    Works for: options | index_options | futures | index_futures
 ========================================= */
 
-export async function getTickers(assetType = 'options') {
+export async function getTickers(assetType = 'stock_options') {
   return request(`/api/v1/${assetType}/tickers`);
 }
 
-export async function getExpiries(assetType = 'options', ticker) {
+export async function getExpiries(assetType = 'stock_options', ticker) {
   if (!ticker) throw new Error('Ticker required');
   return request(`/api/v1/${assetType}/expiries/${encodeURIComponent(ticker)}`);
 }
 
-export async function getDates(assetType = 'options', ticker, expiry) {
+export async function getDates(assetType = 'stock_options', ticker, expiry) {
   if (!ticker || !expiry) throw new Error('Ticker and expiry required');
   return request(
     `/api/v1/${assetType}/dates/${encodeURIComponent(ticker)}/${encodeURIComponent(expiry)}`
@@ -53,7 +53,7 @@ export async function getDates(assetType = 'options', ticker, expiry) {
    Works for: options | index_options
 ========================================= */
 
-export async function getSnapshot(assetType = 'options', ticker, expiry, tradeDate) {
+export async function getSnapshot(assetType = 'stock_options', ticker, expiry, tradeDate) {
   if (!ticker || !expiry || !tradeDate) throw new Error('Ticker, expiry and trade date required');
   return request(
     `/api/v1/${assetType}/snapshot/${encodeURIComponent(ticker)}/${encodeURIComponent(expiry)}/${encodeURIComponent(tradeDate)}`
@@ -65,7 +65,7 @@ export async function getSnapshot(assetType = 'options', ticker, expiry, tradeDa
    Works for: options | index_options
 ========================================= */
 
-export async function getAnalytics(assetType = 'options', ticker, expiry, startDate, endDate) {
+export async function getAnalytics(assetType = 'stock_options', ticker, expiry, startDate, endDate) {
   if (!ticker || !expiry) throw new Error('Ticker and expiry required');
 
   const params = new URLSearchParams();
@@ -83,7 +83,7 @@ export async function getAnalytics(assetType = 'options', ticker, expiry, startD
    Works for: options | index_options
 ========================================= */
 
-export async function getDailyExpirySnapshot(assetType = 'options', expiry, tradeDate) {
+export async function getDailyExpirySnapshot(assetType = 'stock_options', expiry, tradeDate) {
   if (!expiry || !tradeDate) throw new Error('Expiry and trade date required');
   return request(
     `/api/v1/${assetType}/daily-expiry-snapshot/${encodeURIComponent(expiry)}/${encodeURIComponent(tradeDate)}`
@@ -95,7 +95,7 @@ export async function getDailyExpirySnapshot(assetType = 'options', expiry, trad
    Works for: options | index_options
 ========================================= */
 
-export async function getRawData(assetType = 'options', ticker, expiry, startDate, endDate) {
+export async function getRawData(assetType = 'stock_options', ticker, expiry, startDate, endDate) {
   if (!ticker || !expiry) throw new Error('Ticker and expiry required');
 
   const params = new URLSearchParams();
@@ -113,7 +113,7 @@ export async function getRawData(assetType = 'options', ticker, expiry, startDat
    Works for: options | index_options
 ========================================= */
 
-export async function getChartScale(assetType = 'options', ticker, expiry, startDate, endDate, metric) {
+export async function getChartScale(assetType = 'stock_options', ticker, expiry, startDate, endDate, metric) {
   if (!ticker || !expiry || !startDate || !endDate || !metric) {
     throw new Error('All parameters required for chart scale');
   }
@@ -129,7 +129,7 @@ export async function getChartScale(assetType = 'options', ticker, expiry, start
    Works for: futures | index_futures
 ========================================= */
 
-export async function getFuturesAnalytics(assetType = 'futures', ticker, expiry) {
+export async function getFuturesAnalytics(assetType = 'stock_futures', ticker, expiry) {
   if (!ticker || !expiry) throw new Error('Ticker and expiry required');
   return request(
     `/api/v1/${assetType}/analytics/${encodeURIComponent(ticker)}/${encodeURIComponent(expiry)}`
@@ -141,7 +141,7 @@ export async function getFuturesAnalytics(assetType = 'futures', ticker, expiry)
    Works for: futures | index_futures
 ========================================= */
 
-export async function getFuturesRollup(assetType = 'futures', tradeDate) {
+export async function getFuturesRollup(assetType = 'stock_futures', tradeDate) {
   if (!tradeDate) throw new Error('Trade date required');
   return request(`/api/v1/${assetType}/rollup/${encodeURIComponent(tradeDate)}`);
 }
@@ -151,7 +151,7 @@ export async function getFuturesRollup(assetType = 'futures', tradeDate) {
    Works for: futures | index_futures
 ========================================= */
 
-export async function getMarketDates(assetType = 'futures') {
+export async function getMarketDates(assetType = 'stock_futures') {
   return request(`/api/v1/${assetType}/market-dates`);
 }
 

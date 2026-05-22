@@ -3,7 +3,7 @@ NSE Platform — Options + Index Options API routes
 ===================================================
 All endpoints are generated for both prefixes via _make_options_router().
 
-  /api/v1/options/...        → STO contracts  (asset_type="options")
+  /api/v1/options/...        → STO contracts  (asset_type="stock_options")
   /api/v1/index_options/...  → IDO contracts  (asset_type="index_options")
 
 Endpoints
@@ -62,7 +62,7 @@ def _make_options_router(asset_type: str) -> APIRouter:
     asset_type must be "options" or "index_options".
     """
     prefix = f"/{asset_type}"
-    tag    = asset_type.replace("_", " ").title()   # "Options" or "Index Options"
+    tag    = asset_type.replace("_", " ").title()   # "Stock Options" or "Index Options"
     router = APIRouter(prefix=prefix, tags=[tag])
 
     # ── Discovery ─────────────────────────────────────────────────────────────
@@ -225,5 +225,5 @@ def _make_options_router(asset_type: str) -> APIRouter:
 
 # ── Exported routers ──────────────────────────────────────────────────────────
 
-options_router       = _make_options_router("options")
+options_router       = _make_options_router("stock_options")
 index_options_router = _make_options_router("index_options")

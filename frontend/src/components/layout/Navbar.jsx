@@ -4,21 +4,25 @@ import { NavLink } from 'react-router-dom';
 
 const navItems = [
   {
-    label: 'Options',
-    path: '/options'
+    label: 'Stock Options',
+    path: '/sto'
   },
   {
-    label: 'Futures',
-    path: '/futures'
+    label: 'Stock Futures',
+    path: '/stf'
+  },
+  {
+    label: 'Index Options',
+    path: '/ido'
+  },
+  {
+    label: 'Index Futures',
+    path: '/idf'
   },
   {
     label: 'Stocks',
     path: '/stocks'
   },
-  {
-    label: 'Indexes',
-    path: '/indexes'
-  }
 ];
 
 export default function Navbar() {
@@ -40,11 +44,11 @@ export default function Navbar() {
         <div className="flex items-center gap-8">
           <div>
             <h1 className="text-lg font-bold tracking-wide text-white">
-              NSE F&O
+              NSE
             </h1>
 
             <p className="text-[11px] text-white/45">
-              Derivatives Analytics Dashboard
+              Asset Analytics Dashboard
             </p>
           </div>
 

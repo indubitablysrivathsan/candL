@@ -11,6 +11,9 @@ from pathlib import Path
 DATA_ROOT = Path(r"D:\candL\data")   # <── change to your path
 
 # Asset sub-roots
+# OPTIONS_ROOT = DATA_ROOT / "stock_options"   # options/TICKER/EXPIRY/DATA/*.csv
+# FUTURES_ROOT = DATA_ROOT / "stock_futures"   # futures/TICKER/EXPIRY/*.csv
+
 OPTIONS_ROOT = DATA_ROOT / "options"   # options/TICKER/EXPIRY/DATA/*.csv
 FUTURES_ROOT = DATA_ROOT / "futures"   # futures/TICKER/EXPIRY/*.csv
 
@@ -26,7 +29,7 @@ MANIFEST_PATH = f"{RAW_ROOT}/manifest.csv"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
 SYNC_ON_STARTUP = True
-SYNC_START_DATE = "2026-05-21"
+SYNC_START_DATE = "2026-05-20"
 
 # ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
 NSE_BASE_URL = "https://nsearchives.nseindia.com"

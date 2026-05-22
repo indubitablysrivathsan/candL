@@ -3,7 +3,7 @@ NSE Platform — Futures + Index Futures API routes
 ===================================================
 All endpoints are generated for both prefixes via _make_futures_router().
 
-  /api/v1/futures/...        → STF contracts  (asset_type="futures")
+  /api/v1/futures/...        → STF contracts  (asset_type="stock_futures")
   /api/v1/index_futures/...  → IDF contracts  (asset_type="index_futures")
 
 Endpoints
@@ -92,5 +92,5 @@ def _make_futures_router(asset_type: str) -> APIRouter:
 
 # ── Exported routers ──────────────────────────────────────────────────────────
 
-futures_router       = _make_futures_router("futures")
+futures_router       = _make_futures_router("stock_futures")
 index_futures_router = _make_futures_router("index_futures")

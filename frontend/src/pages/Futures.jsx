@@ -124,7 +124,7 @@ function AnalyticsPanel({ assetType, ticker, expiry }) {
             <thead>
               <tr>
                 <th>Date</th><th>Close</th><th>Chng Price</th><th>Chng Price %</th>
-                <th>Chng OI</th><th>Chng OI %</th><th>Basis</th>
+                <th>OI</th><th>Chng OI</th><th>Chng OI %</th><th>Basis</th>
                 <th>CoC %</th><th>Vol/OI</th><th>DTE</th><th>Signal</th>
               </tr>
             </thead>
@@ -140,6 +140,9 @@ function AnalyticsPanel({ assetType, ticker, expiry }) {
                     </td>
                     <td className={row.chng_price_per >= 0 ? 'text-[#92D050]' : 'text-[#ef5350]'}>
                       {formatPercent(row.chng_price_per)}
+                    </td>
+                    <td className={row.open_int >= 0 ? 'text-[#92D050]' : 'text-[#ef5350]'}>
+                      {formatNumber(row.open_int)}
                     </td>
                     <td className={row.chng_in_oi >= 0 ? 'text-[#92D050]' : 'text-[#ef5350]'}>
                       {row.chng_in_oi >= 0 ? '+' : ''}{formatNumber(row.chng_in_oi)}
@@ -178,33 +181,29 @@ function AnalyticsPanel({ assetType, ticker, expiry }) {
    ROLLUP PANEL
 ───────────────────────────────────────────────────────────────── */
 
-function RollupPanel({ assetType, allDates }) {
+function RollupPanel({ assetType, allDates, screenerExpiries, activeScreenerExpiry, onScreenerExpiryChange }) {
   const [selectedDate, setSelectedDate]     = useState('');
   const [pendingDate, setPendingDate]       = useState('');
-  const [dateMode, setDateMode]             = useState('expiry');
   const [data, setData]                     = useState([]);
   const [loading, setLoading]               = useState(false);
   const [error, setError]                   = useState('');
   const [activeQuadrant, setActiveQuadrant] = useState('long_buildup');
 
-  const visibleDates = useMemo(() => {
-    if (dateMode === '30d') return allDates.slice(-30);
-    if (dateMode === '90d') return allDates.slice(-90);
-    return allDates;
-  }, [allDates, dateMode]);
-
+  // Initialize selectedDate to the last available date
   useEffect(() => {
     if (allDates.length > 0 && !selectedDate) {
       setSelectedDate(allDates[allDates.length - 1]);
     }
   }, [allDates, selectedDate]);
 
+  // Debounce slider changes
   useEffect(() => {
     if (!pendingDate) return;
     const timer = setTimeout(() => setSelectedDate(pendingDate), 120);
     return () => clearTimeout(timer);
   }, [pendingDate]);
 
+  // Fetch rollup data when date changes
   useEffect(() => {
     if (!selectedDate) return;
     let mounted = true;
@@ -219,41 +218,69 @@ function RollupPanel({ assetType, allDates }) {
     return () => { mounted = false; };
   }, [assetType, selectedDate]);
 
+
+
+  // Pre-compute combined OI across all 3 screener expiries, per ticker, from full data
+  const combinedOIMap = useMemo(() => {
+    const map = {};
+    data.forEach((row) => {
+      if (!screenerExpiries.includes(row.expiry)) return;
+      if (row.open_int == null) return;
+      map[row.ticker] = (map[row.ticker] ?? 0) + Number(row.open_int);
+    });
+    return map;
+  }, [data, screenerExpiries]);
+
+  // Group rows by quadrant, filtered to the active screener expiry only
   const grouped = useMemo(() => {
     const map = {};
     QUADRANTS.forEach((q) => { map[q] = []; });
-    data.forEach((row) => { if (map[row.quadrant]) map[row.quadrant].push(row); });
+
+    data.forEach((row) => {
+      // Only show rows matching the currently active screener expiry tab
+      if (activeScreenerExpiry && row.expiry !== activeScreenerExpiry) return;
+      if (map[row.quadrant]) map[row.quadrant].push(row);
+    });
+
     QUADRANTS.forEach((q) => {
       map[q].sort((a, b) => Math.abs(b.chng_in_oi ?? 0) - Math.abs(a.chng_in_oi ?? 0));
     });
+
     return map;
-  }, [data]);
+  }, [data, activeScreenerExpiry]);
 
   const activeRows = grouped[activeQuadrant] ?? [];
   const meta = QUADRANT_META[activeQuadrant] ?? QUADRANT_META.long_buildup;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <span className="text-sm text-white/60">Timeline</span>
-        <select
-          value={dateMode}
-          onChange={(e) => setDateMode(e.target.value)}
-          className="px-3 py-2 rounded-lg bg-[#151922]"
-        >
-          <option value="expiry">Current Expiry</option>
-          <option value="30d">Last 30 Sessions</option>
-          <option value="90d">Last 90 Sessions</option>
-          <option value="full">Full History</option>
-        </select>
-      </div>
+      {/* Expiry tabs — mirroring ticker analytics style */}
+      {screenerExpiries.length > 0 && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          {screenerExpiries.map((expiry) => (
+            <button
+              key={expiry}
+              onClick={() => onScreenerExpiryChange(expiry)}
+              className={`px-5 py-3 rounded-xl border whitespace-nowrap text-sm transition ${
+                activeScreenerExpiry === expiry
+                  ? 'border-[#FFA726]/30 bg-[#FFA726]/10 text-[#FFA726]'
+                  : 'border-white/10 bg-[#151922] text-white/65 hover:bg-white/5'
+              }`}
+            >
+              {expiry}
+            </button>
+          ))}
+        </div>
+      )}
 
+      {/* Date slider */}
       <DateSlider
-        dates={visibleDates}
+        dates={allDates}
         selectedDate={pendingDate || selectedDate}
         onChange={setPendingDate}
       />
 
+      {/* Quadrant summary cards */}
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
         {QUADRANTS.map((q) => {
           const m = QUADRANT_META[q];
@@ -286,7 +313,10 @@ function RollupPanel({ assetType, allDates }) {
           </div>
 
           {activeRows.length === 0 ? (
-            <p className="px-4 py-8 text-white/45 text-sm">No contracts in this quadrant for {selectedDate}.</p>
+            <p className="px-4 py-8 text-white/45 text-sm">
+              No contracts in this quadrant for {selectedDate}
+              {activeScreenerExpiry ? ` / ${activeScreenerExpiry}` : ''}.
+            </p>
           ) : (
             <div className="overflow-x-auto">
               <table>
@@ -294,7 +324,7 @@ function RollupPanel({ assetType, allDates }) {
                   <tr>
                     <th>#</th><th>Ticker</th><th>Expiry</th><th>Close</th>
                     <th>Chng Price</th><th>Chng Price %</th>
-                    <th>Chng OI</th><th>Chng OI %</th>
+                    <th>OI</th><th>Combined OI</th><th>Chng OI</th><th>Chng OI %</th>
                     <th>Basis</th><th>CoC %</th><th>Vol/OI</th><th>DTE</th>
                   </tr>
                 </thead>
@@ -310,6 +340,15 @@ function RollupPanel({ assetType, allDates }) {
                       </td>
                       <td className={row.chng_price_per >= 0 ? 'text-[#92D050]' : 'text-[#ef5350]'}>
                         {formatPercent(row.chng_price_per)}
+                      </td>
+                      <td className={row.open_int >= 0 ? 'text-[#92D050]' : 'text-[#ef5350]'}>
+                        {formatNumber(row.open_int)}
+                      </td>
+                      {/* Combined OI — same value regardless of active expiry tab */}
+                      <td className={combinedOIMap[row.ticker] >= 0 ? 'text-[#92D050]' : 'text-[#ef5350]'}>
+                        {combinedOIMap[row.ticker] != null
+                          ? formatNumber(combinedOIMap[row.ticker])
+                          : '--'}
                       </td>
                       <td className={row.chng_in_oi >= 0 ? 'text-[#92D050]' : 'text-[#ef5350]'}>
                         {row.chng_in_oi >= 0 ? '+' : ''}{formatNumber(row.chng_in_oi)}
@@ -339,18 +378,38 @@ function RollupPanel({ assetType, allDates }) {
    MAIN PAGE
 ───────────────────────────────────────────────────────────────── */
 
-export default function Futures({ assetType = 'futures' }) {
-  const [tickerList, setTickerList]             = useState([]);
-  const [selectedTicker, setSelectedTicker]     = useState('');
-  const [expiries, setExpiries]                 = useState([]);
-  const [selectedExpiries, setSelectedExpiries] = useState([]);
-  const [activeExpiry, setActiveExpiry]         = useState('');
-  const [loading, setLoading]                   = useState(true);
-  const [error, setError]                       = useState('');
-  const [mode, setMode]                         = useState('screener');
-  const [allDates, setAllDates]                 = useState([]);
+export default function Futures({ assetType = 'stock_futures' }) {
+  const [tickerList, setTickerList]                       = useState([]);
+  const [selectedTicker, setSelectedTicker]               = useState('');
+  const [expiries, setExpiries]                           = useState([]);
+  const [selectedExpiries, setSelectedExpiries]           = useState([]);
+  const [activeExpiry, setActiveExpiry]                   = useState('');
+  const [loading, setLoading]                             = useState(true);
+  const [error, setError]                                 = useState('');
+  const [mode, setMode]                                   = useState('screener');
+  const [allDates, setAllDates]                           = useState([]);
 
-  // Reset all state when assetType changes (e.g. when used inside Indexes.jsx)
+  // Screener-mode expiry state (derived from first ticker, ascending)
+  const [screenerExpiries, setScreenerExpiries]           = useState([]);   // full list ascending
+  const [screenerSelectedExpiry, setScreenerSelectedExpiry] = useState(''); // single user selection
+  const [activeScreenerExpiry, setActiveScreenerExpiry]   = useState('');   // active tab
+
+  // The 3 expiries shown as tabs in screener: selected + next 2 ascending
+  const screenerThreeExpiries = useMemo(() => {
+    if (!screenerSelectedExpiry || screenerExpiries.length === 0) return [];
+    const idx = screenerExpiries.indexOf(screenerSelectedExpiry);
+    if (idx === -1) return [screenerSelectedExpiry];
+    return screenerExpiries.slice(idx, idx + 3);
+  }, [screenerExpiries, screenerSelectedExpiry]);
+
+  // Keep activeScreenerExpiry pointing at the first of the three when they change
+  useEffect(() => {
+    if (screenerThreeExpiries.length > 0 && !screenerThreeExpiries.includes(activeScreenerExpiry)) {
+      setActiveScreenerExpiry(screenerThreeExpiries[0]);
+    }
+  }, [screenerThreeExpiries, activeScreenerExpiry]);
+
+  // Reset all state when assetType changes
   useEffect(() => {
     setTickerList([]);
     setSelectedTicker('');
@@ -358,6 +417,9 @@ export default function Futures({ assetType = 'futures' }) {
     setSelectedExpiries([]);
     setActiveExpiry('');
     setAllDates([]);
+    setScreenerExpiries([]);
+    setScreenerSelectedExpiry('');
+    setActiveScreenerExpiry('');
     setMode('screener');
     setError('');
     setLoading(true);
@@ -381,7 +443,7 @@ export default function Futures({ assetType = 'futures' }) {
     return () => { mounted = false; };
   }, [assetType]);
 
-  /* ── Load expiries when ticker changes ── */
+  /* ── Load expiries for ticker analytics when ticker changes ── */
   useEffect(() => {
     if (!selectedTicker) return;
     let mounted = true;
@@ -400,23 +462,41 @@ export default function Futures({ assetType = 'futures' }) {
     return () => { mounted = false; };
   }, [assetType, selectedTicker]);
 
-  /* ── Load dates for screener slider ── */
+  /* ── Load screener expiries from the first ticker (ascending) ── */
   useEffect(() => {
     if (!tickerList.length) return;
     let mounted = true;
 
-    async function loadDates() {
+    async function loadScreenerExpiries() {
       try {
         const firstTicker = tickerList[0];
         const expRes      = await getExpiries(assetType, firstTicker);
         if (!mounted) return;
 
-        const expiryList = [...(expRes?.expiries || [])].sort((a, b) => new Date(b) - new Date(a));
-        if (!expiryList.length) return;
+        // Sort ascending (nearest expiry first)
+        const sorted = [...(expRes?.expiries || [])].sort((a, b) => new Date(a) - new Date(b));
+        setScreenerExpiries(sorted);
+        if (sorted.length > 0) setScreenerSelectedExpiry(sorted[0]);
+      } catch (err) {
+        console.error('Failed loading screener expiries', err);
+      }
+    }
 
-        const dateRes = await getDates(assetType, firstTicker, expiryList[0]);
+    loadScreenerExpiries();
+    return () => { mounted = false; };
+  }, [assetType, tickerList]);
+
+  /* ── Load dates for screener slider (from first ticker's nearest expiry) ── */
+  useEffect(() => {
+    if (!tickerList.length || !screenerExpiries.length) return;
+    let mounted = true;
+
+    async function loadDates() {
+      try {
+        const firstTicker = tickerList[0];
+        const nearestExpiry = screenerExpiries[0];
+        const dateRes = await getDates(assetType, firstTicker, nearestExpiry);
         if (!mounted) return;
-
         setAllDates([...(dateRes?.dates || [])].sort((a, b) => new Date(a) - new Date(b)));
       } catch (err) {
         console.error('Failed loading screener dates', err);
@@ -425,9 +505,9 @@ export default function Futures({ assetType = 'futures' }) {
 
     loadDates();
     return () => { mounted = false; };
-  }, [assetType, tickerList]);
+  }, [assetType, tickerList, screenerExpiries]);
 
-  /* ── Keep activeExpiry valid ── */
+  /* ── Keep activeExpiry valid in ticker analytics mode ── */
   useEffect(() => {
     if (selectedExpiries.length > 0 && !selectedExpiries.includes(activeExpiry)) {
       setActiveExpiry(selectedExpiries[0]);
@@ -453,19 +533,22 @@ export default function Futures({ assetType = 'futures' }) {
     );
   }
 
-  const label = assetType === 'index_futures' ? 'Index Futures' : 'Futures';
+  const label = assetType === 'index_futures' ? 'Index Futures' : 'Stock Futures';
 
   return (
-    <div className="flex">
+    <div className="flex min-h-screen">
       <Sidebar
         mode={mode}
         assetType={assetType}
         tickerList={tickerList}
         selectedTicker={selectedTicker}
         onTickerChange={(t) => { setSelectedTicker(t); if (mode === 'screener') setMode('expiry'); }}
-        expiries={expiries}
-        selectedExpiries={selectedExpiries}
-        onExpiriesChange={setSelectedExpiries}
+        expiries={mode === 'screener' ? screenerExpiries : expiries}
+        selectedExpiries={mode === 'screener' ? [screenerSelectedExpiry] : selectedExpiries}
+        onExpiriesChange={mode === 'screener'
+          ? (arr) => setScreenerSelectedExpiry(arr[arr.length - 1] ?? screenerSelectedExpiry)
+          : setSelectedExpiries
+        }
         selectedMetric="ts"
         onMetricChange={() => {}}
         startDate=""
@@ -512,7 +595,13 @@ export default function Futures({ assetType = 'futures' }) {
         </div>
 
         {mode === 'screener' && (
-          <RollupPanel assetType={assetType} allDates={allDates} />
+          <RollupPanel
+            assetType={assetType}
+            allDates={allDates}
+            screenerExpiries={screenerThreeExpiries}
+            activeScreenerExpiry={activeScreenerExpiry}
+            onScreenerExpiryChange={setActiveScreenerExpiry}
+          />
         )}
 
         {mode === 'expiry' && (

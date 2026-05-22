@@ -66,8 +66,8 @@ _OPTIONS_TYPES = {"STO", "IDO"}
 
 QUADRANT_MAP = {
     (True,  True):  "long_buildup",
-    (True,  False): "short_covering",
-    (False, True):  "short_buildup",
+    (False,  True): "short_covering",
+    (True, False):  "short_buildup",
     (False, False): "long_unwinding",
 }
 

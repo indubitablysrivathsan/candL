@@ -356,7 +356,7 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
    MAIN PAGE
 ───────────────────────────────────────────────────────────────── */
 
-export default function Options({ assetType = 'options' }) {
+export default function Options({ assetType = 'stock_options' }) {
   const [tickerList, setTickerList]             = useState([]);
   const [selectedTicker, setSelectedTicker]     = useState('');
   const [expiries, setExpiries]                 = useState([]);
@@ -466,10 +466,10 @@ export default function Options({ assetType = 'options' }) {
     </div>
   );
 
-  const label = assetType === 'index_options' ? 'Index Options' : 'Options';
+  const label = assetType === 'index_options' ? 'Index Options' : 'Stock Options';
 
   return (
-    <div className="flex">
+    <div className="flex min-h-screen">
       <Sidebar
         tickerList={tickerList}
         selectedTicker={selectedTicker}
