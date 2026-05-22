@@ -7,9 +7,12 @@ from config import MANIFEST_PATH
 COLUMNS = [
     "trade_date",
     "status",
+
     "fo",
-    "options_process",
-    "futures_process",
+    "sto",
+    "ido",
+    "stf",
+    "idf",
 ]
 
 
@@ -50,10 +53,17 @@ def load_manifest() -> pd.DataFrame:
 
         if col not in df.columns:
 
-            if col.endswith("_process"):
+            if col in ["fo", "sto", "ido", "stf", "idf"]:
                 df[col] = 0
             else:
                 df[col] = ""
+
+    for col in ["fo", "sto", "ido", "stf", "idf"]:
+        df[col] = (
+            pd.to_numeric(df[col], errors="coerce")
+            .fillna(0)
+            .astype("int8")
+        )
 
     df = df[COLUMNS]
 
@@ -94,25 +104,40 @@ def get_status(trade_date: str):
 def update_date(
     trade_date: str,
     status: str,
-    fo: int = 0,
+    fo: int | None = None,
 ):
     """
-    Insert or update a manifest row.
+    Insert or update a manifest row safely.
     """
     df = load_manifest()
 
-    new_row = {
-        "trade_date": trade_date,
-        "status": status,
-        "fo": fo,
-    }
+    if trade_date not in df["trade_date"].values:
 
-    if trade_date in df["trade_date"].values:
-        df.loc[df["trade_date"] == trade_date, list(new_row.keys())] = list(
-            new_row.values()
+        new_row = {
+            "trade_date": trade_date,
+            "status": status,
+
+            "fo": 0,
+
+            "sto": 0,
+            "ido": 0,
+
+            "stf": 0,
+            "idf": 0,
+        }
+
+        if fo is not None:
+            new_row["fo"] = fo
+
+        df = pd.concat(
+            [df, pd.DataFrame([new_row])],
+            ignore_index=True,
         )
+
     else:
-        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        df.loc[df["trade_date"] == trade_date, "status"] = status
+        if fo is not None:
+            df.loc[df["trade_date"] == trade_date, "fo"] = fo
 
     save_manifest(df)
 
@@ -124,25 +149,65 @@ def mark_downloaded(trade_date: str):
         fo=1,
     )
 
-def mark_options_processed(trade_date: str):
+def mark_stock_options_processed(trade_date: str):
     df = load_manifest()
-    df.loc[df["trade_date"] == trade_date, "options_process"] = 1
+    df.loc[df["trade_date"] == trade_date, "sto"] = 1
     save_manifest(df)
 
-def mark_futures_processed(trade_date: str):
+
+def mark_index_options_processed(trade_date: str):
     df = load_manifest()
-    df.loc[df["trade_date"] == trade_date, "futures_process"] = 1
+    df.loc[df["trade_date"] == trade_date, "ido"] = 1
     save_manifest(df)
 
-def get_options_unprocessed_dates():
+
+def mark_stock_futures_processed(trade_date: str):
     df = load_manifest()
-    rows = df[(df["fo"] == 1) & (df["options_process"] != 1)]
+    df.loc[df["trade_date"] == trade_date, "stf"] = 1
+    save_manifest(df)
+
+
+def mark_index_futures_processed(trade_date: str):
+    df = load_manifest()
+    df.loc[df["trade_date"] == trade_date, "idf"] = 1
+    save_manifest(df)
+
+
+def get_stock_options_unprocessed_dates():
+    df = load_manifest()
+    rows = df[
+        (df["fo"] == 1)
+        & (df["sto"] != 1)
+    ]
     return rows["trade_date"].tolist()
 
-def get_futures_unprocessed_dates():
+
+def get_index_options_unprocessed_dates():
     df = load_manifest()
-    rows = df[(df["fo"] == 1) & (df["futures_process"] != 1)]
+    rows = df[
+        (df["fo"] == 1)
+        & (df["ido"] != 1)
+    ]
     return rows["trade_date"].tolist()
+
+
+def get_stock_futures_unprocessed_dates():
+    df = load_manifest()
+    rows = df[
+        (df["fo"] == 1)
+        & (df["stf"] != 1)
+    ]
+    return rows["trade_date"].tolist()
+
+
+def get_index_futures_unprocessed_dates():
+    df = load_manifest()
+    rows = df[
+        (df["fo"] == 1)
+        & (df["idf"] != 1)
+    ]
+    return rows["trade_date"].tolist()
+
 
 def mark_market_closed(trade_date: str):
     update_date(

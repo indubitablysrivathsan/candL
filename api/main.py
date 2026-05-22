@@ -49,9 +49,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-from api.routes.options        import router as options_router
-from api.routes.futures        import router as futures_router
-from api.routes.stocks_indexes import stocks_router, indexes_router
+from api.routes.futures        import futures_router, index_futures_router
+from api.routes.options        import options_router, index_options_router
+from api.routes.stocks_indexes import stocks_router
 
 # ── CORS — allow the React dev server ─────────────────────────────────────────
 app.add_middleware(
@@ -63,11 +63,11 @@ app.add_middleware(
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────
-app.include_router(options_router,  prefix=API_PREFIX)
-app.include_router(futures_router,  prefix=API_PREFIX)
-app.include_router(stocks_router,   prefix=API_PREFIX)
-app.include_router(indexes_router,  prefix=API_PREFIX)
-
+app.include_router(futures_router,       prefix=API_PREFIX)
+app.include_router(index_futures_router, prefix=API_PREFIX)
+app.include_router(options_router,       prefix=API_PREFIX)
+app.include_router(index_options_router, prefix=API_PREFIX)
+app.include_router(stocks_router,        prefix=API_PREFIX)
 
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health")

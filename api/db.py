@@ -4,15 +4,22 @@ NSE Platform — DuckDB query layer
 All data access goes through this module.
 FastAPI routes call these functions; nothing else touches the filesystem.
 
+Asset types
+-----------
+  "futures"        → STF contracts  (data/futures/)
+  "index_futures"  → IDF contracts  (data/index_futures/)
+  "options"        → STO contracts  (data/options/)
+  "index_options"  → IDO contracts  (data/index_options/)
+
 Connection strategy
 -------------------
 get_conn()          — in-memory DuckDB, one per request, used for ad-hoc CSV
                       scanning (options data, analytics, chart scale).
 _rollup_read_conn() — read-only connection to the persistent rollup.db file.
-                      Used only by the two futures screener helpers.
+                      Used by the futures rollup helpers.
                       The file is written exclusively by the ingestion pipeline
-                      (before the API starts serving), so no concurrent-writer
-                      issue exists on this local single-process setup.
+                      so no concurrent-writer issue exists on this local
+                      single-process setup.
 """
 
 import duckdb
@@ -23,10 +30,14 @@ from pathlib import Path
 from config import (
     DUCKDB_PATH,
     ROLLUP_DB_PATH,
+
     OPTIONS_ROOT,
+    INDEX_OPTIONS_ROOT,
+
     FUTURES_ROOT,
+    INDEX_FUTURES_ROOT,
+
     STOCKS_ROOT,
-    INDEXES_ROOT,
 )
 
 
@@ -45,10 +56,17 @@ def _rollup_read_conn() -> duckdb.DuckDBPyConnection:
 # ── Asset root resolver ───────────────────────────────────────────────────────
 
 _ASSET_ROOTS = {
-    "options": OPTIONS_ROOT,
-    "futures": FUTURES_ROOT,
-    "stocks":  STOCKS_ROOT,
-    "indexes": INDEXES_ROOT,
+    "options":       OPTIONS_ROOT,
+    "index_options": INDEX_OPTIONS_ROOT,
+    "futures":       FUTURES_ROOT,
+    "index_futures": INDEX_FUTURES_ROOT,
+    "stocks":        STOCKS_ROOT,
+}
+
+# Map asset_type → instrument_type stored in rollup DB
+_FUTURES_INSTRUMENT_TYPE = {
+    "futures":       "STF",
+    "index_futures": "IDF",
 }
 
 
@@ -79,12 +97,12 @@ def get_available_dates(asset_type: str, ticker: str, expiry: str) -> list[str]:
     """
     Sorted list of YYYY-MM-DD strings for which data exists.
 
-    Futures: reads trade_date from analytics.csv (one row per date, already
-             aggregated — no need to scan the DATA directory).
-    Others:  scans the DATA/ directory for dated CSV filenames.
+    Futures / index_futures: reads trade_date from analytics.csv (one row per
+        date, already aggregated — no need to scan the DATA directory).
+    Options / index_options: scans the DATA/ directory for dated CSV filenames.
     """
-    if asset_type == "futures":
-        path = FUTURES_ROOT / ticker / expiry / "analytics.csv"
+    if asset_type in ("futures", "index_futures"):
+        path = asset_root(asset_type) / ticker / expiry / "analytics.csv"
         if not path.exists():
             return []
         df = pd.read_csv(path, usecols=["trade_date"])
@@ -97,9 +115,9 @@ def get_available_dates(asset_type: str, ticker: str, expiry: str) -> list[str]:
             .tolist()
         )
 
-    # options / stocks / indexes — DATA/ directory scan
-    if asset_type == "options":
-        data_dir = OPTIONS_ROOT / ticker / expiry / "DATA"
+    # options / index_options / stocks — DATA/ directory scan
+    if asset_type in ("options", "index_options"):
+        data_dir = asset_root(asset_type) / ticker / expiry / "DATA"
     else:
         data_dir = asset_root(asset_type) / ticker / "DATA"
 
@@ -110,18 +128,20 @@ def get_available_dates(asset_type: str, ticker: str, expiry: str) -> list[str]:
     for f in sorted(data_dir.iterdir()):
         if f.suffix == ".csv":
             try:
-                pd.to_datetime(f.stem)   # validates YYYY-MM-DD
+                pd.to_datetime(f.stem)
                 dates.append(f.stem)
             except Exception:
                 pass
     return dates
 
 
-# ── Options — internal helpers ────────────────────────────────────────────────
+# ── Shared CSV helpers ────────────────────────────────────────────────────────
 
-def _options_glob(ticker: str, expiry: str) -> str:
+def _options_glob(asset_type: str, ticker: str, expiry: str) -> str:
     """DuckDB-compatible glob for day-wise options CSVs (forward slashes)."""
-    return str(OPTIONS_ROOT / ticker / expiry / "DATA" / "*.csv").replace("\\", "/")
+    return str(
+        asset_root(asset_type) / ticker / expiry / "DATA" / "*.csv"
+    ).replace("\\", "/")
 
 
 def _date_from_filename_expr() -> str:
@@ -129,10 +149,14 @@ def _date_from_filename_expr() -> str:
     return "CAST(regexp_extract(filename, '(\\d{4}-\\d{2}-\\d{2})\\.csv', 1) AS DATE)"
 
 
-def _read_analytics_csv(path: Path, start_date: str | None = None, end_date: str | None = None) -> pd.DataFrame:
+def _read_analytics_csv(
+    path: Path,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> pd.DataFrame:
     """
-    Shared helper: read an analytics.csv through DuckDB with an optional date
-    filter.  Handles path normalisation and trade_date casting in one place.
+    Read an analytics.csv through DuckDB with an optional date filter.
+    Handles path normalisation and trade_date casting in one place.
     """
     if not path.exists():
         return pd.DataFrame()
@@ -157,16 +181,17 @@ def _read_analytics_csv(path: Path, start_date: str | None = None, end_date: str
     return df.dropna(subset=["trade_date"])
 
 
-# ── Options — public API ──────────────────────────────────────────────────────
+# ── Options (STO + IDO) — public API ─────────────────────────────────────────
 
 def get_options_data(
+    asset_type: str,
     ticker: str,
     expiry: str,
     start_date: str,
     end_date: str,
 ) -> pd.DataFrame:
     """All day-wise rows for a ticker+expiry in a date range."""
-    glob      = _options_glob(ticker, expiry)
+    glob      = _options_glob(asset_type, ticker, expiry)
     date_expr = _date_from_filename_expr()
     conn      = get_conn()
     try:
@@ -185,32 +210,48 @@ def get_options_data(
 
 
 def get_options_analytics(
-    ticker: str, expiry: str,
-    start_date: str, end_date: str,
+    asset_type: str,
+    ticker: str,
+    expiry: str,
+    start_date: str,
+    end_date: str,
 ) -> pd.DataFrame:
     return _read_analytics_csv(
-        OPTIONS_ROOT / ticker / expiry / "analytics.csv",
-        start_date, end_date,
+        asset_root(asset_type) / ticker / expiry / "analytics.csv",
+        start_date,
+        end_date,
     )
 
 
-def get_options_analytics_full(ticker: str, expiry: str) -> pd.DataFrame:
-    return _read_analytics_csv(OPTIONS_ROOT / ticker / expiry / "analytics.csv")
+def get_options_analytics_full(
+    asset_type: str,
+    ticker: str,
+    expiry: str,
+) -> pd.DataFrame:
+    return _read_analytics_csv(
+        asset_root(asset_type) / ticker / expiry / "analytics.csv"
+    )
 
 
-def get_daily_expiry_snapshot(expiry: str, trade_date: str) -> pd.DataFrame:
+def get_daily_expiry_snapshot(
+    asset_type: str,
+    expiry: str,
+    trade_date: str,
+) -> pd.DataFrame:
     """
     One analytics row per ticker for a given expiry + trade date.
-    Used by the options cross-ticker snapshot view.
+    Works for both options and index_options.
     """
+    root = asset_root(asset_type)
     rows = []
-    for ticker_dir in OPTIONS_ROOT.iterdir():
+
+    for ticker_dir in root.iterdir():
         if not ticker_dir.is_dir():
             continue
-        path     = OPTIONS_ROOT / ticker_dir.name / expiry / "analytics.csv"
-        path_str = str(path).replace("\\", "/")
+        path = ticker_dir / expiry / "analytics.csv"
         if not path.exists():
             continue
+        path_str = str(path).replace("\\", "/")
         conn = get_conn()
         try:
             df = conn.execute(f"""
@@ -222,9 +263,9 @@ def get_daily_expiry_snapshot(expiry: str, trade_date: str) -> pd.DataFrame:
             conn.close()
         if df.empty:
             continue
-        row            = df.iloc[0].to_dict()
-        row["ticker"]  = ticker_dir.name
-        row["expiry"]  = expiry
+        row           = df.iloc[0].to_dict()
+        row["ticker"] = ticker_dir.name
+        row["expiry"] = expiry
         rows.append(row)
 
     if not rows:
@@ -238,28 +279,35 @@ def get_daily_expiry_snapshot(expiry: str, trade_date: str) -> pd.DataFrame:
 
 
 def get_chart_scale(
-    ticker: str, expiry: str,
-    start_date: str, end_date: str,
+    asset_type: str,
+    ticker: str,
+    expiry: str,
+    start_date: str,
+    end_date: str,
     metric: str,
 ) -> dict:
     """Y/X axis bounds + strike gap for a given options series + date range."""
-    METRIC_COL = {"oi": "OpnIntrst", "oi_chng": "ChngInOpnIntrst", "vol": "TtlTradgVol"}
+    METRIC_COL = {
+        "oi":      "OpnIntrst",
+        "oi_chng": "ChngInOpnIntrst",
+        "vol":     "TtlTradgVol",
+    }
     col = METRIC_COL.get(metric)
     if col is None:
         return {"y_min": 0.0, "y_max": 1.0, "x_min": 0.0, "x_max": 0.0, "strike_gap": 50.0}
 
-    glob      = _options_glob(ticker, expiry)
-    date_expr = _date_from_filename_expr()
+    glob        = _options_glob(asset_type, ticker, expiry)
+    date_expr   = _date_from_filename_expr()
     date_filter = f"{date_expr} BETWEEN DATE '{start_date}' AND DATE '{end_date}'"
 
     conn = get_conn()
     try:
         minmax = conn.execute(f"""
             SELECT
-                MIN(CAST("{col}"    AS DOUBLE)),
-                MAX(CAST("{col}"    AS DOUBLE)),
-                MIN(CAST(StrkPric   AS DOUBLE)),
-                MAX(CAST(StrkPric   AS DOUBLE))
+                MIN(CAST("{col}"   AS DOUBLE)),
+                MAX(CAST("{col}"   AS DOUBLE)),
+                MIN(CAST(StrkPric  AS DOUBLE)),
+                MAX(CAST(StrkPric  AS DOUBLE))
             FROM read_csv_auto('{glob}', filename=true, ignore_errors=true)
             WHERE {date_filter}
               AND CAST("{col}" AS DOUBLE) != 0
@@ -289,35 +337,49 @@ def get_chart_scale(
 
     y_pad = max(abs(y_raw_min), abs(y_raw_max)) * 0.08
     return {
-        "y_min": y_raw_min - y_pad, "y_max": y_raw_max + y_pad,
-        "x_min": x_min, "x_max": x_max, "strike_gap": strike_gap,
+        "y_min":      y_raw_min - y_pad,
+        "y_max":      y_raw_max + y_pad,
+        "x_min":      x_min,
+        "x_max":      x_max,
+        "strike_gap": strike_gap,
     }
 
 
-# ── Futures ───────────────────────────────────────────────────────────────────
+# ── Futures (STF + IDF) — public API ─────────────────────────────────────────
 
-def get_futures_analytics(ticker: str, expiry: str) -> pd.DataFrame:
-    """Full analytics history for a single futures ticker+expiry (expiry panel)."""
-    df = _read_analytics_csv(FUTURES_ROOT / ticker / expiry / "analytics.csv")
+def get_futures_analytics(asset_type: str, ticker: str, expiry: str) -> pd.DataFrame:
+    """Full analytics history for a single futures ticker+expiry."""
+    df = _read_analytics_csv(asset_root(asset_type) / ticker / expiry / "analytics.csv")
     return df.replace({np.nan: None})
 
 
-def get_futures_rollup(trade_date: str) -> pd.DataFrame:
+def get_futures_rollup(
+    trade_date: str,
+    asset_type: str = "futures",
+) -> pd.DataFrame:
     """
-    All contracts for a given trade date from the persistent rollup DB.
-    Single indexed query — replaces the old ~600-file glob.
-    Returns an empty DataFrame if the DB does not exist yet (pre-ingestion).
+    All contracts for a given trade date from the persistent rollup DB,
+    filtered to the instrument_type that corresponds to asset_type.
     """
     if not ROLLUP_DB_PATH.exists():
         return pd.DataFrame()
 
+    instrument_type = _FUTURES_INSTRUMENT_TYPE.get(asset_type)
+    if instrument_type is None:
+        raise ValueError(f"asset_type {asset_type!r} is not a futures type")
+
     conn = _rollup_read_conn()
     try:
-        df = conn.execute("""
-            SELECT * FROM futures_rollup
+        df = conn.execute(
+            """
+            SELECT *
+            FROM futures_rollup
             WHERE trade_date = CAST(? AS DATE)
+              AND instrument_type = ?
             ORDER BY ABS(chng_in_oi) DESC
-        """, [trade_date]).df()
+            """,
+            [trade_date, instrument_type],
+        ).df()
     except Exception:
         return pd.DataFrame()
     finally:
@@ -326,21 +388,28 @@ def get_futures_rollup(trade_date: str) -> pd.DataFrame:
     return df.replace([np.nan, np.inf, -np.inf], None)
 
 
-def get_futures_market_dates() -> list[str]:
+def get_futures_market_dates(asset_type: str = "futures") -> list[str]:
     """
-    All unique trade dates present in the rollup DB.
-    Single query — replaces the old per-analytics-file scan.
+    All unique trade dates present in the rollup DB for a given asset_type.
     """
     if not ROLLUP_DB_PATH.exists():
         return []
 
+    instrument_type = _FUTURES_INSTRUMENT_TYPE.get(asset_type)
+    if instrument_type is None:
+        raise ValueError(f"asset_type {asset_type!r} is not a futures type")
+
     conn = _rollup_read_conn()
     try:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT DISTINCT CAST(trade_date AS VARCHAR) AS td
             FROM futures_rollup
+            WHERE instrument_type = ?
             ORDER BY td
-        """).fetchall()
+            """,
+            [instrument_type],
+        ).fetchall()
     except Exception:
         return []
     finally:

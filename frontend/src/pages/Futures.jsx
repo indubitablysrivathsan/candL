@@ -13,7 +13,7 @@ import {
   getDates,
   getFuturesAnalytics,
   getFuturesRollup,
-  getFuturesMarketDates,
+  getMarketDates,
   formatCurrency,
   formatNumber,
   QUADRANT_META,
@@ -397,28 +397,6 @@ function RollupPanel({ allDates }) {
         })}
       </div>
 
-      {/* Quadrant tabs */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {QUADRANTS.map((q) => {
-          const m = QUADRANT_META[q];
-          return (
-            <button
-              key={q}
-              onClick={() => setActiveQuadrant(q)}
-              className="px-4 py-2 rounded-xl border text-sm transition"
-              style={{
-                borderColor:     activeQuadrant === q ? `${m.color}50` : 'rgba(255,255,255,0.1)',
-                backgroundColor: activeQuadrant === q ? `${m.color}18` : '#151922',
-                color:           activeQuadrant === q ? m.color : 'rgba(255,255,255,0.65)',
-              }}
-            >
-              {m.label}
-              <span className="ml-2 opacity-60">({grouped[q]?.length ?? 0})</span>
-            </button>
-          );
-        })}
-      </div>
-
       {/* Table */}
       {loading ? (
         <div className="flex items-center justify-center py-16">
@@ -493,7 +471,7 @@ function RollupPanel({ allDates }) {
                         {formatPercent(row.chng_price_per)}
 
                       </td>
-                      
+
                       <td
                           className={
                             row.chng_in_oi >= 0
