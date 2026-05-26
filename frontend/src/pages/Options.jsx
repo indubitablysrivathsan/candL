@@ -10,6 +10,7 @@ import DateSlider from '../components/shared/DateSlider';
 import StrikeBarChart from '../components/charts/StrikeBarChart';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import PCRChart from '../components/charts/PCRChart';
+import TickerAnalysisTable from '../components/charts/TickerAnalysisTable';
 
 import {
   getTickers,
@@ -372,6 +373,8 @@ export default function Options({ assetType = 'stock_options' }) {
 
   const isDailySnapshot = selectedMetric === 'daily_expiry_snapshot';
 
+  const isTickerAnalysis = selectedMetric === 'ticker_analysis';
+
   // Reset when assetType changes
   useEffect(() => {
     setTickerList([]);
@@ -412,7 +415,7 @@ export default function Options({ assetType = 'stock_options' }) {
     getExpiries(assetType, selectedTicker)
       .then((res) => {
         if (!mounted) return;
-        const list = [...(res?.expiries || [])].reverse();
+        const list = [...(res?.expiries || [])];
         setExpiries(list);
         const defaults = list.slice(0, 3);
         setSelectedExpiries(defaults);
@@ -556,7 +559,7 @@ export default function Options({ assetType = 'stock_options' }) {
           </div>
         )}
 
-        {!isDailySnapshot && selectedExpiries.length > 0 && (
+        {!isDailySnapshot && !isTickerAnalysis && selectedExpiries.length > 0 && (
           <>
             <div className="flex items-center gap-2 mb-5 overflow-x-auto pb-1">
               {selectedExpiries.map((expiry) => (
@@ -586,6 +589,14 @@ export default function Options({ assetType = 'stock_options' }) {
               />
             )}
           </>
+        )}
+        {isTickerAnalysis && selectedExpiries[0] && (
+          <TickerAnalysisTable
+            assetType={assetType}
+            ticker={selectedTicker}
+            selectedExpiry={selectedExpiries[0]}
+            allExpiries={expiries}
+          />
         )}
       </main>
     </div>

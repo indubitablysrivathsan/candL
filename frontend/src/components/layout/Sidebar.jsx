@@ -96,7 +96,10 @@ export default function Sidebar({
   const isDailySnapshot =
     selectedMetric === 'daily_expiry_snapshot';
 
-  const dateRangeDisabled = isTimeSeries;
+  const isTickerAnalysis =
+    selectedMetric === 'ticker_analysis';
+
+  const dateRangeDisabled = isTimeSeries || isTickerAnalysis;
 
   const disableTicker =
     isDailySnapshot ||
@@ -106,26 +109,12 @@ export default function Sidebar({
     isTimeSeries || isDailySnapshot;
 
   const metricOptions = [
-    {
-      label: 'Open Interest',
-      value: 'oi'
-    },
-    {
-      label: 'OI Change',
-      value: 'oi_chng'
-    },
-    {
-      label: 'Volume',
-      value: 'vol'
-    },
-    {
-      label: 'Time Series',
-      value: 'ts'
-    },
-    {
-      label: 'Daily Expiry Snapshot',
-      value: 'daily_expiry_snapshot'
-    }
+    { label: 'Open Interest',          value: 'oi'                    },
+    { label: 'OI Change',              value: 'oi_chng'               },
+    { label: 'Volume',                 value: 'vol'                   },
+    { label: 'Time Series',            value: 'ts'                    },
+    { label: 'Daily Expiry Snapshot',  value: 'daily_expiry_snapshot' },
+    { label: 'Ticker Analysis',        value: 'ticker_analysis'       },
   ];
 
   return (
@@ -272,86 +261,58 @@ export default function Sidebar({
           </div>
 
           <div className="space-y-3">
-            <select
-              onChange={(e) => {
-                const value = e.target.value;
-
-                if (
-                  !value ||
-                  selectedExpiries.includes(value)
-                ) {
-                  return;
-                }
-
-                if (isDailySnapshot) {
-                  onExpiriesChange([value]);
-                } else {
-                  onExpiriesChange([
-                    ...selectedExpiries,
-                    value
-                  ]);
-                }
-              }}
-              value=""
-              className="w-full"
-            >
-              <option value="">
-                Add Expiry...
-              </option>
-
-              {expiries.map((expiry) => (
-                <option
-                  key={expiry}
-                  value={expiry}
+            {isTickerAnalysis || isDailySnapshot ? (
+              /* ── single-select for ticker analysis ── */
+              <div className="space-y-2">
+                <select
+                  value={selectedExpiries[0] || ''}
+                  onChange={(e) => {
+                    if (e.target.value) onExpiriesChange([e.target.value]);
+                  }}
+                  className="w-full"
                 >
-                  {expiry}
-                </option>
-              ))}
-            </select>
-
-            {/* Selected Expiries */}
-            {!isDailySnapshot && (
-              <div className="flex flex-wrap gap-2">
-                {selectedExpiries.map(
-                  (expiry) => (
-                    <div
-                      key={expiry}
-                      className="
-                        flex
-                        items-center
-                        gap-2
-                        rounded-lg
-                        border
-                        border-[#00B0F0]/20
-                        bg-[#00B0F0]/10
-                        px-3
-                        py-2
-                        text-xs
-                        text-[#00B0F0]
-                      "
-                    >
-                      <span>{expiry}</span>
-
-                      <button
-                        onClick={() =>
-                          onExpiriesChange(
-                            selectedExpiries.filter(
-                              (e) => e !== expiry
-                            )
-                          )
-                        }
-                        className="
-                          text-white/60
-                          hover:text-white
-                          transition
-                        "
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  )
-                )}
+                  <option value="">Select expiry...</option>
+                  {expiries.map((expiry) => (
+                    <option key={expiry} value={expiry}>{expiry}</option>
+                  ))}
+                </select>
               </div>
+            ) : (
+              /* ── multi-select for all other modes ── */
+              <>
+                <select
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (!value || selectedExpiries.includes(value)) return;
+                    if (isDailySnapshot) {
+                      onExpiriesChange([value]);
+                    } else {
+                      onExpiriesChange([...selectedExpiries, value]);
+                    }
+                  }}
+                  value=""
+                  className="w-full"
+                >
+                  <option value="">Add Expiry...</option>
+                  {expiries.map((expiry) => (
+                    <option key={expiry} value={expiry}>{expiry}</option>
+                  ))}
+                </select>
+
+                {!isDailySnapshot && (
+                  <div className="flex flex-wrap gap-2">
+                    {selectedExpiries.map((expiry) => (
+                      <div key={expiry} className="flex items-center gap-2 rounded-lg border border-[#00B0F0]/20 bg-[#00B0F0]/10 px-3 py-2 text-xs text-[#00B0F0]">
+                        <span>{expiry}</span>
+                        <button
+                          onClick={() => onExpiriesChange(selectedExpiries.filter((e) => e !== expiry))}
+                          className="text-white/60 hover:text-white transition"
+                        >✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </section>

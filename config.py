@@ -8,7 +8,7 @@ Everything else is derived from it automatically.
 from pathlib import Path
 
 # ─── DATA ─────────────────────────────────────────────────────────────────────
-DATA_ROOT = Path(r"D:\candL\data")   # <── change to your path
+DATA_ROOT = Path(r"E:\Projects\candL\data")   # <── change to your path
 
 # Asset sub-roots
 # OPTIONS_ROOT = DATA_ROOT / "stock_options"   # options/TICKER/EXPIRY/DATA/*.csv
@@ -29,7 +29,7 @@ MANIFEST_PATH = f"{RAW_ROOT}/manifest.csv"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
 SYNC_ON_STARTUP = True
-SYNC_START_DATE = "2026-05-20"
+SYNC_START_DATE = "2026-04-20"
 
 # ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
 NSE_BASE_URL = "https://nsearchives.nseindia.com"

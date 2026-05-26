@@ -120,7 +120,7 @@ def _make_options_router(asset_type: str) -> APIRouter:
     ):
         df = (
             get_options_analytics(asset_type, ticker, expiry, start_date, end_date)
-            if start_date and end_date
+            if start_date or end_date
             else get_options_analytics_full(asset_type, ticker, expiry)
         )
         if df.empty:

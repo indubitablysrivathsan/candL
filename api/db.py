@@ -90,7 +90,27 @@ def list_expiries(asset_type: str, ticker: str) -> list[str]:
     base = asset_root(asset_type) / ticker
     if not base.exists():
         return []
-    return sorted(p.name for p in base.iterdir() if p.is_dir())
+
+    from datetime import date
+    today = date.today()
+    current_month_start = today.replace(day=1)
+
+    all_expiries = sorted(p.name for p in base.iterdir() if p.is_dir())
+
+    future_and_current, past = [], []
+    for exp in all_expiries:
+        try:
+            exp_date = date.fromisoformat(exp)
+            # treat as current/future if its month >= current month
+            if exp_date.replace(day=1) >= current_month_start:
+                future_and_current.append(exp)
+            else:
+                past.append(exp)
+        except ValueError:
+            future_and_current.append(exp)  # malformed name, don't drop it
+
+    # future_and_current already asc (sorted above), past needs desc
+    return future_and_current + past[::-1]
 
 
 def get_available_dates(asset_type: str, ticker: str, expiry: str) -> list[str]:
@@ -162,10 +182,12 @@ def _read_analytics_csv(
         return pd.DataFrame()
 
     path_str = str(path).replace("\\", "/")
-    where = (
-        f"WHERE CAST(trade_date AS DATE) BETWEEN DATE '{start_date}' AND DATE '{end_date}'"
-        if start_date and end_date else ""
-    )
+    where_parts = []
+    if start_date:
+        where_parts.append(f"CAST(trade_date AS DATE) >= DATE '{start_date}'")
+    if end_date:
+        where_parts.append(f"CAST(trade_date AS DATE) <= DATE '{end_date}'")
+    where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
     conn = get_conn()
     try:

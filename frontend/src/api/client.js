@@ -125,6 +125,85 @@ export async function getChartScale(assetType = 'stock_options', ticker, expiry,
 }
 
 /* =========================================
+   TICKER ANALYSIS
+   Fetches analytics for multiple expiries in parallel,
+   merges by trade_date, computes COI shares + maxpain drift.
+========================================= */
+
+export async function getTickerAnalysis(assetType, ticker, expiries, startDate, endDate) {
+  if (!ticker || !expiries?.length) throw new Error('Ticker and expiries required');
+  const sortedExpiries = [...expiries].sort((a, b) => new Date(a) - new Date(b));
+
+  // fetch all expiries in parallel using the sorted order
+  const results = await Promise.all(
+    sortedExpiries.map((expiry) => {
+      console.log('fetching expiry', expiry, 'start:', startDate, 'end:', endDate);
+      return getAnalytics(assetType, ticker, expiry, startDate, endDate);
+    })
+  );
+
+  // build a map: trade_date → { expiry: rowData }
+  const byDate = {};
+  results.forEach((res, i) => {
+    const expiry = sortedExpiries[i];
+    (res?.rows || []).forEach((row) => {
+      const d = row.trade_date;
+      if (!byDate[d]) byDate[d] = { trade_date: d };
+      byDate[d][expiry] = row;
+    });
+  });
+
+  // sorted dates
+  const dates = Object.keys(byDate).sort();
+
+  return dates.map((d) => {
+    const entry = byDate[d];
+
+    // combined OI
+    let combinedPE = 0, combinedCE = 0;
+    sortedExpiries.forEach((exp) => {
+      combinedPE += Number(entry[exp]?.pe ?? 0);
+      combinedCE += Number(entry[exp]?.ce ?? 0);
+    });
+    const combinedPCR = combinedCE > 0 ? combinedPE / combinedCE : null;
+
+    const expiryData = sortedExpiries.map((exp) => {
+      const row = entry[exp];
+      if (!row) return null;
+      const pe  = Number(row.pe ?? 0);
+      const ce  = Number(row.ce ?? 0);
+      const underlying = Number(row.underlying ?? 0);
+      const max_pain   = Number(row.max_pain ?? 0);
+      return {
+        pe,
+        ce,
+        pcr:         row.pcr != null ? Number(row.pcr) : null,
+        max_pain:   row.max_pain,
+        underlying: row.underlying,
+        maxpain_drift: (underlying > 0 && row.max_pain != null)
+          ? (max_pain - underlying) / underlying
+          : null,
+        share_pe: combinedPE > 0 ? pe / combinedPE : null,
+        share_ce: combinedCE > 0 ? ce / combinedCE : null,
+      };
+    });
+
+    // underlying lives on whichever expiry has it (same value across all)
+    const underlying = sortedExpiries.map(exp => entry[exp]?.underlying).find(v => v != null) ?? null;
+
+    return {
+      trade_date: d,
+      underlying,
+      expiries: sortedExpiries,   // Now properly maps parallel to [Current, Next, Far]
+      expiry_data: expiryData, 
+      combined_pe:  combinedPE,
+      combined_ce:  combinedCE,
+      combined_pcr: combinedPCR,
+    };
+  });
+}
+
+/* =========================================
    FUTURES ANALYTICS
    Works for: futures | index_futures
 ========================================= */
