@@ -1,6 +1,6 @@
 // src/components/TickerAnalysisTable.jsx
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, Fragment } from 'react';
 import { getTickerAnalysis } from '../../api/client';
 import LoadingSpinner from '../../components/shared/LoadingSpinner';
 
@@ -160,7 +160,7 @@ const expiries = useMemo(() => {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const a = Object.assign(document.createElement('a'), {
       href: URL.createObjectURL(blob),
-      download: `${ticker}_ticker_analysis_${startDate || 'all'}_${endDate || 'all'}.csv`,
+      download: `${ticker}_ticker_analysis_${derivedStart || 'all'}_${derivedEnd || 'all'}.csv`,
     });
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   }
@@ -246,7 +246,7 @@ const expiries = useMemo(() => {
                 <th className="px-3 py-2 sticky left-0 bg-[#1a1d26]" />
                 <th className="px-3 py-2" />
                 {expiries.map((exp) => (
-                  <>
+                  <Fragment key={exp}>
                     <th key={`${exp}-pe`}    className="px-3 py-2 text-right text-white/40 border-l border-white/10">PE OI</th>
                     <th key={`${exp}-ce`}    className="px-3 py-2 text-right text-white/40">CE OI</th>
                     <th key={`${exp}-pcr`}   className="px-3 py-2 text-right text-white/40">PCR</th>
@@ -254,7 +254,7 @@ const expiries = useMemo(() => {
                     <th key={`${exp}-drift`} className="px-3 py-2 text-right text-white/40">MP Drift</th>
                     <th key={`${exp}-spe`}   className="px-3 py-2 text-right text-white/40">COI%PE</th>
                     <th key={`${exp}-sce`}   className="px-3 py-2 text-right text-white/40">COI%CE</th>
-                  </>
+                  </Fragment>
                 ))}
                 <th className="px-3 py-2 text-right text-white/40 border-l border-white/10">PE</th>
                 <th className="px-3 py-2 text-right text-white/40">CE</th>
@@ -288,7 +288,7 @@ const expiries = useMemo(() => {
                         </>
                       );
                       return (
-                        <>
+                        <Fragment key={`empty-${ei}`}>
                           <td key="pe"    className="px-3 py-2 text-right text-[#FF00FF] border-l border-white/10 tabular-nums">{fmt(ed.pe)}</td>
                           <td key="ce"    className="px-3 py-2 text-right text-[#00B0F0] tabular-nums">{fmt(ed.ce)}</td>
                           <td key="pcr"   className={`px-3 py-2 text-right font-semibold tabular-nums ${pcrColor(ed.pcr)}`}>{fmtPCR(ed.pcr)}</td>
@@ -296,7 +296,7 @@ const expiries = useMemo(() => {
                           <td key="drift" className={`px-3 py-2 text-right font-medium tabular-nums ${driftColor(ed.maxpain_drift)}`}>{fmtPct(ed.maxpain_drift)}</td>
                           <td key="spe"   className="px-3 py-2">{shareBar(ed.share_pe, '#FF00FF')}</td>
                           <td key="sce"   className="px-3 py-2">{shareBar(ed.share_ce, '#00B0F0')}</td>
-                        </>
+                        </Fragment>
                       );
                     })}
 

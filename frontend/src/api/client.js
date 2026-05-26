@@ -137,7 +137,6 @@ export async function getTickerAnalysis(assetType, ticker, expiries, startDate, 
   // fetch all expiries in parallel using the sorted order
   const results = await Promise.all(
     sortedExpiries.map((expiry) => {
-      console.log('fetching expiry', expiry, 'start:', startDate, 'end:', endDate);
       return getAnalytics(assetType, ticker, expiry, startDate, endDate);
     })
   );
