@@ -5,7 +5,7 @@ Every API response is typed here.
 The frontend can rely on these shapes exactly.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 
@@ -26,30 +26,32 @@ class AvailableDatesResponse(BaseModel):
     asset_type: str
     ticker: str
     expiry: Optional[str]
-    dates: list[str]   # "YYYY-MM-DD" strings, sorted ascending
+    dates: list[str]
 
 
-# ── Options ───────────────────────────────────────────────────────────────────
+# ── Options raw data ──────────────────────────────────────────────────────────
 
 class OptionsRow(BaseModel):
-    trade_date: str          # "YYYY-MM-DD"
-    TckrSymb:   str
-    XpryDt:     str
-    StrkPric:   float
-    OptnTp:     str          # "CE" | "PE"
-    OpnIntrst:  float
-    ChngInOpnIntrst: float
-    TtlTradgVol: float
-    UndrlygPric: Optional[float]
-    OpnPric:    Optional[float]
-    HghPric:    Optional[float]
-    LwPric:     Optional[float]
-    ClsPric:    Optional[float]
-    LastPric:   Optional[float]
+    """
+    DB columns are aliased back to original NSE names in the SELECT inside
+    db.get_options_data() so these field names stay stable for the frontend.
+    """
+    trade_date:      str
+    TckrSymb:        str
+    XpryDt:          str
+    StrkPric:        Optional[float]
+    OptnTp:          Optional[str]
+    OpnIntrst:       Optional[float]
+    ChngInOpnIntrst: Optional[float]
+    TtlTradgVol:     Optional[float]
+    UndrlygPric:     Optional[float]
+    OpnPric:         Optional[float]
+    HghPric:         Optional[float]
+    LwPric:          Optional[float]
+    ClsPric:         Optional[float]
+    LastPric:        Optional[float]
 
-    class Config:
-        # allow extra columns from the CSV without crashing
-        extra = "ignore"
+    model_config = {"extra": "ignore"}
 
 
 class OptionsDataResponse(BaseModel):
@@ -60,22 +62,31 @@ class OptionsDataResponse(BaseModel):
     rows:       list[OptionsRow]
 
 
+# ── Options analytics ─────────────────────────────────────────────────────────
+
 class AnalyticsRow(BaseModel):
-    trade_date: str          # "YYYY-MM-DD"
-    pe:         Optional[float]
-    ce:         Optional[float]
+    """
+    DB stores pe_oi / ce_oi. Frontend expects pe / ce.
+    Aliases handle the rename transparently; populate_by_name lets
+    internal code still pass pe_oi= kwargs if needed.
+    """
+    trade_date: str
+    pe:         Optional[float] = Field(None, alias="pe_oi")
+    ce:         Optional[float] = Field(None, alias="ce_oi")
     pcr:        Optional[float]
     underlying: Optional[float]
     max_pain:   Optional[float]
 
+    model_config = {"populate_by_name": True, "extra": "ignore"}
+
 
 class AnalyticsResponse(BaseModel):
-    ticker:  str
-    expiry:  str
-    rows:    list[AnalyticsRow]
+    ticker: str
+    expiry: str
+    rows:   list[AnalyticsRow]
 
 
-# ── Strike snapshot (single day, aggregated for chart) ────────────────────────
+# ── Strike snapshot ───────────────────────────────────────────────────────────
 
 class StrikeBar(BaseModel):
     strike:     float
@@ -97,32 +108,6 @@ class StrikeSnapshotResponse(BaseModel):
     strikes:    list[StrikeBar]
 
 
-# ── Futures ───────────────────────────────────────────────────────────────────
-
-class FuturesRow(BaseModel):
-    trade_date:  str
-    TckrSymb:    str
-    XpryDt:      str
-    OpnPric:     Optional[float]
-    HghPric:     Optional[float]
-    LwPric:      Optional[float]
-    ClsPric:     Optional[float]
-    TtlTradgVol: Optional[float]
-    OpnIntrst:   Optional[float]
-    ChngInOpnIntrst: Optional[float]
-
-    class Config:
-        extra = "ignore"
-
-
-class FuturesDataResponse(BaseModel):
-    ticker:     str
-    expiry:     str
-    start_date: str
-    end_date:   str
-    rows:       list[FuturesRow]
-
-
 # ── Chart axis scale ──────────────────────────────────────────────────────────
 
 class ChartScaleResponse(BaseModel):
@@ -134,3 +119,28 @@ class ChartScaleResponse(BaseModel):
     x_min:      float
     x_max:      float
     strike_gap: float
+
+
+# ── Futures ───────────────────────────────────────────────────────────────────
+
+class FuturesRow(BaseModel):
+    trade_date:      str
+    TckrSymb:        str
+    XpryDt:          str
+    OpnPric:         Optional[float]
+    HghPric:         Optional[float]
+    LwPric:          Optional[float]
+    ClsPric:         Optional[float]
+    TtlTradgVol:     Optional[float]
+    OpnIntrst:       Optional[float]
+    ChngInOpnIntrst: Optional[float]
+
+    model_config = {"extra": "ignore"}
+
+
+class FuturesDataResponse(BaseModel):
+    ticker:     str
+    expiry:     str
+    start_date: str
+    end_date:   str
+    rows:       list[FuturesRow]

@@ -428,17 +428,17 @@ export default function Options({ assetType = 'stock_options' }) {
 
   /* ── Fetch daily expiry snapshot ── */
   useEffect(() => {
-    if (!isDailySnapshot || !selectedExpiries.length || !startDate) return;
+    if (!isDailySnapshot || !selectedExpiries.length || (!startDate && !endDate)) return;
     let mounted = true;
     setLoadingSnapshot(true);
 
-    getDailyExpirySnapshot(assetType, selectedExpiries[0], startDate)
+    getDailyExpirySnapshot(assetType, selectedExpiries[0], endDate || startDate)
       .then((res) => { if (mounted) setSnapshotRows(res?.rows || []); })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load daily snapshot'); })
       .finally(() => { if (mounted) setLoadingSnapshot(false); });
 
     return () => { mounted = false; };
-  }, [assetType, isDailySnapshot, selectedExpiries, startDate]);
+  }, [assetType, isDailySnapshot, selectedExpiries, startDate, endDate]);
 
   /* ── Keep activeExpiry valid ── */
   useEffect(() => {

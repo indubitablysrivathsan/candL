@@ -1,9 +1,9 @@
 """
 NSE Platform — Futures + Index Futures API routes
 ===================================================
-All endpoints are generated for both prefixes via _make_futures_router().
+All endpoints generated for both prefixes via _make_futures_router().
 
-  /api/v1/futures/...        → STF contracts  (asset_type="stock_futures")
+  /api/v1/stock_futures/...  → STF contracts  (asset_type="stock_futures")
   /api/v1/index_futures/...  → IDF contracts  (asset_type="index_futures")
 
 Endpoints
@@ -29,20 +29,13 @@ from api.db import (
 
 
 def _make_futures_router(asset_type: str) -> APIRouter:
-    """
-    Returns a fully-wired APIRouter for a futures asset type.
-    asset_type must be "futures" or "index_futures".
-    """
-    prefix = f"/{asset_type.replace('_', '_')}"   # /futures or /index_futures
-    tag    = asset_type.replace("_", " ").title()  # "Futures" or "Index Futures"
+    prefix = f"/{asset_type}"
+    tag    = asset_type.replace("_", " ").title()
     router = APIRouter(prefix=prefix, tags=[tag])
 
     @router.get("/tickers")
     def _tickers():
-        return {
-            "asset_type": asset_type,
-            "tickers":    list_tickers(asset_type),
-        }
+        return {"asset_type": asset_type, "tickers": list_tickers(asset_type)}
 
     @router.get("/expiries/{ticker}")
     def _expiries(ticker: str):
@@ -82,10 +75,7 @@ def _make_futures_router(asset_type: str) -> APIRouter:
 
     @router.get("/market-dates")
     def _market_dates():
-        return {
-            "asset_type": asset_type,
-            "dates":      get_futures_market_dates(asset_type),
-        }
+        return {"asset_type": asset_type, "dates": get_futures_market_dates(asset_type)}
 
     return router
 

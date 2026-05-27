@@ -1,21 +1,8 @@
 """
 NSE Platform — Options + Index Options API routes
 ===================================================
-All endpoints are generated for both prefixes via _make_options_router().
-
-  /api/v1/options/...        → STO contracts  (asset_type="stock_options")
-  /api/v1/index_options/...  → IDO contracts  (asset_type="index_options")
-
-Endpoints
----------
-  GET /tickers
-  GET /expiries/{ticker}
-  GET /dates/{ticker}/{expiry}
-  GET /data/{ticker}/{expiry}?start_date=&end_date=
-  GET /analytics/{ticker}/{expiry}?start_date=&end_date=
-  GET /snapshot/{ticker}/{expiry}/{trade_date}
-  GET /daily-expiry-snapshot/{expiry}/{trade_date}
-  GET /chart-scale/{ticker}/{expiry}?start_date=&end_date=&metric=
+  /api/v1/stock_options/...  → STO  (asset_type="stock_options")
+  /api/v1/index_options/...  → IDO  (asset_type="index_options")
 """
 
 import math
@@ -30,7 +17,6 @@ from api.db import (
     get_available_dates,
     get_options_data,
     get_options_analytics,
-    get_options_analytics_full,
     get_daily_expiry_snapshot,
     get_chart_scale,
 )
@@ -40,8 +26,6 @@ from api.schemas import (
     AvailableDatesResponse,
     OptionsDataResponse,
     OptionsRow,
-    AnalyticsResponse,
-    AnalyticsRow,
     StrikeSnapshotResponse,
     StrikeBar,
     ChartScaleResponse,
@@ -57,12 +41,8 @@ def _safe_float(v) -> Optional[float]:
 
 
 def _make_options_router(asset_type: str) -> APIRouter:
-    """
-    Returns a fully-wired APIRouter for an options asset type.
-    asset_type must be "options" or "index_options".
-    """
     prefix = f"/{asset_type}"
-    tag    = asset_type.replace("_", " ").title()   # "Stock Options" or "Index Options"
+    tag    = asset_type.replace("_", " ").title()
     router = APIRouter(prefix=prefix, tags=[tag])
 
     # ── Discovery ─────────────────────────────────────────────────────────────
@@ -93,15 +73,18 @@ def _make_options_router(asset_type: str) -> APIRouter:
     def _data(
         ticker:     str,
         expiry:     str,
-        start_date: str = Query(..., description="YYYY-MM-DD"),
-        end_date:   str = Query(..., description="YYYY-MM-DD"),
+        start_date: str = Query(...),
+        end_date:   str = Query(...),
     ):
         df = get_options_data(asset_type, ticker, expiry, start_date, end_date)
         if df.empty:
             raise HTTPException(404, "No data found for the given parameters.")
 
         df["trade_date"] = df["trade_date"].astype(str)
-        df = df.replace([float("inf"), float("-inf")], None).where(df.notna(), None)
+        df = df.replace(
+            [float("inf"), float("-inf")],
+            None
+        ).astype(object).where(df.notna(), None)
 
         return OptionsDataResponse(
             ticker=ticker, expiry=expiry,
@@ -111,45 +94,55 @@ def _make_options_router(asset_type: str) -> APIRouter:
 
     # ── Analytics ─────────────────────────────────────────────────────────────
 
-    @router.get("/analytics/{ticker}/{expiry}", response_model=AnalyticsResponse)
+    @router.get("/analytics/{ticker}/{expiry}")
     def _analytics(
         ticker:     str,
         expiry:     str,
-        start_date: Optional[str] = Query(None, description="YYYY-MM-DD — omit for full series"),
-        end_date:   Optional[str] = Query(None, description="YYYY-MM-DD — omit for full series"),
+        start_date: Optional[str] = Query(None),
+        end_date:   Optional[str] = Query(None),
     ):
-        df = (
-            get_options_analytics(asset_type, ticker, expiry, start_date, end_date)
-            if start_date or end_date
-            else get_options_analytics_full(asset_type, ticker, expiry)
-        )
+        df = get_options_analytics(asset_type, ticker, expiry, start_date, end_date)
         if df.empty:
             raise HTTPException(404, "No analytics found.")
 
         df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
-        df = df.replace([float("inf"), float("-inf")], None).where(df.notna(), None)
 
-        return AnalyticsResponse(
-            ticker=ticker,
-            expiry=expiry,
-            rows=[AnalyticsRow(**r) for r in df.to_dict(orient="records")],
-        )
+        df = df.replace(
+            [float("inf"), float("-inf")],
+            None
+        ).astype(object).where(df.notna(), None)
+
+        # Explicit frontend schema normalization
+        df = df.rename(columns={
+            "pe_oi": "pe",
+            "ce_oi": "ce",
+        })
+
+        # model_validate(row) required because AnalyticsRow uses Field aliases
+        # (pe_oi → pe, ce_oi → ce) — **unpacking bypasses alias resolution
+        
+        return {
+            "ticker": ticker,
+            "expiry": expiry,
+            "rows": df.to_dict(orient="records"),
+        }
 
     # ── Daily expiry snapshot ─────────────────────────────────────────────────
 
     @router.get("/daily-expiry-snapshot/{expiry}/{trade_date}")
     def _daily_expiry_snapshot(expiry: str, trade_date: str):
-        """Analytics snapshot across ALL tickers for one expiry + trade date."""
         df = get_daily_expiry_snapshot(asset_type, expiry, trade_date)
         if df.empty:
-            raise HTTPException(
-                404, f"No snapshot data found for {expiry} on {trade_date}"
-            )
+            raise HTTPException(404, f"No snapshot data for {expiry} on {trade_date}")
 
-        if "trade_date" in df.columns:
-            df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
+        df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
+        df = df.replace(
+            [float("inf"), float("-inf")],
+            None
+        ).astype(object).where(df.notna(), None)
 
-        df = df.replace([np.inf, -np.inf], None).astype(object).where(pd.notnull(df), None)
+        # Rename DB columns to frontend-expected names before serialising
+        df = df.rename(columns={"pe_oi": "pe", "ce_oi": "ce"})
 
         return {
             "asset_type": asset_type,
@@ -163,7 +156,6 @@ def _make_options_router(asset_type: str) -> APIRouter:
     @router.get("/snapshot/{ticker}/{expiry}/{trade_date}",
                 response_model=StrikeSnapshotResponse)
     def _snapshot(ticker: str, expiry: str, trade_date: str):
-        """All strikes for one day, pivoted into CE/PE columns."""
         df = get_options_data(asset_type, ticker, expiry, trade_date, trade_date)
         if df.empty:
             raise HTTPException(404, f"No data for {ticker}/{expiry} on {trade_date}")
@@ -208,9 +200,9 @@ def _make_options_router(asset_type: str) -> APIRouter:
     def _chart_scale(
         ticker:     str,
         expiry:     str,
-        start_date: str = Query(..., description="YYYY-MM-DD"),
-        end_date:   str = Query(..., description="YYYY-MM-DD"),
-        metric:     str = Query("oi", description="oi | oi_chng | vol"),
+        start_date: str = Query(...),
+        end_date:   str = Query(...),
+        metric:     str = Query("oi"),
     ):
         scale = get_chart_scale(asset_type, ticker, expiry, start_date, end_date, metric)
         return ChartScaleResponse(
@@ -222,8 +214,6 @@ def _make_options_router(asset_type: str) -> APIRouter:
 
     return router
 
-
-# ── Exported routers ──────────────────────────────────────────────────────────
 
 options_router       = _make_options_router("stock_options")
 index_options_router = _make_options_router("index_options")

@@ -29,7 +29,7 @@ MANIFEST_PATH = f"{RAW_ROOT}/manifest.csv"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
 SYNC_ON_STARTUP = True
-SYNC_START_DATE = "2026-04-20"
+SYNC_START_DATE = "2026-05-20"
 
 # ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
 NSE_BASE_URL = "https://nsearchives.nseindia.com"
@@ -48,12 +48,4 @@ CORS_ORIGINS = [
 ]
 
 # ─── DUCKDB ───────────────────────────────────────────────────────────────────
-# In-memory DB for ad-hoc CSV queries (options analytics, chart scale, etc.)
-# A fresh connection per request is fine here — the cost is CSV parsing, not
-# connection setup.
-DUCKDB_PATH = ":memory:"
-
-# Persistent DB that holds the futures market rollup table.
-# Written once per contract per day during ingestion; read by the screener
-# endpoint. Single indexed query replaces the old ~600-file glob.
-ROLLUP_DB_PATH = DATA_ROOT / "rollup.db"
+NSE_DB_PATH = Path("data/nse.db")   # add
