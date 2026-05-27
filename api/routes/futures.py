@@ -25,6 +25,7 @@ from api.db import (
     get_futures_analytics,
     get_futures_rollup,
     get_futures_market_dates,
+    get_futures_cycle_history,
 )
 
 
@@ -65,15 +66,71 @@ def _make_futures_router(asset_type: str) -> APIRouter:
         return {"asset_type": asset_type, "ticker": ticker, "expiry": expiry, "rows": rows}
 
     @router.get("/rollup/{trade_date}")
-    def _rollup(trade_date: str):
-        df = get_futures_rollup(trade_date, asset_type)
+    @router.get("/rollup/{trade_date}/{ticker}")
+    def _rollup(trade_date: str, ticker: str | None = None):
+        df = get_futures_rollup(
+            trade_date=trade_date,
+            asset_type=asset_type,
+            ticker=ticker,
+        )
         if df.empty:
-            raise HTTPException(404, f"No {asset_type} rollup data for date: {trade_date}")
-
+            msg = (
+                f"No {asset_type} rollup data for "
+                f"{ticker} on {trade_date}"
+                if ticker
+                else f"No {asset_type} rollup data for date: {trade_date}"
+            )
+            raise HTTPException(404, msg)
         df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
-        rows = df.where(df.notna(), other=None).to_dict(orient="records")
-        return {"asset_type": asset_type, "trade_date": trade_date, "rows": rows}
 
+        if "expiry" in df.columns:
+            df["expiry"] = df["expiry"].dt.strftime("%Y-%m-%d")
+        rows = (
+            df.where(df.notna(), other=None)
+            .to_dict(orient="records")
+        )
+        return {
+            "asset_type": asset_type,
+            "trade_date": trade_date,
+            "ticker": ticker,
+            "rows": rows,
+        }
+    
+    @router.get("/cycle-history/{ticker}")
+    def _cycle_history(ticker: str):
+        df = get_futures_cycle_history(
+            ticker=ticker,
+            asset_type=asset_type,
+        )
+
+        if df.empty:
+            raise HTTPException(
+                404,
+                f"No cycle history for {ticker}"
+            )
+
+        df["trade_date"] = (
+            df["trade_date"]
+            .dt.strftime("%Y-%m-%d")
+        )
+
+        if "expiry" in df.columns:
+            df["expiry"] = (
+                df["expiry"]
+                .dt.strftime("%Y-%m-%d")
+            )
+
+        rows = (
+            df.where(df.notna(), other=None)
+            .to_dict(orient="records")
+        )
+
+        return {
+            "asset_type": asset_type,
+            "ticker": ticker,
+            "rows": rows,
+        }
+    
     @router.get("/market-dates")
     def _market_dates():
         return {"asset_type": asset_type, "dates": get_futures_market_dates(asset_type)}

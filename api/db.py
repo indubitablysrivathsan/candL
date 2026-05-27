@@ -399,18 +399,23 @@ def get_futures_analytics(asset_type: str, ticker: str, expiry: str) -> pd.DataF
     return df.replace({np.nan: None})
 
 
-def get_futures_rollup(trade_date: str, asset_type: str = "stock_futures") -> pd.DataFrame:
+def get_futures_rollup(trade_date: str, asset_type: str = "stock_futures", ticker: str | None = None,) -> pd.DataFrame:
     """Replaces the old rollup.db — computed on the fly from futures_analytics."""
     instr = _instr(asset_type)
     conn = get_conn(read_only=True)
+    params = [instr, trade_date]
+    query = """
+        SELECT * FROM futures_analytics
+        WHERE instrument_type = ? AND trade_date = CAST(? AS DATE)
+    """
+    if ticker:
+        query += " AND ticker = ?"
+        params.append(ticker)
+    query += " ORDER BY ABS(chng_in_oi) DESC"
     try:
         df = conn.execute(
-            """
-            SELECT * FROM futures_analytics
-            WHERE instrument_type = ? AND trade_date = CAST(? AS DATE)
-            ORDER BY ABS(chng_in_oi) DESC
-            """,
-            [instr, trade_date],
+            query,            
+            params,
         ).df()
     finally:
         conn.close()
@@ -436,6 +441,43 @@ def get_futures_market_dates(asset_type: str = "stock_futures") -> list[str]:
     finally:
         conn.close()
     return [r[0] for r in rows]
+
+def get_futures_cycle_history(
+    ticker: str,
+    asset_type: str = "stock_futures",
+) -> pd.DataFrame:
+    """
+    Full futures analytics history for a ticker,
+    ordered by trade date.
+    """
+
+    instr = _instr(asset_type)
+
+    conn = get_conn(read_only=True)
+
+    query = """
+        SELECT *
+        FROM futures_analytics
+        WHERE instrument_type = ?
+          AND ticker = ?
+        ORDER BY trade_date ASC
+    """
+
+    try:
+        df = conn.execute(
+            query,
+            [instr, ticker],
+        ).df()
+    finally:
+        conn.close()
+
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+
+        if "expiry" in df.columns:
+            df["expiry"] = pd.to_datetime(df["expiry"])
+
+    return df.replace([np.nan, np.inf, -np.inf], None)
 
 
 # ── Processing state checks (used by startup_sync) ───────────────────────────

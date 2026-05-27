@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 export default function Sidebar({
   assetType = 'options',
   mode = 'analytics',
+  screenerTab = 'screener',   // ← NEW: 'screener' | 'charts'
   tickerList = [],
   selectedTicker,
   onTickerChange,
@@ -22,223 +23,118 @@ export default function Sidebar({
   onEndDateChange
 }) {
   const [search, setSearch] = useState('');
-  const [showDropdown, setShowDropdown] =
-    useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
 
   const containerRef = useRef(null);
 
   const isFutures = ['stock_futures', 'index_futures'].includes(assetType);
 
-  const isFuturesScreener =
-    isFutures && mode === 'screener';
-
-  const isFuturesAnalytics =
-    isFutures && mode === 'expiry';
+  const isFuturesScreener = isFutures && mode === 'screener';
+  const isFuturesAnalytics = isFutures && mode === 'expiry';
 
   const filteredTickers = useMemo(() => {
-    if (!search.trim()) {
-      return tickerList;
-    }
-
+    if (!search.trim()) return tickerList;
     return tickerList.filter((ticker) =>
-      ticker
-        .toLowerCase()
-        .includes(search.toLowerCase())
+      ticker.toLowerCase().includes(search.toLowerCase())
     );
   }, [search, tickerList]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(event.target)
-      ) {
+      if (containerRef.current && !containerRef.current.contains(event.target)) {
         setShowDropdown(false);
       }
     };
-
-    document.addEventListener(
-      'mousedown',
-      handleClickOutside
-    );
-
-    return () => {
-      document.removeEventListener(
-        'mousedown',
-        handleClickOutside
-      );
-    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const toggleExpiry = (expiry) => {
-    const exists =
-      selectedExpiries.includes(expiry);
-
+    const exists = selectedExpiries.includes(expiry);
     if (exists) {
-      onExpiriesChange(
-        selectedExpiries.filter(
-          (item) => item !== expiry
-        )
-      );
+      onExpiriesChange(selectedExpiries.filter((item) => item !== expiry));
     } else {
-      onExpiriesChange([
-        ...selectedExpiries,
-        expiry
-      ]);
+      onExpiriesChange([...selectedExpiries, expiry]);
     }
   };
 
-  // Date range is only disabled in Time Series mode (ts shows full series).
-  // Daily Expiry Summary still navigates by date, so date range stays active.
-  const isTimeSeries =
-    selectedMetric === 'ts';
-
-  const isDailySnapshot =
-    selectedMetric === 'daily_expiry_snapshot';
-
-  const isTickerAnalysis =
-    selectedMetric === 'ticker_analysis';
+  const isTimeSeries     = selectedMetric === 'ts';
+  const isDailySnapshot  = selectedMetric === 'daily_expiry_snapshot';
+  const isTickerAnalysis = selectedMetric === 'ticker_analysis';
 
   const dateRangeDisabled = isTimeSeries || isTickerAnalysis;
+  const disableEndDate    = isTimeSeries || isDailySnapshot;
 
+  // Ticker is disabled in screener mode UNLESS we are on the Charts sub-tab
+  // (Charts sub-tab requires a ticker to know which instrument to plot).
   const disableTicker =
     isDailySnapshot ||
-    isFuturesScreener;
-
-  const disableEndDate =
-    isTimeSeries || isDailySnapshot;
+    (isFuturesScreener && screenerTab !== 'charts');
 
   const metricOptions = [
-    { label: 'Open Interest',          value: 'oi'                    },
-    { label: 'OI Change',              value: 'oi_chng'               },
-    { label: 'Volume',                 value: 'vol'                   },
-    { label: 'Time Series',            value: 'ts'                    },
-    { label: 'Daily Expiry Snapshot',  value: 'daily_expiry_snapshot' },
-    { label: 'Ticker Analysis',        value: 'ticker_analysis'       },
+    { label: 'Open Interest',         value: 'oi'                    },
+    { label: 'OI Change',             value: 'oi_chng'               },
+    { label: 'Volume',                value: 'vol'                   },
+    { label: 'Time Series',           value: 'ts'                    },
+    { label: 'Daily Expiry Snapshot', value: 'daily_expiry_snapshot' },
+    { label: 'Ticker Analysis',       value: 'ticker_analysis'       },
   ];
 
   return (
-    <aside
-      className="
-        w-[280px]
-        min-w-[280px]
-        self-stretch
-        overflow-y-auto
-        border-r
-        border-white/10
-        bg-[#11151d]
-        px-4
-        py-5
-      "
-    >
+    <aside className="w-[280px] min-w-[280px] self-stretch overflow-y-auto border-r border-white/10 bg-[#11151d] px-4 py-5">
       <div className="space-y-6">
-        {/* =====================================
-            TICKER
-        ===================================== */}
+
+        {/* ── TICKER ─────────────────────────────────────────────── */}
         <section>
           <div className="mb-3">
-            <h2 className="text-sm font-semibold text-white">
-              Ticker
-            </h2>
-
+            <h2 className="text-sm font-semibold text-white">Ticker</h2>
             <p className="text-xs text-white/45 mt-1">
               {isDailySnapshot
                 ? 'Disabled in market-wide snapshot mode'
-                : 'Search NSE derivative symbols'
-              }
+                : isFuturesScreener && screenerTab !== 'charts'
+                  ? 'Disabled in screener table mode'
+                  : 'Search NSE derivative symbols'}
             </p>
           </div>
 
-          <div
-            className="relative"
-            ref={containerRef}
-          >
+          <div className="relative" ref={containerRef}>
             <input
               type="text"
               value={search}
               disabled={disableTicker}
-              placeholder={
-                selectedTicker ||
-                'Search ticker...'
-              }
-              onFocus={() => {
-                if (!disableTicker) {
-                  setShowDropdown(true);
-                }
-              }}
+              placeholder={selectedTicker || 'Search ticker...'}
+              onFocus={() => { if (!disableTicker) setShowDropdown(true); }}
               onChange={(event) => {
                 if (disableTicker) return;
-
                 setSearch(event.target.value);
                 setShowDropdown(true);
               }}
-              className={`
-                w-full
-                ${disableTicker
-                  ? 'opacity-40 cursor-not-allowed'
-                  : ''
-                }
-              `}
+              className={`w-full ${disableTicker ? 'opacity-40 cursor-not-allowed' : ''}`}
             />
 
             {showDropdown && (
-              <div
-                className="
-                  absolute
-                  z-50
-                  mt-2
-                  w-full
-                  overflow-hidden
-                  rounded-xl
-                  border
-                  border-white/10
-                  bg-[#151922]
-                  shadow-2xl
-                "
-              >
+              <div className="absolute z-50 mt-2 w-full overflow-hidden rounded-xl border border-white/10 bg-[#151922] shadow-2xl">
                 <div className="max-h-[280px] overflow-y-auto">
-                  {filteredTickers.length >
-                  0 ? (
-                    filteredTickers.map(
-                      (ticker) => (
-                        <button
-                          key={ticker}
-                          onClick={() => {
-                            onTickerChange(
-                              ticker
-                            );
-
-                            setSearch('');
-                            setShowDropdown(
-                              false
-                            );
-                          }}
-                          className={`
-                            w-full
-                            px-4
-                            py-3
-                            text-left
-                            text-sm
-                            transition
-                            border-b
-                            border-white/5
-                            hover:bg-white/5
-                            ${
-                              ticker ===
-                              selectedTicker
-                                ? 'bg-[#00B0F0]/10 text-[#00B0F0]'
-                                : 'text-white/85'
-                            }
-                          `}
-                        >
-                          {ticker}
-                        </button>
-                      )
-                    )
+                  {filteredTickers.length > 0 ? (
+                    filteredTickers.map((ticker) => (
+                      <button
+                        key={ticker}
+                        onClick={() => {
+                          onTickerChange(ticker);
+                          setSearch('');
+                          setShowDropdown(false);
+                        }}
+                        className={`w-full px-4 py-3 text-left text-sm transition border-b border-white/5 hover:bg-white/5 ${
+                          ticker === selectedTicker
+                            ? 'bg-[#00B0F0]/10 text-[#00B0F0]'
+                            : 'text-white/85'
+                        }`}
+                      >
+                        {ticker}
+                      </button>
+                    ))
                   ) : (
-                    <div className="px-4 py-4 text-sm text-white/50">
-                      No matching tickers
-                    </div>
+                    <div className="px-4 py-4 text-sm text-white/50">No matching tickers</div>
                   )}
                 </div>
               </div>
@@ -246,29 +142,23 @@ export default function Sidebar({
           </div>
         </section>
 
-        {/* =====================================
-            EXPIRIES
-        ===================================== */}
+        {/* ── EXPIRIES ───────────────────────────────────────────── */}
         <section>
           <div className="mb-3">
-            <h2 className="text-sm font-semibold text-white">
-              Expiries
-            </h2>
-
+            <h2 className="text-sm font-semibold text-white">Expiries</h2>
             <p className="text-xs text-white/45 mt-1">
-              Select expiries to display
+              {isFuturesScreener && screenerTab === 'charts'
+                ? 'Select cycles to compare (max 5)'
+                : 'Select expiries to display'}
             </p>
           </div>
 
           <div className="space-y-3">
             {isTickerAnalysis || isDailySnapshot ? (
-              /* ── single-select for ticker analysis ── */
               <div className="space-y-2">
                 <select
                   value={selectedExpiries[0] || ''}
-                  onChange={(e) => {
-                    if (e.target.value) onExpiriesChange([e.target.value]);
-                  }}
+                  onChange={(e) => { if (e.target.value) onExpiriesChange([e.target.value]); }}
                   className="w-full"
                 >
                   <option value="">Select expiry...</option>
@@ -278,7 +168,6 @@ export default function Sidebar({
                 </select>
               </div>
             ) : (
-              /* ── multi-select for all other modes ── */
               <>
                 <select
                   onChange={(e) => {
@@ -302,7 +191,10 @@ export default function Sidebar({
                 {!isDailySnapshot && (
                   <div className="flex flex-wrap gap-2">
                     {selectedExpiries.map((expiry) => (
-                      <div key={expiry} className="flex items-center gap-2 rounded-lg border border-[#00B0F0]/20 bg-[#00B0F0]/10 px-3 py-2 text-xs text-[#00B0F0]">
+                      <div
+                        key={expiry}
+                        className="flex items-center gap-2 rounded-lg border border-[#00B0F0]/20 bg-[#00B0F0]/10 px-3 py-2 text-xs text-[#00B0F0]"
+                      >
                         <span>{expiry}</span>
                         <button
                           onClick={() => onExpiriesChange(selectedExpiries.filter((e) => e !== expiry))}
@@ -317,164 +209,81 @@ export default function Sidebar({
           </div>
         </section>
 
-        {/* =====================================
-            METRIC
-        ===================================== */}
+        {/* ── METRIC ────────────────────────────────────────────── */}
         {!isFutures && (
           <section>
             <div className="mb-3">
-              <h2 className="text-sm font-semibold text-white">
-                Metric
-              </h2>
-
-              <p className="text-xs text-white/45 mt-1">
-                Select chart mode
-              </p>
+              <h2 className="text-sm font-semibold text-white">Metric</h2>
+              <p className="text-xs text-white/45 mt-1">Select chart mode</p>
             </div>
-
             <div className="space-y-2">
               {metricOptions.map((option) => (
                 <label
                   key={option.value}
-                  className={`
-                    flex
-                    items-center
-                    gap-3
-                    rounded-xl
-                    border
-                    px-3
-                    py-3
-                    cursor-pointer
-                    transition
-                    ${
-                      selectedMetric ===
-                      option.value
-                        ? option.value === 'daily_expiry_snapshot'
-                          ? `
-                            border-[#FFA726]/30
-                            bg-[#FFA726]/10
-                          `
-                          : `
-                            border-[#00B0F0]/30
-                            bg-[#00B0F0]/10
-                          `
-                        : `
-                          border-white/8
-                          bg-[#151922]
-                          hover:bg-white/5
-                        `
-                    }
-                  `}
+                  className={`flex items-center gap-3 rounded-xl border px-3 py-3 cursor-pointer transition ${
+                    selectedMetric === option.value
+                      ? option.value === 'daily_expiry_snapshot'
+                        ? 'border-[#FFA726]/30 bg-[#FFA726]/10'
+                        : 'border-[#00B0F0]/30 bg-[#00B0F0]/10'
+                      : 'border-white/8 bg-[#151922] hover:bg-white/5'
+                  }`}
                 >
                   <input
                     type="radio"
                     name="metric"
                     value={option.value}
-                    checked={
-                      selectedMetric ===
-                      option.value
-                    }
-                    onChange={() =>
-                      onMetricChange(
-                        option.value
-                      )
-                    }
-                    className="
-                      w-4
-                      h-4
-                      accent-[#00B0F0]
-                    "
+                    checked={selectedMetric === option.value}
+                    onChange={() => onMetricChange(option.value)}
+                    className="w-4 h-4 accent-[#00B0F0]"
                   />
-
-                  <span
-                    className={`
-                      text-sm
-                      ${
-                        selectedMetric === option.value
-                          ? option.value === 'daily_expiry_snapshot'
-                            ? 'text-[#FFA726]'
-                            : 'text-[#00B0F0]'
-                          : 'text-white/85'
-                      }
-                    `}
-                  >
+                  <span className={`text-sm ${
+                    selectedMetric === option.value
+                      ? option.value === 'daily_expiry_snapshot'
+                        ? 'text-[#FFA726]'
+                        : 'text-[#00B0F0]'
+                      : 'text-white/85'
+                  }`}>
                     {option.label}
                   </span>
-
                 </label>
               ))}
             </div>
           </section>
         )}
 
-        {/* =====================================
-            DATE RANGE
-        ===================================== */}
+        {/* ── DATE RANGE ────────────────────────────────────────── */}
         {!isFutures && (
           <section>
             <div className="mb-3">
-              <h2 className="text-sm font-semibold text-white">
-                Date Range
-              </h2>
-
-              <p className="text-xs text-white/45 mt-1">
-                Filter available trading dates
-              </p>
+              <h2 className="text-sm font-semibold text-white">Date Range</h2>
+              <p className="text-xs text-white/45 mt-1">Filter available trading dates</p>
             </div>
-
-            <div
-              className={`
-                space-y-4
-                ${
-                  dateRangeDisabled
-                    ? 'opacity-40 pointer-events-none'
-                    : ''
-                }
-              `}
-            >
+            <div className={`space-y-4 ${dateRangeDisabled ? 'opacity-40 pointer-events-none' : ''}`}>
               <div>
                 <label className="block mb-2 text-xs text-white/55">
                   {isDailySnapshot ? 'Date' : 'Start Date'}
                 </label>
-
                 <input
                   type="date"
                   value={startDate || ''}
-                  onChange={(event) =>
-                    onStartDateChange(
-                      event.target.value
-                    )
-                  }
+                  onChange={(event) => onStartDateChange(event.target.value)}
                   className="w-full"
                 />
               </div>
-
-              <div
-                className={
-                  disableEndDate
-                    ? 'opacity-40 pointer-events-none'
-                    : ''
-                }
-              >
-                <label className="block mb-2 text-xs text-white/55">
-                  End Date
-                </label>
-
+              <div className={disableEndDate ? 'opacity-40 pointer-events-none' : ''}>
+                <label className="block mb-2 text-xs text-white/55">End Date</label>
                 <input
                   type="date"
                   value={endDate || ''}
                   disabled={disableEndDate}
-                  onChange={(event) =>
-                    onEndDateChange(
-                      event.target.value
-                    )
-                  }
+                  onChange={(event) => onEndDateChange(event.target.value)}
                   className="w-full"
                 />
               </div>
             </div>
           </section>
         )}
+
       </div>
     </aside>
   );

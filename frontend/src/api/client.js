@@ -219,9 +219,31 @@ export async function getFuturesAnalytics(assetType = 'stock_futures', ticker, e
    Works for: futures | index_futures
 ========================================= */
 
-export async function getFuturesRollup(assetType = 'stock_futures', tradeDate) {
+export async function getFuturesRollup(assetType = 'stock_futures', tradeDate, ticker = null) {
   if (!tradeDate) throw new Error('Trade date required');
-  return request(`/api/v1/${assetType}/rollup/${encodeURIComponent(tradeDate)}`);
+  const path = ticker
+    ? `/api/v1/${assetType}/rollup/${encodeURIComponent(tradeDate)}/${encodeURIComponent(ticker)}`
+    : `/api/v1/${assetType}/rollup/${encodeURIComponent(tradeDate)}`;
+
+  return request(path);
+}
+
+/* =========================================
+   FUTURES CYCLE
+   Works for: futures | index_futures
+========================================= */
+
+export async function getFuturesCycleHistory(
+  assetType = 'stock_futures',
+  ticker
+) {
+  if (!ticker) {
+    throw new Error('Ticker required');
+  }
+
+  return request(
+    `/api/v1/${assetType}/cycle-history/${encodeURIComponent(ticker)}`
+  );
 }
 
 /* =========================================
