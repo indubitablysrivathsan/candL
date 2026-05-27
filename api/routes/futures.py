@@ -60,7 +60,8 @@ def _make_futures_router(asset_type: str) -> APIRouter:
             raise HTTPException(404, f"No analytics for {ticker} / {expiry}")
 
         df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
-        rows = df.where(df.notna(), other=None).to_dict(orient="records")
+        df["expiry"]     = df["expiry"].dt.strftime("%Y-%m-%d")
+        rows = df.replace([float("inf"), float("-inf")], None).astype(object).where(df.notna(), None).to_dict(orient="records")
         return {"asset_type": asset_type, "ticker": ticker, "expiry": expiry, "rows": rows}
 
     @router.get("/rollup/{trade_date}")

@@ -34,6 +34,16 @@ const formatPercent = (value, decimals = 2) => {
   return `${value >= 0 ? '+' : ''}${Number(value).toFixed(decimals)}%`;
 };
 
+const formatDate = (dateString) => {
+  const date = new Date(dateString);
+
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+
+  return `${day}-${month}-${year}`;
+};
+
 /* ─────────────────────────────────────────────────────────────────
    ANALYTICS PANEL
 ───────────────────────────────────────────────────────────────── */
@@ -58,6 +68,17 @@ function AnalyticsPanel({ assetType, ticker, expiry }) {
     return () => { mounted = false; };
   }, [assetType, ticker, expiry]);
 
+  const stats = useMemo(() => {
+    if (!data.length) return null;
+    const valid = data.filter(r => r.open_int != null && r.close != null);
+    if (!valid.length) return null;
+    const maxOI    = valid.reduce((a, b) => b.open_int > a.open_int ? b : a);
+    const minOI    = valid.reduce((a, b) => b.open_int < a.open_int ? b : a);
+    const maxClose = valid.reduce((a, b) => b.close > a.close ? b : a);
+    const minClose = valid.reduce((a, b) => b.close < a.close ? b : a);
+    return { maxOI, minOI, maxClose, minClose };
+  }, [data]);
+
   if (loading) return (
     <div className="flex items-center justify-center py-16"><LoadingSpinner /></div>
   );
@@ -75,17 +96,25 @@ function AnalyticsPanel({ assetType, ticker, expiry }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
-        <MetricCard title="Close"         value={formatCurrency(latest.close, 2)}  accent="#00B0F0" />
-        <MetricCard title="Basis"         value={formatCurrency(latest.basis, 2)}  accent={latest.basis >= 0 ? '#92D050' : '#ef5350'} />
         <MetricCard
-          title="Cost of Carry"
-          value={latest.cost_of_carry != null ? `${(Number(latest.cost_of_carry) * 100).toFixed(2)}%` : '--'}
-          accent="#FFA726"
+          title="Max OI"
+          value={stats ? (<> {formatNumber(stats.maxOI.open_int)} <br /> {formatDate(stats.maxOI.trade_date)} </>) : '--'}
+          accent="#92D050"
         />
         <MetricCard
-          title="Signal"
-          value={QUADRANT_META[latest.quadrant]?.label ?? '--'}
-          accent={QUADRANT_META[latest.quadrant]?.color ?? '#ffffff'}
+          title="Min OI"
+          value={stats ? (<> {formatNumber(stats.minOI.open_int)} <br /> {formatDate(stats.minOI.trade_date)} </>) : '--'}
+          accent="#ef5350"
+        />
+        <MetricCard
+          title="Max Close"
+          value={stats ? (<> {formatCurrency(stats.maxClose.close, 2)} <br /> {formatDate(stats.maxClose.trade_date)} </>) : '--'}
+          accent="#00B0F0"
+        />
+        <MetricCard
+          title="Min Close"
+          value={stats ? (<> {formatCurrency(stats.minClose.close, 2)} <br /> {formatDate(stats.minClose.trade_date)} </>) : '--'}
+          accent="#FFA726"
         />
       </div>
 
@@ -221,29 +250,31 @@ function RollupPanel({ assetType, allDates, screenerExpiries, activeScreenerExpi
 
 
   // Pre-compute combined OI across all 3 screener expiries, per ticker, from full data
+  const normalizeExpiry = (expiry) => expiry ? expiry.split('T')[0] : expiry;
+
   const combinedOIMap = useMemo(() => {
     const map = {};
     data.forEach((row) => {
-      if (!screenerExpiries.includes(row.expiry)) return;
+      const expiry = normalizeExpiry(row.expiry);
+      if (!screenerExpiries.includes(expiry)) return;
       if (row.open_int == null) return;
       map[row.ticker] = (map[row.ticker] ?? 0) + Number(row.open_int);
     });
     return map;
   }, [data, screenerExpiries]);
 
-  // Group rows by quadrant, filtered to the active screener expiry only
   const grouped = useMemo(() => {
     const map = {};
     QUADRANTS.forEach((q) => { map[q] = []; });
 
     data.forEach((row) => {
-      // Only show rows matching the currently active screener expiry tab
-      if (activeScreenerExpiry && row.expiry !== activeScreenerExpiry) return;
-      if (map[row.quadrant]) map[row.quadrant].push(row);
+      const expiry = normalizeExpiry(row.expiry);
+      if (activeScreenerExpiry && expiry !== activeScreenerExpiry) return;
+      if (map[row.quadrant]) map[row.quadrant].push({ ...row, expiry });
     });
 
     QUADRANTS.forEach((q) => {
-      map[q].sort((a, b) => Math.abs(b.chng_in_oi ?? 0) - Math.abs(a.chng_in_oi ?? 0));
+      map[q].sort((a, b) => Math.abs(b.chng_oi_per ?? 0) - Math.abs(a.chng_oi_per ?? 0));
     });
 
     return map;
@@ -488,24 +519,32 @@ export default function Futures({ assetType = 'stock_futures' }) {
 
   /* ── Load dates for screener slider (from first ticker's nearest expiry) ── */
   useEffect(() => {
-    if (!tickerList.length || !screenerExpiries.length) return;
+    if (!tickerList.length || !screenerSelectedExpiry) return;
     let mounted = true;
 
-    async function loadDates() {
-      try {
-        const firstTicker = tickerList[0];
-        const nearestExpiry = screenerExpiries[0];
-        const dateRes = await getDates(assetType, firstTicker, nearestExpiry);
+    getDates(assetType, tickerList[0], screenerSelectedExpiry)
+      .then((res) => {
         if (!mounted) return;
-        setAllDates([...(dateRes?.dates || [])].sort((a, b) => new Date(a) - new Date(b)));
-      } catch (err) {
-        console.error('Failed loading screener dates', err);
-      }
-    }
+        const sorted = [...(res?.dates || [])].sort((a, b) => new Date(a) - new Date(b));
 
-    loadDates();
+        // Find where this expiry's cycle starts: day after the previous expiry
+        const idx = screenerExpiries.indexOf(screenerSelectedExpiry);
+        const prevExpiry = idx > 0 ? screenerExpiries[idx - 1] : null;
+
+        const cycleStart = prevExpiry
+          ? sorted.find((d) => d > prevExpiry) // first date strictly after prev expiry
+          : sorted[0];
+
+        const cycleDates = cycleStart
+          ? sorted.filter((d) => d >= cycleStart)
+          : sorted;
+
+        setAllDates(cycleDates);
+      })
+      .catch((err) => console.error('Failed loading screener dates', err));
+
     return () => { mounted = false; };
-  }, [assetType, tickerList, screenerExpiries]);
+  }, [assetType, tickerList, screenerSelectedExpiry, screenerExpiries]);
 
   /* ── Keep activeExpiry valid in ticker analytics mode ── */
   useEffect(() => {
