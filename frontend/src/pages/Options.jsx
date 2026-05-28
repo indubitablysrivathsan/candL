@@ -396,6 +396,10 @@ export default function Options({ assetType = 'stock_options' }) {
 
   const isOICharts = selectedMetric === 'oi_charts';
 
+  const displayTickerList = useMemo(() =>
+    isOICharts ? [...tickerList, OPTIONS_COMBINED_TICKER] : tickerList,
+  [tickerList, isOICharts]);
+
   // Reset when assetType changes
   useEffect(() => {
     setTickerList([]);
@@ -419,8 +423,7 @@ export default function Options({ assetType = 'stock_options' }) {
       .then((res) => {
         if (!mounted) return;
         const tickers = res?.tickers || [];
-        const withCombined = [...tickers, OPTIONS_COMBINED_TICKER];
-        setTickerList(withCombined);
+        setTickerList(tickers); // store base list without combined
         if (tickers.length > 0) setSelectedTicker(tickers[0]);
       })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load tickers'); })
@@ -431,7 +434,7 @@ export default function Options({ assetType = 'stock_options' }) {
 
   /* ── Fetch expiries ── */
   useEffect(() => {
-    if (!selectedTicker) return;
+    if (!selectedTicker || selectedTicker === OPTIONS_COMBINED_TICKER) return;
     let mounted = true;
 
     getExpiries(assetType, selectedTicker)
@@ -447,6 +450,12 @@ export default function Options({ assetType = 'stock_options' }) {
 
     return () => { mounted = false; };
   }, [assetType, selectedTicker]);
+
+  useEffect(() => {
+    if (!isOICharts && selectedTicker === OPTIONS_COMBINED_TICKER) {
+      setSelectedTicker(tickerList[0] || '');
+    }
+  }, [isOICharts, selectedTicker, tickerList]);
 
   /* ── Fetch daily expiry snapshot ── */
   useEffect(() => {
@@ -496,7 +505,7 @@ export default function Options({ assetType = 'stock_options' }) {
   return (
     <div className="flex min-h-screen">
       <Sidebar
-        tickerList={tickerList}
+        tickerList={displayTickerList}
         selectedTicker={selectedTicker}
         onTickerChange={setSelectedTicker}
         expiries={isOICharts ? validChartExpiries : expiries}
@@ -514,7 +523,6 @@ export default function Options({ assetType = 'stock_options' }) {
         endDate={endDate}
         onStartDateChange={setStartDate}
         onEndDateChange={setEndDate}
-        hideDateRange={isOICharts}
       />
 
       <main className="flex-1 p-6 overflow-x-hidden">

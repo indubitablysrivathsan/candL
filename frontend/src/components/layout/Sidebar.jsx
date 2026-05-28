@@ -26,6 +26,7 @@ export default function Sidebar({
   const [showDropdown, setShowDropdown] = useState(false);
 
   const containerRef = useRef(null);
+  const selectedItemRef = useRef(null);
 
   const isFutures = ['stock_futures', 'index_futures'].includes(assetType);
 
@@ -105,7 +106,15 @@ export default function Sidebar({
               value={search}
               disabled={disableTicker}
               placeholder={selectedTicker || 'Search ticker...'}
-              onFocus={() => { if (!disableTicker) setShowDropdown(true); }}
+              onFocus={() => {
+                if (!disableTicker) {
+                  setShowDropdown(true);
+                  // defer to let the dropdown render first
+                  setTimeout(() => {
+                    selectedItemRef.current?.scrollIntoView({ block: 'nearest' });
+                  }, 0);
+                }
+              }}
               onChange={(event) => {
                 if (disableTicker) return;
                 setSearch(event.target.value);
@@ -121,6 +130,7 @@ export default function Sidebar({
                     filteredTickers.map((ticker) => (
                       <button
                         key={ticker}
+                        ref={ticker === selectedTicker ? selectedItemRef : null}
                         onClick={() => {
                           onTickerChange(ticker);
                           setSearch('');

@@ -528,6 +528,12 @@ export default function Futures({ assetType = 'stock_futures' }) {
   // Top-level screener tab: 'screener' | 'charts'
   const [screenerTab, setScreenerTab] = useState('screener');
 
+  const displayTickerList = useMemo(() =>
+    (mode === 'screener' && screenerTab === 'charts')
+      ? [...tickerList, FUTURES_COMBINED_TICKER]
+      : tickerList,
+  [tickerList, mode, screenerTab]);
+
   /* ── The 3 expiry tabs for the screener table: selected + next 2 ── */
   const screenerThreeExpiries = useMemo(() => {
     if (!screenerSelectedExpiry || !screenerExpiries.length) return [];
@@ -582,8 +588,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
       .then((res) => {
         if (!mounted) return;
         const tickers = res?.tickers || [];
-        const withCombined = [...tickers, FUTURES_COMBINED_TICKER];
-        setTickerList(withCombined);
+        setTickerList(tickers);
         if (tickers.length > 0) setSelectedTicker(tickers[0]);
       })
       .catch((err) => { if (mounted) setError(err.message); })
@@ -594,7 +599,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
 
   /* ── Load expiries for ticker analytics ── */
   useEffect(() => {
-    if (!selectedTicker) return;
+    if (!selectedTicker || selectedTicker === FUTURES_COMBINED_TICKER) return;
     let mounted = true;
 
     getExpiries(assetType, selectedTicker)
@@ -610,6 +615,12 @@ export default function Futures({ assetType = 'stock_futures' }) {
 
     return () => { mounted = false; };
   }, [assetType, selectedTicker]);
+
+  useEffect(() => {
+    if (!(mode === 'screener' && screenerTab === 'charts') && selectedTicker === FUTURES_COMBINED_TICKER) {
+      setSelectedTicker(tickerList[0] || '');
+    }
+  }, [mode, screenerTab, selectedTicker, tickerList]);
 
   /* ── Load screener expiries from first ticker (master chain) ── */
   useEffect(() => {
@@ -686,7 +697,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
         mode={mode}
         screenerTab={screenerTab}
         assetType={assetType}
-        tickerList={tickerList}
+        tickerList={displayTickerList}
         selectedTicker={selectedTicker}
         onTickerChange={(t) => {
           setSelectedTicker(t);
