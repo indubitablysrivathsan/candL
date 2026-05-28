@@ -1,31 +1,30 @@
 """
 NSE Platform — Central Configuration
 =====================================
-Edit DATA_ROOT to point at your output folder.
-Everything else is derived from it automatically.
+DATA_ROOT is derived relative to this file automatically.
+No manual path editing needed across devices.
 """
 
 from pathlib import Path
 
+# ─── ROOT ─────────────────────────────────────────────────────────────────────
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 # ─── DATA ─────────────────────────────────────────────────────────────────────
-DATA_ROOT = Path(r"E:\Projects\candL\data")   # <── change to your path
-
-# Asset sub-roots
-# OPTIONS_ROOT = DATA_ROOT / "stock_options"   # options/TICKER/EXPIRY/DATA/*.csv
-# FUTURES_ROOT = DATA_ROOT / "stock_futures"   # futures/TICKER/EXPIRY/*.csv
-
-OPTIONS_ROOT = DATA_ROOT / "options"   # options/TICKER/EXPIRY/DATA/*.csv
-FUTURES_ROOT = DATA_ROOT / "futures"   # futures/TICKER/EXPIRY/*.csv
-
-INDEX_OPTIONS_ROOT = DATA_ROOT / "index_options"
-INDEX_FUTURES_ROOT = DATA_ROOT / "index_futures"
-
-STOCKS_ROOT  = DATA_ROOT / "stocks"    # stocks/TICKER/DATA/*.csv
+DATA_ROOT = PROJECT_ROOT / "data"
 
 # ─── RAW DATA ─────────────────────────────────────────────────────────────────
-RAW_ROOT      = "raw"
-FO_RAW_ROOT   = f"{RAW_ROOT}/fo"
-MANIFEST_PATH = f"{RAW_ROOT}/manifest.csv"
+RAW_ROOT         = PROJECT_ROOT / "raw"
+FO_RAW_ROOT      = RAW_ROOT / "fo"
+EQ_BHAV_ROOT     = RAW_ROOT / "eq_bhav"
+CM_BHAV_ROOT     = RAW_ROOT / "cm_bhav"
+FII_STATS_ROOT   = RAW_ROOT / "fii_stats"
+PART_OI_ROOT     = RAW_ROOT / "part_oi"
+PART_VOL_ROOT    = RAW_ROOT / "part_vol"
+FO_VOLT_ROOT     = RAW_ROOT / "fo_volt"
+MKT_ACT_ROOT     = RAW_ROOT / "mkt_act"
+
+MANIFEST_PATH    = RAW_ROOT / "manifest.csv"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
 SYNC_ON_STARTUP = True
@@ -43,9 +42,9 @@ API_PORT   = 8000
 API_PREFIX = "/api/v1"
 
 CORS_ORIGINS = [
-    "http://localhost:5173",   # Vite default
-    "http://localhost:3000",   # CRA default
+    "http://localhost:5173",
+    "http://localhost:3000",
 ]
 
 # ─── DUCKDB ───────────────────────────────────────────────────────────────────
-NSE_DB_PATH = Path("data/nse.db")   # add
+NSE_DB_PATH = DATA_ROOT / "nse.db"

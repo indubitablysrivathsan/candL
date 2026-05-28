@@ -2,54 +2,56 @@
 NSE Platform — DuckDB query layer
 ===================================
 Single DB file: data/nse.db
-
+ 
 Tables
 ------
-  fo_data             — raw tick data for all instrument types
+  fo_data             — raw F&O tick data for all instrument types
   options_analytics   — computed per (instrument_type, ticker, expiry, trade_date)
   futures_analytics   — computed per (instrument_type, ticker, expiry, trade_date)
-
-Asset types accepted by public API
------------------------------------
-  "stock_options"  → instrument_type = 'STO'
-  "index_options"  → instrument_type = 'IDO'
-  "stock_futures"  → instrument_type = 'STF'
-  "index_futures"  → instrument_type = 'IDF'
+  eq_bhav             — equity bhavcopy (OHLC + delivery data)
+  cm_bhav             — CM segment bhavcopy (new NSE format)
+  fii_stats           — FII derivatives statistics
+  participant_oi      — participant-wise open interest
+  participant_vol     — participant-wise trading volume
+  fo_volatility       — F&O underlying + futures volatility (EWMA)
+  market_activity     — market activity report (index summary)
 """
-
+ 
 import numpy as np
 import pandas as pd
 import duckdb
 from pathlib import Path
-
-from config import NSE_DB_PATH   # Path("data/nse.db")
-
-
+ 
+from config import NSE_DB_PATH
+ 
+ 
 # ── Instrument type mapping ───────────────────────────────────────────────────
-
+ 
 _INSTR = {
     "stock_options": "STO",
     "index_options": "IDO",
     "stock_futures": "STF",
     "index_futures": "IDF",
 }
-
+ 
 def _instr(asset_type: str) -> str:
     t = _INSTR.get(asset_type)
     if t is None:
         raise ValueError(f"Unknown asset_type: {asset_type!r}")
     return t
-
-
+ 
+ 
 # ── Connection ────────────────────────────────────────────────────────────────
-
+ 
 def get_conn(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     return duckdb.connect(str(NSE_DB_PATH.resolve()), read_only=read_only)
-
-
-# ── Schema bootstrap (called once at app startup) ─────────────────────────────
-
+ 
+ 
+# ── Schema bootstrap ──────────────────────────────────────────────────────────
+ 
 DDL = """
+-- ── F&O (existing) ────────────────────────────────────────────────────────────
+ 
 CREATE TABLE IF NOT EXISTS fo_data (
     trade_date      DATE        NOT NULL,
     biz_date        DATE,
@@ -76,7 +78,7 @@ CREATE TABLE IF NOT EXISTS fo_data (
     lot_size        INTEGER,
     PRIMARY KEY (trade_date, instrument_id)
 );
-
+ 
 CREATE TABLE IF NOT EXISTS options_analytics (
     instrument_type VARCHAR(3)  NOT NULL,
     ticker          VARCHAR     NOT NULL,
@@ -89,7 +91,7 @@ CREATE TABLE IF NOT EXISTS options_analytics (
     max_pain        DOUBLE,
     PRIMARY KEY (instrument_type, ticker, expiry, trade_date)
 );
-
+ 
 CREATE TABLE IF NOT EXISTS futures_analytics (
     instrument_type VARCHAR(3)  NOT NULL,
     ticker          VARCHAR     NOT NULL,
@@ -110,7 +112,160 @@ CREATE TABLE IF NOT EXISTS futures_analytics (
     days_to_expiry  INTEGER,
     PRIMARY KEY (instrument_type, ticker, expiry, trade_date)
 );
-
+ 
+-- ── Equity bhavcopy ───────────────────────────────────────────────────────────
+ 
+CREATE TABLE IF NOT EXISTS eq_bhav (
+    trade_date      DATE        NOT NULL,
+    symbol          VARCHAR     NOT NULL,
+    series          VARCHAR,
+    prev_close      DOUBLE,
+    open            DOUBLE,
+    high            DOUBLE,
+    low             DOUBLE,
+    last            DOUBLE,
+    close           DOUBLE,
+    avg_price       DOUBLE,
+    volume          BIGINT,
+    turnover_lacs   DOUBLE,
+    trade_count     INTEGER,
+    deliv_qty       BIGINT,
+    deliv_pct       DOUBLE,
+    PRIMARY KEY (trade_date, symbol, series)
+);
+ 
+-- ── CM bhavcopy (new NSE format, includes gold bonds etc) ─────────────────────
+ 
+CREATE TABLE IF NOT EXISTS cm_bhav (
+    trade_date      DATE        NOT NULL,
+    biz_date        DATE,
+    segment         VARCHAR,
+    instrument_type VARCHAR,
+    instrument_id   INTEGER,
+    isin            VARCHAR,
+    ticker          VARCHAR     NOT NULL,
+    series          VARCHAR,
+    instrument_name VARCHAR,
+    open            DOUBLE,
+    high            DOUBLE,
+    low             DOUBLE,
+    close           DOUBLE,
+    last            DOUBLE,
+    prev_close      DOUBLE,
+    settlement      DOUBLE,
+    open_interest   DOUBLE,
+    chng_in_oi      DOUBLE,
+    volume          BIGINT,
+    turnover        DOUBLE,
+    trade_count     INTEGER,
+    lot_size        INTEGER,
+    PRIMARY KEY (trade_date, ticker, series)
+);
+ 
+-- ── FII derivatives statistics ────────────────────────────────────────────────
+ 
+CREATE TABLE IF NOT EXISTS fii_stats (
+    trade_date          DATE        NOT NULL,
+    instrument          VARCHAR     NOT NULL,   -- e.g. INDEX FUTURES, NIFTY FUTURES
+    buy_contracts       BIGINT,
+    buy_amt_cr          DOUBLE,
+    sell_contracts      BIGINT,
+    sell_amt_cr         DOUBLE,
+    oi_contracts        BIGINT,
+    oi_amt_cr           DOUBLE,
+    PRIMARY KEY (trade_date, instrument)
+);
+ 
+-- ── Participant-wise open interest ────────────────────────────────────────────
+ 
+CREATE TABLE IF NOT EXISTS participant_oi (
+    trade_date              DATE        NOT NULL,
+    client_type             VARCHAR     NOT NULL,   -- Client, DII, FII, Pro
+    fut_idx_long            BIGINT,
+    fut_idx_short           BIGINT,
+    fut_stk_long            BIGINT,
+    fut_stk_short           BIGINT,
+    opt_idx_call_long       BIGINT,
+    opt_idx_put_long        BIGINT,
+    opt_idx_call_short      BIGINT,
+    opt_idx_put_short       BIGINT,
+    opt_stk_call_long       BIGINT,
+    opt_stk_put_long        BIGINT,
+    opt_stk_call_short      BIGINT,
+    opt_stk_put_short       BIGINT,
+    total_long              BIGINT,
+    total_short             BIGINT,
+    PRIMARY KEY (trade_date, client_type)
+);
+ 
+-- ── Participant-wise trading volume ───────────────────────────────────────────
+ 
+CREATE TABLE IF NOT EXISTS participant_vol (
+    trade_date              DATE        NOT NULL,
+    client_type             VARCHAR     NOT NULL,
+    fut_idx_long            BIGINT,
+    fut_idx_short           BIGINT,
+    fut_stk_long            BIGINT,
+    fut_stk_short           BIGINT,
+    opt_idx_call_long       BIGINT,
+    opt_idx_put_long        BIGINT,
+    opt_idx_call_short      BIGINT,
+    opt_idx_put_short       BIGINT,
+    opt_stk_call_long       BIGINT,
+    opt_stk_put_long        BIGINT,
+    opt_stk_call_short      BIGINT,
+    opt_stk_put_short       BIGINT,
+    total_long              BIGINT,
+    total_short             BIGINT,
+    PRIMARY KEY (trade_date, client_type)
+);
+ 
+-- ── F&O volatility (EWMA) ─────────────────────────────────────────────────────
+ 
+CREATE TABLE IF NOT EXISTS fo_volatility (
+    trade_date              DATE        NOT NULL,
+    ticker                  VARCHAR     NOT NULL,
+    underlying_close        DOUBLE,
+    underlying_prev_close   DOUBLE,
+    underlying_log_ret      DOUBLE,
+    prev_underlying_vol     DOUBLE,
+    underlying_daily_vol    DOUBLE,
+    underlying_annual_vol   DOUBLE,
+    futures_close           DOUBLE,
+    futures_prev_close      DOUBLE,
+    futures_log_ret         DOUBLE,
+    prev_futures_vol        DOUBLE,
+    futures_daily_vol       DOUBLE,
+    futures_annual_vol      DOUBLE,
+    applicable_daily_vol    DOUBLE,
+    applicable_annual_vol   DOUBLE,
+    PRIMARY KEY (trade_date, ticker)
+);
+ 
+-- ── Market activity report ────────────────────────────────────────────────────
+ 
+CREATE TABLE IF NOT EXISTS market_activity (
+    trade_date          DATE        NOT NULL,
+    index_name          VARCHAR     NOT NULL,
+    prev_close          DOUBLE,
+    open                DOUBLE,
+    high                DOUBLE,
+    low                 DOUBLE,
+    close               DOUBLE,
+    gain_loss           DOUBLE,
+    PRIMARY KEY (trade_date, index_name)
+);
+ 
+CREATE TABLE IF NOT EXISTS market_activity_summary (
+    trade_date          DATE        PRIMARY KEY,
+    traded_value_cr     DOUBLE,
+    traded_qty_lacs     DOUBLE,
+    num_trades          BIGINT,
+    market_cap_cr       DOUBLE
+);
+ 
+-- ── Indexes ───────────────────────────────────────────────────────────────────
+ 
 CREATE INDEX IF NOT EXISTS idx_fo_ticker_expiry
     ON fo_data(ticker, expiry, trade_date);
 CREATE INDEX IF NOT EXISTS idx_fo_instr_date
@@ -119,17 +274,28 @@ CREATE INDEX IF NOT EXISTS idx_opt_ana_lookup
     ON options_analytics(instrument_type, ticker, expiry);
 CREATE INDEX IF NOT EXISTS idx_fut_ana_lookup
     ON futures_analytics(instrument_type, ticker, expiry);
+ 
+CREATE INDEX IF NOT EXISTS idx_eq_bhav_date
+    ON eq_bhav(trade_date, symbol);
+CREATE INDEX IF NOT EXISTS idx_cm_bhav_date
+    ON cm_bhav(trade_date, ticker);
+CREATE INDEX IF NOT EXISTS idx_fo_volt_ticker
+    ON fo_volatility(ticker, trade_date);
+CREATE INDEX IF NOT EXISTS idx_part_oi_date
+    ON participant_oi(trade_date);
+CREATE INDEX IF NOT EXISTS idx_part_vol_date
+    ON participant_vol(trade_date);
 """
-
+ 
+ 
 def init_db():
-    """Create tables and indexes if they don't exist. Safe to call on every startup."""
+    """Create all tables and indexes if they don't exist. Safe to call on every startup."""
     NSE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = get_conn()
     try:
         conn.execute(DDL)
     finally:
         conn.close()
-
 
 # ── Discovery ─────────────────────────────────────────────────────────────────
 
@@ -524,30 +690,52 @@ def get_futures_cycle_history(
     return df.replace([np.nan, np.inf, -np.inf], None)
 
 
-# ── Processing state checks (used by startup_sync) ───────────────────────────
-
-def is_processed(trade_date: str, instrument_type: str) -> bool:
+# ── Processing state checks ───────────────────────────────────────────────────
+ 
+# Maps each processor key → (table, column, value) to check
+_PROCESS_CHECK = {
+    # F&O (existing)
+    "STF": ("futures_analytics",  "instrument_type", "STF"),
+    "IDF": ("futures_analytics",  "instrument_type", "IDF"),
+    "STO": ("options_analytics",  "instrument_type", "STO"),
+    "IDO": ("options_analytics",  "instrument_type", "IDO"),
+    # New
+    "eq_bhav":   ("eq_bhav",                 None, None),
+    "cm_bhav":   ("cm_bhav",                 None, None),
+    "fii":       ("fii_stats",               None, None),
+    "part_oi":   ("participant_oi",          None, None),
+    "part_vol":  ("participant_vol",         None, None),
+    "fo_volt":   ("fo_volatility",           None, None),
+    "mkt_act":   ("market_activity_summary", None, None),
+}
+ 
+def is_processed(trade_date: str, key: str) -> bool:
     """
-    Check whether data for a given trade_date + instrument_type exists in DB.
-    Works for both analytics tables.
+    Check whether data for a given trade_date exists in the relevant table.
+ 
+    For F&O keys (STF/IDF/STO/IDO) also filters by instrument_type.
+    For all other keys just checks trade_date presence.
     """
-    table = (
-        "futures_analytics"
-        if instrument_type in ("STF", "IDF")
-        else "options_analytics"
-    )
+    entry = _PROCESS_CHECK.get(key)
+    if entry is None:
+        raise ValueError(f"Unknown process key: {key!r}")
+ 
+    table, col, val = entry
     conn = get_conn(read_only=True)
     try:
-        result = conn.execute(
-            f"""
-            SELECT COUNT(*) FROM {table}
-            WHERE instrument_type = ? AND trade_date = CAST(? AS DATE)
-            """,
-            [instrument_type, trade_date],
-        ).fetchone()
+        if col:
+            result = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE {col} = ? AND trade_date = CAST(? AS DATE)",
+                [val, trade_date],
+            ).fetchone()
+        else:
+            result = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE trade_date = CAST(? AS DATE)",
+                [trade_date],
+            ).fetchone()
         return result[0] > 0
     except Exception as e:
-        print(f"[is_processed] ERROR {instrument_type} {trade_date}: {e}")
+        print(f"[is_processed] ERROR {key} {trade_date}: {e}")
         print(f"[is_processed] DB path: {NSE_DB_PATH} (exists: {NSE_DB_PATH.exists()})")
         return False
     finally:
