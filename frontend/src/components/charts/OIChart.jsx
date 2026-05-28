@@ -462,7 +462,7 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
     });
 
     return FRAME.map((o) => offsetMap[o] ?? { offset: o });
-  }, [historyRows, selectedCycles, orderedExpiries, inProgressCycle, dragOffset, isCombined]);
+  }, [historyRows, selectedCycles, orderedExpiries, inProgressCycle, dragOffset, isCombined, activeMetric]);
 
   /* ── Drag handlers ── */
   const handleMouseDown = (e) => {
@@ -668,6 +668,12 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
 ───────────────────────────────────────────────────────────────── */
 
 export function OptionsOIChart({ assetType, ticker, allExpiries, selectedCycles }) {
+  const fetchHistory = useCallback((at, t) =>
+    t === OPTIONS_COMBINED_TICKER
+      ? getOptionsMarketHistory(at)
+      : getOptionsCycleHistory(at, t),
+  []);
+
   return (
     <ScreenerOIChart
       assetType={assetType}
@@ -675,11 +681,7 @@ export function OptionsOIChart({ assetType, ticker, allExpiries, selectedCycles 
       allExpiries={allExpiries}
       selectedCycles={selectedCycles}
       metricToggle
-      fetchHistory={(at, t) =>
-        t === OPTIONS_COMBINED_TICKER
-          ? getOptionsMarketHistory(at)
-          : getOptionsCycleHistory(at, t)
-      }
+      fetchHistory={fetchHistory}
       metricKeys={{ default: 'ce_oi', options: ['ce_oi', 'pe_oi', 'combined'] }}
     />
   );
