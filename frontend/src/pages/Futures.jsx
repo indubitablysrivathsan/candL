@@ -6,7 +6,7 @@ import Sidebar from '../components/layout/Sidebar';
 import LoadingSpinner from '../components/shared/LoadingSpinner';
 import MetricCard from '../components/shared/MetricCard';
 import DateSlider from '../components/shared/DateSlider';
-import FuturesOIChart, { ScreenerOIChart } from '../components/charts/FuturesOIChart';
+import OIChart, { ScreenerOIChart } from '../components/charts/OIChart';
 
 import {
   getTickers,
@@ -14,9 +14,11 @@ import {
   getDates,
   getFuturesAnalytics,
   getFuturesRollup,
+  getFuturesCombinedHistory,
   formatCurrency,
   formatNumber,
   QUADRANT_META,
+  FUTURES_COMBINED_TICKER,
 } from '../api/client';
 
 /* ─────────────────────────────────────────────────────────────────
@@ -73,16 +75,32 @@ function AnalyticsPanel({ assetType, ticker, expiry, allExpiries }) {
 
   /* ── Cycle-scoped stats ── */
   const cycleData = useMemo(() => {
-    if (!data.length || !allExpiries.length) return data;
-    const idx        = allExpiries.indexOf(expiry);
-    const prevExpiry = idx > 0 ? allExpiries[idx - 1] : null;
+    if (!data.length) return data;
+
+    const current = new Date(expiry);
+
+    // find nearest older expiry
+    const prevExpiry = allExpiries
+      .map((e) => new Date(e))
+      .filter((e) => e < current)
+      .sort((a, b) => b - a)[0];
+
     if (!prevExpiry) return data;
-    return data.filter((r) => r.trade_date > prevExpiry);
+
+    return data.filter((r) => {
+      const td = new Date(r.trade_date);
+
+      return (
+        td > prevExpiry &&
+        td <= current
+      );
+    });
+
   }, [data, expiry, allExpiries]);
 
   const stats = useMemo(() => {
     if (!cycleData.length) return null;
-    const valid = cycleData.filter((r) => r.open_int != null && r.close != null);
+    const valid = cycleData.filter((r) => r.open_int != null && r.open_int > 0 && r.close != null);
     if (!valid.length) return null;
     const maxOI    = valid.reduce((a, b) => (b.open_int > a.open_int ? b : a));
     const minOI    = valid.reduce((a, b) => (b.open_int < a.open_int ? b : a));
@@ -152,7 +170,7 @@ function AnalyticsPanel({ assetType, ticker, expiry, allExpiries }) {
       </div>
 
       {activeTab === 'chart' && (
-        <FuturesOIChart
+        <OIChart
           assetType={assetType}
           ticker={ticker}
           expiries={allExpiries}
@@ -346,6 +364,7 @@ function RollupPanel({
         ticker={chartTicker}
         allExpiries={allScreenerExpiries}
         selectedCycles={chartSelectedExpiries}
+        allDates={allDates}
       />
     );
   }
@@ -494,12 +513,11 @@ export default function Futures({ assetType = 'stock_futures' }) {
 
   const validChartExpiries = useMemo(() => {
     if (!screenerExpiries.length) return [];
-
-    const firstExpiry = screenerExpiries[0];
-
-    return screenerExpiries.filter(
-      (exp) => new Date(exp) <= new Date(firstExpiry)
-    );
+    const today = new Date();
+    // completed cycles (expiry already passed) + the single nearest upcoming/active cycle
+    const completed = screenerExpiries.filter((e) => new Date(e) < today);
+    const inProgress = screenerExpiries.find((e) => new Date(e) >= today);
+    return inProgress ? [inProgress, ...completed] : completed;
   }, [screenerExpiries]);
 
   const [screenerSelectedExpiry, setScreenerSelectedExpiry] = useState('');
@@ -564,7 +582,8 @@ export default function Futures({ assetType = 'stock_futures' }) {
       .then((res) => {
         if (!mounted) return;
         const tickers = res?.tickers || [];
-        setTickerList(tickers);
+        const withCombined = [...tickers, FUTURES_COMBINED_TICKER];
+        setTickerList(withCombined);
         if (tickers.length > 0) setSelectedTicker(tickers[0]);
       })
       .catch((err) => { if (mounted) setError(err.message); })

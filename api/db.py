@@ -147,10 +147,7 @@ def list_tickers(asset_type: str) -> list[str]:
 
 
 def list_expiries(asset_type: str, ticker: str) -> list[str]:
-    """
-    Returns expiries sorted: current/future months ascending first,
-    then past months descending — matching original behaviour.
-    """
+    """Returns all expiries for a ticker in ascending date order."""
     instr = _instr(asset_type)
     conn = get_conn(read_only=True)
     try:
@@ -165,24 +162,7 @@ def list_expiries(asset_type: str, ticker: str) -> list[str]:
         ).fetchall()
     finally:
         conn.close()
-
-    from datetime import date
-    today = date.today()
-    current_month_start = today.replace(day=1)
-
-    all_expiries = [r[0] for r in rows]
-    future_and_current, past = [], []
-    for exp in all_expiries:
-        try:
-            exp_date = date.fromisoformat(exp)
-            if exp_date.replace(day=1) >= current_month_start:
-                future_and_current.append(exp)
-            else:
-                past.append(exp)
-        except ValueError:
-            future_and_current.append(exp)
-
-    return future_and_current + past[::-1]
+    return [r[0] for r in rows]
 
 
 def get_available_dates(asset_type: str, ticker: str, expiry: str) -> list[str]:
@@ -276,6 +256,70 @@ def get_options_analytics(
         df["trade_date"] = pd.to_datetime(df["trade_date"])
     return df
 
+def get_options_cycle_history(
+    ticker: str,
+    asset_type: str = "stock_options",
+) -> pd.DataFrame:
+    """
+    Full options analytics history for a ticker across all expiries,
+    ordered by trade date. Used for cycle OI chart.
+    """
+    instr = _instr(asset_type)
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT *
+            FROM options_analytics
+            WHERE instrument_type = ?
+              AND ticker = ?
+            ORDER BY trade_date ASC
+            """,
+            [instr, ticker],
+        ).df()
+    finally:
+        conn.close()
+
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+        if "expiry" in df.columns:
+            df["expiry"] = pd.to_datetime(df["expiry"])
+
+    return df.replace([np.nan, np.inf, -np.inf], None)
+
+def get_options_market_history(
+    asset_type: str = "stock_options",
+) -> pd.DataFrame:
+    """
+    Sum of ce_oi and pe_oi across ALL tickers per (expiry, trade_date).
+    Used for the COMBINED market OI chart.
+    """
+    instr = _instr(asset_type)
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT
+                trade_date,
+                expiry,
+                SUM(ce_oi) AS ce_oi,
+                SUM(pe_oi) AS pe_oi
+            FROM options_analytics
+            WHERE instrument_type = ?
+            GROUP BY trade_date, expiry
+            ORDER BY trade_date ASC
+            """,
+            [instr],
+        ).df()
+    finally:
+        conn.close()
+
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+        if "expiry" in df.columns:
+            df["expiry"] = pd.to_datetime(df["expiry"])
+
+    return df.replace([np.nan, np.inf, -np.inf], None)
 
 def get_daily_expiry_snapshot(
     asset_type: str,

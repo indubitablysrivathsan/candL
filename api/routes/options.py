@@ -193,6 +193,43 @@ def _make_options_router(asset_type: str) -> APIRouter:
             underlying=underlying, max_pain=max_pain, pcr=pcr,
             strikes=bars,
         )
+    
+    # ── Options cycle history ─────────────────────────────────────────────────
+
+    @router.get("/cycle-history/{ticker}")
+    def _cycle_history(ticker: str):
+        from api.db import get_options_cycle_history
+        df = get_options_cycle_history(ticker, asset_type)
+        if df.empty:
+            raise HTTPException(404, f"No cycle history for {ticker}")
+
+        df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
+        df["expiry"]     = df["expiry"].dt.strftime("%Y-%m-%d")
+        df = df.replace([float("inf"), float("-inf")], None) \
+            .astype(object).where(df.notna(), None)
+
+        return {
+            "asset_type": asset_type,
+            "ticker":     ticker,
+            "rows":       df.to_dict(orient="records"),
+        }
+    
+    @router.get("/market-history")
+    def _market_history():
+        from api.db import get_options_market_history
+        df = get_options_market_history(asset_type)
+        if df.empty:
+            raise HTTPException(404, "No market history found")
+
+        df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
+        df["expiry"]     = df["expiry"].dt.strftime("%Y-%m-%d")
+        df = df.replace([float("inf"), float("-inf")], None) \
+            .astype(object).where(df.notna(), None)
+
+        return {
+            "asset_type": asset_type,
+            "rows":       df.to_dict(orient="records"),
+        }
 
     # ── Chart axis scale ──────────────────────────────────────────────────────
 

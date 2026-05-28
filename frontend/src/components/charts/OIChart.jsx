@@ -1,6 +1,6 @@
-// frontend/src/components/charts/FuturesOIChart.jsx
+// frontend/src/components/charts/OIChart.jsx
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -12,7 +12,7 @@ import {
   Legend,
 } from 'recharts';
 
-import { getFuturesAnalytics, getFuturesRollup, formatNumber, getFuturesCycleHistory } from '../../api/client';
+import { getFuturesCycleHistory, getFuturesCombinedHistory, getOptionsCycleHistory, getOptionsMarketHistory, getFuturesRollup, formatNumber, FUTURES_COMBINED_TICKER, OPTIONS_COMBINED_TICKER } from '../../api/client';
 import LoadingSpinner from '../shared/LoadingSpinner';
 
 /* ─────────────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ function ColorSelectorRow({ expiry, color, onColorChange }) {
    MAIN CHART COMPONENT  (ticker analytics mode)
 ───────────────────────────────────────────────────────────────── */
 
-export default function FuturesOIChart({
+export default function OIChart({
   assetType,
   ticker,
   expiries = [],
@@ -329,144 +329,173 @@ export default function FuturesOIChart({
                        is one line on the chart
 ───────────────────────────────────────────────────────────────── */
 
-export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedCycles = [] }) {
+export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedCycles = [], allDates = [], metricToggle = false, fetchHistory = null, metricKeys = null,}) {
   const [historyRows, setHistoryRows] = useState([]);
   const [loading, setLoading]         = useState(false);
   const [colorMap, setColorMap]       = useState({});
-  const orderedExpiries = useMemo(() => {
-    return [...allExpiries].sort(
-      (a, b) => new Date(a) - new Date(b)
-    );
-  }, [allExpiries]);
+  // drag offset for in-progress cycle (in trading-day units, 0 = right-anchored)
+  const [dragOffset, setDragOffset]   = useState(0);
 
-  /* ── Init colors from allExpiries order so colors stay stable ── */
+  const [activeMetric, setActiveMetric] = useState(
+    metricKeys?.default ?? 'open_int'
+  );
+
+  // derive the actual field(s) to sum per row:
+  const resolvedMetricKey = activeMetric === 'combined'
+    ? null   // special case handled below
+    : activeMetric;
+
+  const isDragging                    = useRef(false);
+  const dragStartX                    = useRef(0);
+  const dragStartOffset               = useRef(0);
+
+  const isCombined = ticker === FUTURES_COMBINED_TICKER;
+
+  const orderedExpiries = useMemo(() =>
+    [...allExpiries].sort((a, b) => new Date(a) - new Date(b)),
+  [allExpiries]);
+
+  // The in-progress cycle is the latest expiry in the selected set
+  const inProgressCycle = useMemo(() => {
+    if (!selectedCycles.length || !orderedExpiries.length) return null;
+    const today = new Date();
+    // first expiry in ordered list that hasn't fully expired yet
+    return orderedExpiries.find((e) => new Date(e) >= today) ?? null;
+  }, [orderedExpiries, selectedCycles]);
+
+  /* ── Init colors ── */
   useEffect(() => {
     const map = {};
     allExpiries.forEach((exp, i) => { map[exp] = PALETTE[i % PALETTE.length]; });
     setColorMap(map);
   }, [allExpiries]);
 
-  /* ── Collect every calendar date in each cycle window for fetching ──
-     We fetch all calendar days; the API returns empty for non-trading days.
-     chartData then filters to only dates present in rollupCache (trading days).
-  ── */
-  /* ── Fetch exact trading dates for each selected cycle ── */
+  /* ── Reset drag when cycle changes ── */
+  useEffect(() => { setDragOffset(0); }, [inProgressCycle]);
+
+  /* ── Fetch history ── */
   useEffect(() => {
     if (!ticker) return;
-
     let mounted = true;
     setLoading(true);
 
-    getFuturesCycleHistory(assetType, ticker)
-      .then((res) => {
-        if (!mounted) return;
+    const fetcher = fetchHistory
+      ? fetchHistory(assetType, ticker)
+      : isCombined
+        ? getFuturesCombinedHistory(assetType, allDates)
+        : getFuturesCycleHistory(assetType, ticker);
 
-        setHistoryRows(res?.rows || []);
-        setLoading(false);
-        console.log(res?.rows?.slice(0, 20));
-      })
-      .catch(() => {
-        if (!mounted) return;
+    fetcher
+      .then((res) => { if (mounted) { setHistoryRows(res?.rows || []); setLoading(false); } })
+      .catch(() => { if (mounted) { setHistoryRows([]); setLoading(false); } });
 
-        setHistoryRows([]);
-        setLoading(false);
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [assetType, ticker]);
+    return () => { mounted = false; };
+  // allDates deliberately excluded for options path — only re-fetch when ticker/assetType change
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assetType, ticker, fetchHistory, isCombined]);
 
-
-  /* ── Build chart data ──────────────────────────────────────────
-     For each selected cycle expiry E:
-       - cycle window   : day after prevExpiry(E) → E
-       - constituents   : [E, next1(E), next2(E)]  (from allExpiries)
-       - trading days   : only dates present in rollupCache (actual
-                          market days — no calendar gaps)
-       - x-axis offset  : end-aligned sequential index.
-                          last trading day of cycle = offset 0,
-                          second-to-last = -1, etc.
-                          All cycles share the same right anchor.
-  ─────────────────────────────────────────────────────────────── */
+  /* ── Build chart data — fixed 25-day x-axis (-24 to 0) ── */
   const chartData = useMemo(() => {
+    // fixed frame: offsets -24 … 0
+    const FRAME = Array.from({ length: 25 }, (_, i) => i - 24); // [-24, -23, … 0]
+
     const offsetMap = {};
+    FRAME.forEach((o) => { offsetMap[o] = { offset: o }; });
 
     selectedCycles.forEach((cycleExp) => {
-      const idx = orderedExpiries.indexOf(cycleExp);
+      const isInProgress = cycleExp === inProgressCycle;
+      const idx          = orderedExpiries.indexOf(cycleExp);
+      const prevExpiry   = idx > 0 ? orderedExpiries[idx - 1] : null;
+      const constituents = isCombined
+        ? null
+        : fetchHistory
+          ? orderedExpiries.filter((e) => (!prevExpiry || e > prevExpiry) && e <= cycleExp)
+          : orderedExpiries.slice(idx, idx + 3);
 
-      const prevExpiry =
-        idx > 0 ? orderedExpiries[idx - 1] : null;
+      let cycleRows;
+      if (isCombined) {
+        // for combined, historyRows has no expiry column — just filter by date window
+        cycleRows = historyRows.filter((r) => {
+          const td = r.trade_date?.split?.('T')[0] ?? String(r.trade_date).slice(0, 10);
+          return (!prevExpiry || td > prevExpiry) && td <= cycleExp;
+        });
+      } else {
+        cycleRows = historyRows.filter((r) => {
+          const td         = r.trade_date?.split?.('T')[0] ?? String(r.trade_date).slice(0, 10);
+          const rowExpiry  = r.expiry?.split?.('T')[0]     ?? String(r.expiry).slice(0, 10);
+          const inWindow   = (!prevExpiry || td > prevExpiry) && td <= cycleExp;
+          return inWindow && constituents.includes(rowExpiry);
+        });
+      }
 
-      const constituents =
-        orderedExpiries.slice(idx, idx + 3);
-
-      const cycleRows = historyRows.filter((r) => {
-        const tradeDate =
-          r.trade_date?.split('T')[0];
-
-        const rowExpiry =
-          r.expiry?.split('T')[0];
-
-        const inWindow =
-          (!prevExpiry || tradeDate > prevExpiry) &&
-          tradeDate <= cycleExp;
-
-        return (
-          inWindow &&
-          constituents.includes(rowExpiry)
-        );
-      });
-
+      // sum OI per date
       const groupedByDate = {};
-
       cycleRows.forEach((r) => {
-        const tradeDate =
-          r.trade_date?.split('T')[0];
-
-        if (!groupedByDate[tradeDate]) {
-          groupedByDate[tradeDate] = 0;
+        const td = r.trade_date?.split?.('T')[0] ?? String(r.trade_date).slice(0, 10);
+        if (resolvedMetricKey) {
+          groupedByDate[td] = (groupedByDate[td] ?? 0) + (Number(r[resolvedMetricKey]) || 0);
+        } else {
+          // combined = ce_oi + pe_oi
+          groupedByDate[td] = (groupedByDate[td] ?? 0) + (Number(r.ce_oi) || 0) + (Number(r.pe_oi) || 0);
         }
-
-        groupedByDate[tradeDate] +=
-          Number(r.open_int) || 0;
       });
 
-      const tradingDates =
-        Object.keys(groupedByDate).sort(
-          (a, b) => new Date(a) - new Date(b)
-        );
-
-      const lastIdx =
-        tradingDates.length - 1;
+      const tradingDates = Object.keys(groupedByDate).sort((a, b) => new Date(a) - new Date(b));
+      const lastIdx      = tradingDates.length - 1;
 
       tradingDates.forEach((date, i) => {
-        const offset = i - lastIdx;
+        // natural offset relative to last trading day
+        let offset = i - lastIdx; // 0 = last day, -1 = day before, etc.
 
-        if (!offsetMap[offset]) {
-          offsetMap[offset] = { offset };
+        // apply drag shift for in-progress cycle
+        if (isInProgress) {
+          offset = offset + dragOffset;
         }
 
-        offsetMap[offset][cycleExp] =
-          groupedByDate[date];
+        // only plot within our fixed frame
+        if (offset < -24 || offset > 0) return;
 
-        offsetMap[offset][`${cycleExp}_date`] =
-          date;
+        if (!offsetMap[offset]) offsetMap[offset] = { offset };
+        offsetMap[offset][cycleExp]              = groupedByDate[date];
+        offsetMap[offset][`${cycleExp}_date`]    = date;
       });
     });
 
-    return Object.values(offsetMap).sort(
-      (a, b) => a.offset - b.offset
-    );
-  }, [
-    historyRows,
-    selectedCycles,
-    orderedExpiries,
-  ]);
+    return FRAME.map((o) => offsetMap[o] ?? { offset: o });
+  }, [historyRows, selectedCycles, orderedExpiries, inProgressCycle, dragOffset, isCombined]);
+
+  /* ── Drag handlers ── */
+  const handleMouseDown = (e) => {
+    isDragging.current    = true;
+    dragStartX.current    = e.clientX;
+    dragStartOffset.current = dragOffset;
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    const PIXELS_PER_DAY = 18; // approximate; feels natural
+
+    const onMove = (e) => {
+      if (!isDragging.current) return;
+      const deltaX   = e.clientX - dragStartX.current;
+      const deltaDays = Math.round(deltaX / PIXELS_PER_DAY);
+      const newOffset = Math.max(-24, Math.min(0, dragStartOffset.current + deltaDays));
+      setDragOffset(newOffset);
+    };
+
+    const onUp = () => { isDragging.current = false; };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup',   onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup',   onUp);
+    };
+  }, [dragOffset]);
 
   /* ── Tooltip ── */
   const TooltipContent = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;
-
     return (
       <div className="bg-[#11151d] border border-white/10 rounded-xl px-4 py-3 shadow-2xl min-w-[220px]">
         <p className="text-xs font-semibold text-white/60 mb-3">
@@ -475,14 +504,18 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
         <div className="space-y-2">
           {payload.map((p) => {
             if (p.value == null) return null;
-            const cycleExp  = p.dataKey; // e.g. "2024-06-27"
-            const tradeDate = p.payload[`${cycleExp}_date`];
+            const tradeDate = p.payload[`${p.dataKey}_date`];
             return (
-              <div key={cycleExp} className="space-y-0.5">
-                <div className="text-xs font-semibold" style={{ color: p.color }}>
-                  {cycleExp} cycle
+              <div key={p.dataKey} className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold" style={{ color: p.color }}>
+                    {p.dataKey} cycle
+                  </span>
+                  {p.dataKey === inProgressCycle && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white/10 text-white/50">live</span>
+                  )}
                 </div>
-                <div className="text-[11px] text-white/45">{tradeDate}</div>
+                {tradeDate && <div className="text-[11px] text-white/45">{tradeDate}</div>}
                 <div className="text-sm text-white">{formatOI(p.value)}</div>
               </div>
             );
@@ -492,22 +525,17 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
     );
   };
 
-  /* ── Empty / no ticker states ── */
-  if (!ticker) {
-    return (
-      <div className="card p-8 text-center">
-        <p className="text-white/40 text-sm">Select a ticker in the sidebar to view the OI chart.</p>
-      </div>
-    );
-  }
-
-  if (!selectedCycles.length) {
-    return (
-      <div className="card p-8 text-center">
-        <p className="text-white/40 text-sm">Select up to 5 expiry cycles in the sidebar to compare.</p>
-      </div>
-    );
-  }
+  /* ── Empty states ── */
+  if (!ticker) return (
+    <div className="card p-8 text-center">
+      <p className="text-white/40 text-sm">Select a ticker in the sidebar to view the OI chart.</p>
+    </div>
+  );
+  if (!selectedCycles.length) return (
+    <div className="card p-8 text-center">
+      <p className="text-white/40 text-sm">Select up to 5 expiry cycles in the sidebar to compare.</p>
+    </div>
+  );
 
   return (
     <div className="space-y-4">
@@ -515,35 +543,69 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
       <div className="card p-4 space-y-3">
         <div>
           <h3 className="text-sm font-semibold text-white">
-            Combined OI Cycle Comparison — {ticker}
+            Combined OI Cycle Comparison — {isCombined ? 'All Tickers' : ticker}
           </h3>
           <p className="text-xs text-white/40 mt-1">
-            Sum of current + next + far month OI aligned by Days To Expiry.
-            Cycles selected in sidebar (max 5).
+            {isCombined
+              ? 'Sum of all tickers OI aligned by Days To Expiry. '
+              : metricToggle
+                ? 'Sum of all constituent expiries within cycle window. '
+                : 'Sum of current + next + far month OI aligned by Days To Expiry. '}
+            Fixed 25-day window. Cycles selected in sidebar (max 5).
           </p>
         </div>
 
-        {/* One color row per active cycle */}
         <div className="flex flex-col gap-2">
-          {selectedCycles.map((exp) => (
-            <ColorSelectorRow
-              key={exp}
-              expiry={exp}
-              color={colorMap[exp] ?? '#00B0F0'}
-              onColorChange={(c) =>
-                setColorMap((prev) => ({ ...prev, [exp]: c }))
-              }
-            />
-          ))}
+          {metricToggle && (
+            <div className="flex items-center gap-2 pb-1">
+              {[
+                { key: 'ce_oi',    label: 'CE OI',   color: '#00B0F0' },
+                { key: 'pe_oi',    label: 'PE OI',   color: '#FF00FF' },
+                { key: 'combined', label: 'CE + PE', color: '#92D050' },
+              ].map(({ key, label, color }) => (
+                <button
+                  key={key}
+                  onClick={() => setActiveMetric(key)}
+                  className="px-3 py-1.5 rounded-lg border text-xs transition"
+                  style={{
+                    borderColor:     activeMetric === key ? `${color}40` : 'rgba(255,255,255,0.08)',
+                    backgroundColor: activeMetric === key ? `${color}12` : '#151922',
+                    color:           activeMetric === key ? color        : 'rgba(255,255,255,0.55)',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {selectedCycles.map((exp) => {
+            const isInProgress = exp === inProgressCycle;
+            return (
+              <div key={exp} className="flex items-center gap-3">
+                <ColorSelectorRow
+                  expiry={exp}
+                  color={colorMap[exp] ?? '#00B0F0'}
+                  onColorChange={(c) => setColorMap((prev) => ({ ...prev, [exp]: c }))}
+                />
+                {isInProgress && (
+                  <div
+                    onMouseDown={handleMouseDown}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/15 bg-white/5 text-white/50 text-xs cursor-ew-resize select-none hover:bg-white/10 transition"
+                    title="Drag to shift in-progress cycle"
+                  >
+                    ⟷ drag {dragOffset === 0 ? '(anchored)' : `${dragOffset > 0 ? '+' : ''}${dragOffset}d`}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
       {/* Chart */}
       <div className="card p-4">
         {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <LoadingSpinner />
-          </div>
+          <div className="flex items-center justify-center py-16"><LoadingSpinner /></div>
         ) : (
           <div style={{ height: 420 }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -551,6 +613,9 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                 <XAxis
                   dataKey="offset"
+                  type="number"
+                  domain={[-24, 0]}
+                  ticks={[-24, -20, -15, -10, -5, 0]}
                   tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
                   tickLine={false}
                   axisLine={{ stroke: 'rgba(255,255,255,0.08)' }}
@@ -567,7 +632,7 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
                 <Legend
                   formatter={(value) => (
                     <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11 }}>
-                      {value} cycle
+                      {value} cycle{value === inProgressCycle ? ' 🔴' : ''}
                     </span>
                   )}
                 />
@@ -578,7 +643,8 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
                     dataKey={exp}
                     name={exp}
                     stroke={colorMap[exp] ?? '#00B0F0'}
-                    strokeWidth={2.2}
+                    strokeWidth={exp === inProgressCycle ? 2.8 : 2.2}
+                    strokeDasharray={exp === inProgressCycle ? '6 3' : undefined}
                     dot={false}
                     connectNulls
                     activeDot={{ r: 4 }}
@@ -590,5 +656,31 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
         )}
       </div>
     </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   OPTIONS OI CHART
+   Three views: CE / PE / CE+PE
+   One line per selected cycle. Each cycle sums all constituent
+   expiries active within (prevExpiry, cycleExp] window.
+   Fixed 25-day x-axis. In-progress cycle is draggable.
+───────────────────────────────────────────────────────────────── */
+
+export function OptionsOIChart({ assetType, ticker, allExpiries, selectedCycles }) {
+  return (
+    <ScreenerOIChart
+      assetType={assetType}
+      ticker={ticker}
+      allExpiries={allExpiries}
+      selectedCycles={selectedCycles}
+      metricToggle
+      fetchHistory={(at, t) =>
+        t === OPTIONS_COMBINED_TICKER
+          ? getOptionsMarketHistory(at)
+          : getOptionsCycleHistory(at, t)
+      }
+      metricKeys={{ default: 'ce_oi', options: ['ce_oi', 'pe_oi', 'combined'] }}
+    />
   );
 }

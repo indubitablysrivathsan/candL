@@ -11,6 +11,7 @@ import StrikeBarChart from '../components/charts/StrikeBarChart';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import PCRChart from '../components/charts/PCRChart';
 import TickerAnalysisTable from '../components/charts/TickerAnalysisTable';
+import { OptionsOIChart } from '../components/charts/OIChart';
 
 import {
   getTickers,
@@ -24,6 +25,9 @@ import {
   formatNumber,
   calculateTotals,
   getMetricFields,
+  getOptionsCycleHistory,
+  getOptionsMarketHistory,
+  OPTIONS_COMBINED_TICKER 
 } from '../api/client';
 
 /* ─────────────────────────────────────────────────────────────────
@@ -371,9 +375,26 @@ export default function Options({ assetType = 'stock_options' }) {
   const [loadingSnapshot, setLoadingSnapshot]   = useState(false);
   const [error, setError]                       = useState('');
 
+  const [chartSelectedExpiries, setChartSelectedExpiries] = useState([]);
+
+  const validChartExpiries = useMemo(() => {
+    if (!expiries.length) return [];
+    const today = new Date();
+    const completed  = expiries.filter((e) => new Date(e) < today);
+    const inProgress = expiries.find((e) => new Date(e) >= today);
+    return inProgress ? [inProgress, ...completed] : completed;
+  }, [expiries]);  
+
+  useEffect(() => {
+    if (!validChartExpiries.length) return;
+    setChartSelectedExpiries(validChartExpiries.slice(0, 5));
+  }, [validChartExpiries]);
+
   const isDailySnapshot = selectedMetric === 'daily_expiry_snapshot';
 
   const isTickerAnalysis = selectedMetric === 'ticker_analysis';
+
+  const isOICharts = selectedMetric === 'oi_charts';
 
   // Reset when assetType changes
   useEffect(() => {
@@ -398,7 +419,8 @@ export default function Options({ assetType = 'stock_options' }) {
       .then((res) => {
         if (!mounted) return;
         const tickers = res?.tickers || [];
-        setTickerList(tickers);
+        const withCombined = [...tickers, OPTIONS_COMBINED_TICKER];
+        setTickerList(withCombined);
         if (tickers.length > 0) setSelectedTicker(tickers[0]);
       })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load tickers'); })
@@ -477,15 +499,22 @@ export default function Options({ assetType = 'stock_options' }) {
         tickerList={tickerList}
         selectedTicker={selectedTicker}
         onTickerChange={setSelectedTicker}
-        expiries={expiries}
-        selectedExpiries={selectedExpiries}
-        onExpiriesChange={setSelectedExpiries}
+        expiries={isOICharts ? validChartExpiries : expiries}
+        selectedExpiries={isOICharts ? chartSelectedExpiries : selectedExpiries}
+        onExpiriesChange={isOICharts
+          ? (arr) => {
+              const ordered = validChartExpiries.filter((e) => arr.includes(e));
+              setChartSelectedExpiries(ordered.slice(0, 5));
+            }
+          : setSelectedExpiries
+        }
         selectedMetric={selectedMetric}
         onMetricChange={setSelectedMetric}
         startDate={startDate}
         endDate={endDate}
         onStartDateChange={setStartDate}
         onEndDateChange={setEndDate}
+        hideDateRange={isOICharts}
       />
 
       <main className="flex-1 p-6 overflow-x-hidden">
@@ -494,7 +523,7 @@ export default function Options({ assetType = 'stock_options' }) {
           <p className="mt-1 text-sm text-white/45">NSE {label} Analytics</p>
         </div>
 
-        {selectedExpiries.length === 0 && (
+        {selectedExpiries.length === 0 && !isOICharts && (
           <div className="card p-8"><p className="text-white/60">Select at least one expiry</p></div>
         )}
 
@@ -559,7 +588,7 @@ export default function Options({ assetType = 'stock_options' }) {
           </div>
         )}
 
-        {!isDailySnapshot && !isTickerAnalysis && selectedExpiries.length > 0 && (
+        {!isDailySnapshot && !isTickerAnalysis && !isOICharts && selectedExpiries.length > 0 && (
           <>
             <div className="flex items-center gap-2 mb-5 overflow-x-auto pb-1">
               {selectedExpiries.map((expiry) => (
@@ -596,6 +625,14 @@ export default function Options({ assetType = 'stock_options' }) {
             ticker={selectedTicker}
             selectedExpiry={selectedExpiries[0]}
             allExpiries={expiries}
+          />
+        )}
+        {isOICharts && (
+          <OptionsOIChart
+            assetType={assetType}
+            ticker={selectedTicker}
+            allExpiries={expiries}
+            selectedCycles={chartSelectedExpiries}
           />
         )}
       </main>

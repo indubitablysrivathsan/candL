@@ -36,9 +36,34 @@ export async function getTickers(assetType = 'stock_options') {
   return request(`/api/v1/${assetType}/tickers`);
 }
 
+function _sortExpiries(expiries) {
+  const today = new Date();
+  const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
+  const future = [];
+  const past = [];
+
+  for (const exp of expiries) {
+    const d = new Date(exp);
+    const monthStart = new Date(d.getFullYear(), d.getMonth(), 1);
+    if (monthStart >= currentMonthStart) {
+      future.push(exp);
+    } else {
+      past.push(exp);
+    }
+  }
+
+  // future/current ascending, past descending
+  future.sort((a, b) => new Date(a) - new Date(b));
+  past.sort((a, b) => new Date(b) - new Date(a));
+
+  return [...future, ...past];
+}
+
 export async function getExpiries(assetType = 'stock_options', ticker) {
   if (!ticker) throw new Error('Ticker required');
-  return request(`/api/v1/${assetType}/expiries/${encodeURIComponent(ticker)}`);
+  const res = await request(`/api/v1/${assetType}/expiries/${encodeURIComponent(ticker)}`);
+  return { ...res, expiries: _sortExpiries(res?.expiries ?? []) };
 }
 
 export async function getDates(assetType = 'stock_options', ticker, expiry) {
@@ -203,6 +228,46 @@ export async function getTickerAnalysis(assetType, ticker, expiries, startDate, 
 }
 
 /* =========================================
+   OPTIONS CYCLE
+   Works for: options | index_options
+========================================= */
+
+export const OPTIONS_COMBINED_TICKER = '__OPTIONS_COMBINED__';
+
+export async function getOptionsCycleHistory(assetType = 'stock_options', ticker) {
+  if (!ticker) throw new Error('Ticker required');
+  return request(`/api/v1/${assetType}/cycle-history/${encodeURIComponent(ticker)}`);
+}
+
+export async function getOptionsCombinedHistory(assetType = 'stock_options', allDates = [], expiry = '') {
+  // Use daily-expiry-snapshot per date to get all tickers, sum ce_oi + pe_oi
+  const results = await Promise.all(
+    allDates.map((date) =>
+      request(`/api/v1/${assetType}/daily-expiry-snapshot/${encodeURIComponent(expiry)}/${encodeURIComponent(date)}`)
+        .then((res) => {
+          const rows = res?.rows ?? [];
+          const ce = rows.reduce((s, r) => s + (Number(r.ce) || 0), 0);
+          const pe = rows.reduce((s, r) => s + (Number(r.pe) || 0), 0);
+          return { date, ce, pe };
+        })
+        .catch(() => ({ date, ce: 0, pe: 0 }))
+    )
+  );
+  return {
+    rows: results.map(({ date, ce, pe }) => ({
+      trade_date: date,
+      expiry:     expiry,
+      ce_oi:      ce,
+      pe_oi:      pe,
+    })),
+  };
+}
+
+export async function getOptionsMarketHistory(assetType = 'stock_options') {
+  return request(`/api/v1/${assetType}/market-history`);
+}
+
+/* =========================================
    FUTURES ANALYTICS
    Works for: futures | index_futures
 ========================================= */
@@ -244,6 +309,31 @@ export async function getFuturesCycleHistory(
   return request(
     `/api/v1/${assetType}/cycle-history/${encodeURIComponent(ticker)}`
   );
+}
+
+export const FUTURES_COMBINED_TICKER = '__FUTURES_COMBINED__';
+
+export async function getFuturesCombinedHistory(assetType = 'stock_futures', allDates = []) {
+  // Fetch rollup for every trading date and sum open_int across all tickers
+  const results = await Promise.all(
+    allDates.map((date) =>
+      getFuturesRollup(assetType, date)
+        .then((res) => {
+          const rows = res?.rows ?? [];
+          const total = rows.reduce((sum, r) => sum + (Number(r.open_int) || 0), 0);
+          return { date, total };
+        })
+        .catch(() => ({ date, total: 0 }))
+    )
+  );
+  // Return in same shape as cycle-history rows so ScreenerOIChart can reuse logic
+  return {
+    rows: results.map(({ date, total }) => ({
+      trade_date: date,
+      expiry: null,
+      open_int: total,
+    })),
+  };
 }
 
 /* =========================================

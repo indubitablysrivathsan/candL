@@ -58,6 +58,7 @@ export default function Sidebar({
     }
   };
 
+  const isOICharts       = selectedMetric === 'oi_charts';
   const isTimeSeries     = selectedMetric === 'ts';
   const isDailySnapshot  = selectedMetric === 'daily_expiry_snapshot';
   const isTickerAnalysis = selectedMetric === 'ticker_analysis';
@@ -78,6 +79,7 @@ export default function Sidebar({
     { label: 'Time Series',           value: 'ts'                    },
     { label: 'Daily Expiry Snapshot', value: 'daily_expiry_snapshot' },
     { label: 'Ticker Analysis',       value: 'ticker_analysis'       },
+    { label: 'OI Charts',             value: 'oi_charts'             },
   ];
 
   return (
@@ -252,7 +254,7 @@ export default function Sidebar({
         )}
 
         {/* ── DATE RANGE ────────────────────────────────────────── */}
-        {!isFutures && (
+        {!isFutures && !isOICharts && (
           <section>
             <div className="mb-3">
               <h2 className="text-sm font-semibold text-white">Date Range</h2>
