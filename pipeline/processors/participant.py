@@ -14,10 +14,10 @@ from api.db import get_conn, is_processed
 
 # Column → (asset_class, direction, option_side)
 _COL_META = {
-    "Future Index Long":       ("INDEX",        "long",  None),
-    "Future Index Short":      ("INDEX",        "short", None),
-    "Future Stock Long":       ("STOCK",        "long",  None),
-    "Future Stock Short":      ("STOCK",        "short", None),
+    "Future Index Long":       ("INDEX",        "long",  "NA"),
+    "Future Index Short":      ("INDEX",        "short", "NA"),
+    "Future Stock Long":       ("STOCK",        "long",  "NA"),
+    "Future Stock Short":      ("STOCK",        "short", "NA"),
     "Option Index Call Long":  ("INDEX",        "long",  "CE"),
     "Option Index Put Long":   ("INDEX",        "long",  "PE"),
     "Option Index Call Short": ("INDEX",        "short", "CE"),

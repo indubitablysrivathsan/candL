@@ -52,33 +52,142 @@ def get_conn(read_only: bool = False) -> duckdb.DuckDBPyConnection:
 DDL = """
 -- ── F&O (existing) ────────────────────────────────────────────────────────────
  
-CREATE TABLE IF NOT EXISTS fo_data (
-    trade_date      DATE        NOT NULL,
-    biz_date        DATE,
-    instrument_type VARCHAR(3)  NOT NULL,
-    instrument_id   INTEGER     NOT NULL,
-    ticker          VARCHAR     NOT NULL,
-    expiry          DATE        NOT NULL,
-    actual_expiry   DATE,
-    strike          DOUBLE,
-    option_type     VARCHAR(2),
-    open            DOUBLE,
-    high            DOUBLE,
-    low             DOUBLE,
-    close           DOUBLE,
-    last            DOUBLE,
-    prev_close      DOUBLE,
-    underlying      DOUBLE,
-    settlement      DOUBLE,
-    open_interest   DOUBLE,
-    chng_in_oi      DOUBLE,
-    volume          DOUBLE,
-    turnover        DOUBLE,
-    trade_count     INTEGER,
-    lot_size        INTEGER,
-    PRIMARY KEY (trade_date, instrument_id)
+CREATE TABLE IF NOT EXISTS instruments (
+    instrument_key      BIGINT PRIMARY KEY,
+
+    exchange            VARCHAR,
+    segment             VARCHAR,
+
+    instrument_type     VARCHAR,
+    instrument_id       BIGINT,
+
+    ticker              VARCHAR,
+    instrument_name     VARCHAR,
+
+    isin                VARCHAR,
+    series              VARCHAR,
+
+    expiry              DATE,
+    actual_expiry       DATE,
+
+    strike              DOUBLE,
+    option_type         VARCHAR,
+
+    lot_size            INTEGER,
+
+    underlying_symbol   VARCHAR,
+
+    is_active           BOOLEAN DEFAULT TRUE
 );
- 
+
+CREATE TABLE IF NOT EXISTS market_data_daily (
+    trade_date          DATE NOT NULL,
+    instrument_key      BIGINT NOT NULL,
+
+    open                DOUBLE,
+    high                DOUBLE,
+    low                 DOUBLE,
+    close               DOUBLE,
+    last                DOUBLE,
+    prev_close          DOUBLE,
+    avg_price           DOUBLE,
+
+    volume              BIGINT,
+    turnover            DOUBLE,
+    trade_count         BIGINT,
+
+    open_interest       BIGINT,
+    change_in_oi        BIGINT,
+
+    settlement_price    DOUBLE,
+    underlying_price    DOUBLE,
+
+    delivery_qty        BIGINT,
+    delivery_pct        DOUBLE,
+
+    PRIMARY KEY (trade_date, instrument_key)
+);
+
+CREATE TABLE IF NOT EXISTS participant_activity (
+    trade_date          DATE NOT NULL,
+
+    participant_type    VARCHAR NOT NULL,
+
+    metric_type         VARCHAR NOT NULL,
+    asset_class         VARCHAR NOT NULL,
+
+    direction           VARCHAR NOT NULL,
+    option_side         VARCHAR NOT NULL DEFAULT 'NA',
+
+    contracts           BIGINT,
+
+    PRIMARY KEY (
+        trade_date,
+        participant_type,
+        metric_type,
+        asset_class,
+        direction,
+        option_side
+    )
+);
+
+CREATE TABLE IF NOT EXISTS fii_stats (
+    trade_date          DATE NOT NULL,
+    instrument          VARCHAR NOT NULL,
+
+    buy_contracts       BIGINT,
+    buy_amount_cr       DOUBLE,
+
+    sell_contracts      BIGINT,
+    sell_amount_cr      DOUBLE,
+
+    oi_contracts        BIGINT,
+    oi_amount_cr        DOUBLE,
+
+    PRIMARY KEY (trade_date, instrument)
+);
+
+CREATE TABLE IF NOT EXISTS fo_volatility (
+    trade_date   DATE NOT NULL,
+    ticker       VARCHAR NOT NULL,
+
+    underlying_log_return       DOUBLE,
+    underlying_daily_vol        DOUBLE,
+    underlying_annual_vol       DOUBLE,
+
+    futures_log_return          DOUBLE,
+    futures_daily_vol           DOUBLE,
+    futures_annual_vol          DOUBLE,
+
+    applicable_daily_vol        DOUBLE,
+    applicable_annual_vol       DOUBLE,
+
+    PRIMARY KEY (trade_date, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS market_activity_index (
+    trade_date          DATE NOT NULL,
+    index_name          VARCHAR NOT NULL,
+
+    prev_close          DOUBLE,
+    open                DOUBLE,
+    high                DOUBLE,
+    low                 DOUBLE,
+    close               DOUBLE,
+    gain_loss           DOUBLE,
+
+    PRIMARY KEY (trade_date, index_name)
+);
+
+CREATE TABLE IF NOT EXISTS market_activity_summary (
+    trade_date          DATE PRIMARY KEY,
+
+    traded_value_cr     DOUBLE,
+    traded_qty_lacs     DOUBLE,
+    num_trades          BIGINT,
+    market_cap_cr       DOUBLE
+);
+
 CREATE TABLE IF NOT EXISTS options_analytics (
     instrument_type VARCHAR(3)  NOT NULL,
     ticker          VARCHAR     NOT NULL,
@@ -113,178 +222,84 @@ CREATE TABLE IF NOT EXISTS futures_analytics (
     PRIMARY KEY (instrument_type, ticker, expiry, trade_date)
 );
  
--- ── Equity bhavcopy ───────────────────────────────────────────────────────────
- 
-CREATE TABLE IF NOT EXISTS eq_bhav (
-    trade_date      DATE        NOT NULL,
-    symbol          VARCHAR     NOT NULL,
-    series          VARCHAR,
-    prev_close      DOUBLE,
-    open            DOUBLE,
-    high            DOUBLE,
-    low             DOUBLE,
-    last            DOUBLE,
-    close           DOUBLE,
-    avg_price       DOUBLE,
-    volume          BIGINT,
-    turnover_lacs   DOUBLE,
-    trade_count     INTEGER,
-    deliv_qty       BIGINT,
-    deliv_pct       DOUBLE,
-    PRIMARY KEY (trade_date, symbol, series)
-);
- 
--- ── CM bhavcopy (new NSE format, includes gold bonds etc) ─────────────────────
- 
-CREATE TABLE IF NOT EXISTS cm_bhav (
-    trade_date      DATE        NOT NULL,
-    biz_date        DATE,
-    segment         VARCHAR,
-    instrument_type VARCHAR,
-    instrument_id   INTEGER,
-    isin            VARCHAR,
-    ticker          VARCHAR     NOT NULL,
-    series          VARCHAR,
-    instrument_name VARCHAR,
-    open            DOUBLE,
-    high            DOUBLE,
-    low             DOUBLE,
-    close           DOUBLE,
-    last            DOUBLE,
-    prev_close      DOUBLE,
-    settlement      DOUBLE,
-    open_interest   DOUBLE,
-    chng_in_oi      DOUBLE,
-    volume          BIGINT,
-    turnover        DOUBLE,
-    trade_count     INTEGER,
-    lot_size        INTEGER,
-    PRIMARY KEY (trade_date, ticker, series)
-);
- 
--- ── FII derivatives statistics ────────────────────────────────────────────────
- 
-CREATE TABLE IF NOT EXISTS fii_stats (
-    trade_date          DATE        NOT NULL,
-    instrument          VARCHAR     NOT NULL,   -- e.g. INDEX FUTURES, NIFTY FUTURES
-    buy_contracts       BIGINT,
-    buy_amt_cr          DOUBLE,
-    sell_contracts      BIGINT,
-    sell_amt_cr         DOUBLE,
-    oi_contracts        BIGINT,
-    oi_amt_cr           DOUBLE,
-    PRIMARY KEY (trade_date, instrument)
-);
- 
--- ── Participant-wise open interest ────────────────────────────────────────────
- 
-CREATE TABLE IF NOT EXISTS participant_oi (
-    trade_date              DATE        NOT NULL,
-    client_type             VARCHAR     NOT NULL,   -- Client, DII, FII, Pro
-    fut_idx_long            BIGINT,
-    fut_idx_short           BIGINT,
-    fut_stk_long            BIGINT,
-    fut_stk_short           BIGINT,
-    opt_idx_call_long       BIGINT,
-    opt_idx_put_long        BIGINT,
-    opt_idx_call_short      BIGINT,
-    opt_idx_put_short       BIGINT,
-    opt_stk_call_long       BIGINT,
-    opt_stk_put_long        BIGINT,
-    opt_stk_call_short      BIGINT,
-    opt_stk_put_short       BIGINT,
-    total_long              BIGINT,
-    total_short             BIGINT,
-    PRIMARY KEY (trade_date, client_type)
-);
- 
--- ── Participant-wise trading volume ───────────────────────────────────────────
- 
-CREATE TABLE IF NOT EXISTS participant_vol (
-    trade_date              DATE        NOT NULL,
-    client_type             VARCHAR     NOT NULL,
-    fut_idx_long            BIGINT,
-    fut_idx_short           BIGINT,
-    fut_stk_long            BIGINT,
-    fut_stk_short           BIGINT,
-    opt_idx_call_long       BIGINT,
-    opt_idx_put_long        BIGINT,
-    opt_idx_call_short      BIGINT,
-    opt_idx_put_short       BIGINT,
-    opt_stk_call_long       BIGINT,
-    opt_stk_put_long        BIGINT,
-    opt_stk_call_short      BIGINT,
-    opt_stk_put_short       BIGINT,
-    total_long              BIGINT,
-    total_short             BIGINT,
-    PRIMARY KEY (trade_date, client_type)
-);
- 
--- ── F&O volatility (EWMA) ─────────────────────────────────────────────────────
- 
-CREATE TABLE IF NOT EXISTS fo_volatility (
-    trade_date              DATE        NOT NULL,
-    ticker                  VARCHAR     NOT NULL,
-    underlying_close        DOUBLE,
-    underlying_prev_close   DOUBLE,
-    underlying_log_ret      DOUBLE,
-    prev_underlying_vol     DOUBLE,
-    underlying_daily_vol    DOUBLE,
-    underlying_annual_vol   DOUBLE,
-    futures_close           DOUBLE,
-    futures_prev_close      DOUBLE,
-    futures_log_ret         DOUBLE,
-    prev_futures_vol        DOUBLE,
-    futures_daily_vol       DOUBLE,
-    futures_annual_vol      DOUBLE,
-    applicable_daily_vol    DOUBLE,
-    applicable_annual_vol   DOUBLE,
-    PRIMARY KEY (trade_date, ticker)
-);
- 
--- ── Market activity report ────────────────────────────────────────────────────
- 
-CREATE TABLE IF NOT EXISTS market_activity (
-    trade_date          DATE        NOT NULL,
-    index_name          VARCHAR     NOT NULL,
-    prev_close          DOUBLE,
-    open                DOUBLE,
-    high                DOUBLE,
-    low                 DOUBLE,
-    close               DOUBLE,
-    gain_loss           DOUBLE,
-    PRIMARY KEY (trade_date, index_name)
-);
- 
-CREATE TABLE IF NOT EXISTS market_activity_summary (
-    trade_date          DATE        PRIMARY KEY,
-    traded_value_cr     DOUBLE,
-    traded_qty_lacs     DOUBLE,
-    num_trades          BIGINT,
-    market_cap_cr       DOUBLE
-);
- 
 -- ── Indexes ───────────────────────────────────────────────────────────────────
+
+-- instruments
+CREATE UNIQUE INDEX IF NOT EXISTS idx_instr_identity
+ON instruments (
+    instrument_type,
+    ticker,
+    expiry,
+    strike,
+    option_type,
+    series
+);
+CREATE INDEX IF NOT EXISTS idx_instr_ticker
+ON instruments (ticker);
+CREATE INDEX IF NOT EXISTS idx_instr_expiry
+ON instruments (expiry);
+CREATE INDEX IF NOT EXISTS idx_instr_type
+ON instruments (instrument_type);
+
+
+-- market_data_daily
+CREATE INDEX IF NOT EXISTS idx_market_instr_date
+ON market_data_daily (
+    instrument_key,
+    trade_date
+);
+CREATE INDEX IF NOT EXISTS idx_market_date
+ON market_data_daily (trade_date);
+
+
+-- participant_activity
+CREATE INDEX IF NOT EXISTS idx_participant_date
+ON participant_activity (trade_date);
+CREATE INDEX IF NOT EXISTS idx_participant_type
+ON participant_activity (
+    participant_type,
+    metric_type,
+    asset_class
+);
+
  
-CREATE INDEX IF NOT EXISTS idx_fo_ticker_expiry
-    ON fo_data(ticker, expiry, trade_date);
-CREATE INDEX IF NOT EXISTS idx_fo_instr_date
-    ON fo_data(instrument_type, trade_date);
-CREATE INDEX IF NOT EXISTS idx_opt_ana_lookup
-    ON options_analytics(instrument_type, ticker, expiry);
-CREATE INDEX IF NOT EXISTS idx_fut_ana_lookup
-    ON futures_analytics(instrument_type, ticker, expiry);
- 
-CREATE INDEX IF NOT EXISTS idx_eq_bhav_date
-    ON eq_bhav(trade_date, symbol);
-CREATE INDEX IF NOT EXISTS idx_cm_bhav_date
-    ON cm_bhav(trade_date, ticker);
-CREATE INDEX IF NOT EXISTS idx_fo_volt_ticker
-    ON fo_volatility(ticker, trade_date);
-CREATE INDEX IF NOT EXISTS idx_part_oi_date
-    ON participant_oi(trade_date);
-CREATE INDEX IF NOT EXISTS idx_part_vol_date
-    ON participant_vol(trade_date);
+-- fii_stats
+CREATE INDEX IF NOT EXISTS idx_fii_date
+ON fii_stats (trade_date);
+
+
+-- fo_volatility
+CREATE INDEX IF NOT EXISTS idx_vol_instr_date
+ON fo_volatility (
+    ticker,
+    trade_date
+);
+
+
+-- market_activity_index
+CREATE INDEX IF NOT EXISTS idx_market_index_date
+ON market_activity_index (
+    index_name,
+    trade_date
+);
+
+
+-- options_analytics
+CREATE INDEX IF NOT EXISTS idx_opt_analytics
+ON options_analytics (
+    ticker,
+    expiry,
+    trade_date
+);
+
+
+-- futures_analytics
+CREATE INDEX IF NOT EXISTS idx_fut_analytics
+ON futures_analytics (
+    ticker,
+    expiry,
+    trade_date
+);
 """
  
  
@@ -304,7 +319,12 @@ def list_tickers(asset_type: str) -> list[str]:
     conn = get_conn(read_only=True)
     try:
         rows = conn.execute(
-            "SELECT DISTINCT ticker FROM fo_data WHERE instrument_type = ? ORDER BY ticker",
+            """
+            SELECT DISTINCT ticker
+            FROM instruments
+            WHERE instrument_type = ? AND is_active = TRUE
+            ORDER BY ticker
+            """,
             [instr],
         ).fetchall()
     finally:
@@ -320,8 +340,8 @@ def list_expiries(asset_type: str, ticker: str) -> list[str]:
         rows = conn.execute(
             """
             SELECT DISTINCT CAST(expiry AS VARCHAR) AS exp
-            FROM fo_data
-            WHERE instrument_type = ? AND ticker = ?
+            FROM instruments
+            WHERE instrument_type = ? AND ticker = ? AND expiry IS NOT NULL
             ORDER BY exp
             """,
             [instr, ticker],
@@ -363,26 +383,45 @@ def get_options_data(
     start_date: str,
     end_date: str,
 ) -> pd.DataFrame:
+    """
+    Raw per-strike option chain data for a ticker/expiry/date range.
+    Joins instruments + market_data_daily (replaces old fo_data query).
+    Column aliases preserved so downstream code is unchanged.
+    """
     instr = _instr(asset_type)
     conn = get_conn(read_only=True)
     try:
         df = conn.execute(
             """
             SELECT
-                trade_date, instrument_type AS FinInstrmTp, instrument_id AS FinInstrmId,
-                ticker AS TckrSymb, expiry AS XpryDt, strike AS StrkPric,
-                option_type AS OptnTp, open AS OpnPric, high AS HghPric, low AS LwPric,
-                close AS ClsPric, last AS LastPric, prev_close AS PrvsClsgPric,
-                underlying AS UndrlygPric, settlement AS SttlmPric,
-                open_interest AS OpnIntrst, chng_in_oi AS ChngInOpnIntrst,
-                volume AS TtlTradgVol, turnover AS TtlTrfVal,
-                trade_count AS TtlNbOfTxsExctd, lot_size AS NewBrdLotQty
-            FROM fo_data
-            WHERE instrument_type = ?
-              AND ticker = ?
-              AND expiry = CAST(? AS DATE)
-              AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-            ORDER BY trade_date, strike, option_type
+                m.trade_date,
+                i.instrument_type   AS FinInstrmTp,
+                i.instrument_id     AS FinInstrmId,
+                i.ticker            AS TckrSymb,
+                i.expiry            AS XpryDt,
+                i.strike            AS StrkPric,
+                i.option_type       AS OptnTp,
+                m.open              AS OpnPric,
+                m.high              AS HghPric,
+                m.low               AS LwPric,
+                m.close             AS ClsPric,
+                m.last              AS LastPric,
+                m.prev_close        AS PrvsClsgPric,
+                m.underlying_price  AS UndrlygPric,
+                m.settlement_price  AS SttlmPric,
+                m.open_interest     AS OpnIntrst,
+                m.change_in_oi      AS ChngInOpnIntrst,
+                m.volume            AS TtlTradgVol,
+                m.turnover          AS TtlTrfVal,
+                m.trade_count       AS TtlNbOfTxsExctd,
+                i.lot_size          AS NewBrdLotQty
+            FROM market_data_daily m
+            JOIN instruments i USING (instrument_key)
+            WHERE i.instrument_type = ?
+              AND i.ticker = ?
+              AND i.expiry = CAST(? AS DATE)
+              AND m.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            ORDER BY m.trade_date, i.strike, i.option_type
             """,
             [instr, ticker, expiry, start_date, end_date],
         ).df()
@@ -422,6 +461,7 @@ def get_options_analytics(
         df["trade_date"] = pd.to_datetime(df["trade_date"])
     return df
 
+
 def get_options_cycle_history(
     ticker: str,
     asset_type: str = "stock_options",
@@ -452,6 +492,7 @@ def get_options_cycle_history(
             df["expiry"] = pd.to_datetime(df["expiry"])
 
     return df.replace([np.nan, np.inf, -np.inf], None)
+
 
 def get_options_market_history(
     asset_type: str = "stock_options",
@@ -486,6 +527,7 @@ def get_options_market_history(
             df["expiry"] = pd.to_datetime(df["expiry"])
 
     return df.replace([np.nan, np.inf, -np.inf], None)
+
 
 def get_daily_expiry_snapshot(
     asset_type: str,
@@ -523,9 +565,9 @@ def get_chart_scale(
     metric: str,
 ) -> dict:
     METRIC_COL = {
-        "oi":      "open_interest",
-        "oi_chng": "chng_in_oi",
-        "vol":     "volume",
+        "oi":      "m.open_interest",
+        "oi_chng": "m.change_in_oi",
+        "vol":     "m.volume",
     }
     col = METRIC_COL.get(metric)
     if col is None:
@@ -538,12 +580,13 @@ def get_chart_scale(
             f"""
             SELECT
                 MIN({col}), MAX({col}),
-                MIN(strike), MAX(strike)
-            FROM fo_data
-            WHERE instrument_type = ?
-              AND ticker = ?
-              AND expiry = CAST(? AS DATE)
-              AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                MIN(i.strike),  MAX(i.strike)
+            FROM market_data_daily m
+            JOIN instruments i USING (instrument_key)
+            WHERE i.instrument_type = ?
+              AND i.ticker = ?
+              AND i.expiry = CAST(? AS DATE)
+              AND m.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
               AND {col} != 0
             """,
             [instr, ticker, expiry, start_date, end_date],
@@ -552,12 +595,13 @@ def get_chart_scale(
         gap_row = conn.execute(
             """
             WITH strikes AS (
-                SELECT DISTINCT strike AS s
-                FROM fo_data
-                WHERE instrument_type = ?
-                  AND ticker = ?
-                  AND expiry = CAST(? AS DATE)
-                  AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                SELECT DISTINCT i.strike AS s
+                FROM market_data_daily m
+                JOIN instruments i USING (instrument_key)
+                WHERE i.instrument_type = ?
+                  AND i.ticker = ?
+                  AND i.expiry = CAST(? AS DATE)
+                  AND m.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
                 ORDER BY s
             ),
             diffs AS (
@@ -609,8 +653,11 @@ def get_futures_analytics(asset_type: str, ticker: str, expiry: str) -> pd.DataF
     return df.replace({np.nan: None})
 
 
-def get_futures_rollup(trade_date: str, asset_type: str = "stock_futures", ticker: str | None = None,) -> pd.DataFrame:
-    """Replaces the old rollup.db — computed on the fly from futures_analytics."""
+def get_futures_rollup(
+    trade_date: str,
+    asset_type: str = "stock_futures",
+    ticker: str | None = None,
+) -> pd.DataFrame:
     instr = _instr(asset_type)
     conn = get_conn(read_only=True)
     params = [instr, trade_date]
@@ -623,10 +670,7 @@ def get_futures_rollup(trade_date: str, asset_type: str = "stock_futures", ticke
         params.append(ticker)
     query += " ORDER BY ABS(chng_in_oi) DESC"
     try:
-        df = conn.execute(
-            query,            
-            params,
-        ).df()
+        df = conn.execute(query, params).df()
     finally:
         conn.close()
 
@@ -652,30 +696,22 @@ def get_futures_market_dates(asset_type: str = "stock_futures") -> list[str]:
         conn.close()
     return [r[0] for r in rows]
 
+
 def get_futures_cycle_history(
     ticker: str,
     asset_type: str = "stock_futures",
 ) -> pd.DataFrame:
-    """
-    Full futures analytics history for a ticker,
-    ordered by trade date.
-    """
-
     instr = _instr(asset_type)
-
     conn = get_conn(read_only=True)
-
-    query = """
-        SELECT *
-        FROM futures_analytics
-        WHERE instrument_type = ?
-          AND ticker = ?
-        ORDER BY trade_date ASC
-    """
-
     try:
         df = conn.execute(
-            query,
+            """
+            SELECT *
+            FROM futures_analytics
+            WHERE instrument_type = ?
+              AND ticker = ?
+            ORDER BY trade_date ASC
+            """,
             [instr, ticker],
         ).df()
     finally:
@@ -683,7 +719,6 @@ def get_futures_cycle_history(
 
     if not df.empty:
         df["trade_date"] = pd.to_datetime(df["trade_date"])
-
         if "expiry" in df.columns:
             df["expiry"] = pd.to_datetime(df["expiry"])
 
@@ -691,52 +726,48 @@ def get_futures_cycle_history(
 
 
 # ── Processing state checks ───────────────────────────────────────────────────
- 
-# Maps each processor key → (table, column, value) to check
+# (table, extra_where_clause_or_None, params_list_or_None)
+# Replaces old _PROCESS_CHECK dict — new tables, new keys.
+
 _PROCESS_CHECK = {
-    # F&O (existing)
-    "STF": ("futures_analytics",  "instrument_type", "STF"),
-    "IDF": ("futures_analytics",  "instrument_type", "IDF"),
-    "STO": ("options_analytics",  "instrument_type", "STO"),
-    "IDO": ("options_analytics",  "instrument_type", "IDO"),
-    # New
-    "eq_bhav":   ("eq_bhav",                 None, None),
-    "cm_bhav":   ("cm_bhav",                 None, None),
-    "fii":       ("fii_stats",               None, None),
-    "part_oi":   ("participant_oi",          None, None),
-    "part_vol":  ("participant_vol",         None, None),
-    "fo_volt":   ("fo_volatility",           None, None),
-    "mkt_act":   ("market_activity_summary", None, None),
+    # F&O analytics (unchanged keys, unchanged tables)
+    "STF": ("futures_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["STF", d]),
+    "IDF": ("futures_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["IDF", d]),
+    "STO": ("options_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["STO", d]),
+    "IDO": ("options_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["IDO", d]),
+
+    # Normalized tables — check via segment/instrument_type on market_data_daily
+    "eq_bhav": ("market_data_daily JOIN instruments USING (instrument_key)",
+                "instruments.instrument_type = 'EQ' AND market_data_daily.trade_date = CAST(? AS DATE)",
+                lambda d: [d]),
+    "cm_bhav": ("market_data_daily JOIN instruments USING (instrument_key)",
+                "instruments.segment = 'CM' AND instruments.instrument_type != 'EQ' AND market_data_daily.trade_date = CAST(? AS DATE)",
+                lambda d: [d]),
+
+    # Standalone tables
+    "fii":      ("fii_stats",                "trade_date = CAST(? AS DATE)", lambda d: [d]),
+    "part_oi":  ("participant_activity",     "metric_type = 'OI'  AND trade_date = CAST(? AS DATE)", lambda d: [d]),
+    "part_vol": ("participant_activity",     "metric_type = 'VOL' AND trade_date = CAST(? AS DATE)", lambda d: [d]),
+    "fo_volt":  ("fo_volatility",            "trade_date = CAST(? AS DATE)", lambda d: [d]),
+    "mkt_act":  ("market_activity_summary",  "trade_date = CAST(? AS DATE)", lambda d: [d]),
 }
- 
+
+
 def is_processed(trade_date: str, key: str) -> bool:
-    """
-    Check whether data for a given trade_date exists in the relevant table.
- 
-    For F&O keys (STF/IDF/STO/IDO) also filters by instrument_type.
-    For all other keys just checks trade_date presence.
-    """
     entry = _PROCESS_CHECK.get(key)
     if entry is None:
         raise ValueError(f"Unknown process key: {key!r}")
- 
-    table, col, val = entry
+
+    table, where, params_fn = entry
     conn = get_conn(read_only=True)
     try:
-        if col:
-            result = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE {col} = ? AND trade_date = CAST(? AS DATE)",
-                [val, trade_date],
-            ).fetchone()
-        else:
-            result = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE trade_date = CAST(? AS DATE)",
-                [trade_date],
-            ).fetchone()
+        result = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {where}",
+            params_fn(trade_date),
+        ).fetchone()
         return result[0] > 0
     except Exception as e:
         print(f"[is_processed] ERROR {key} {trade_date}: {e}")
-        print(f"[is_processed] DB path: {NSE_DB_PATH} (exists: {NSE_DB_PATH.exists()})")
         return False
     finally:
         conn.close()

@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime
+from typing import Any
 import requests
 import zipfile
 import io
@@ -42,19 +43,16 @@ def build_fii_url(trade_date: str) -> str:
     return f"{NSE_BASE_URL}/content/fo/fii_stats_{display}.xls"
 
 def build_part_oi_url(trade_date: str) -> str:
-    """2026-05-27 → .../fao_participant_oi_27052026.csv"""
-    compact = trade_date.replace("-", "")
-    return f"{NSE_BASE_URL}/content/nsccl/fao_participant_oi_{compact}.csv"
+    dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
+    return f"{NSE_BASE_URL}/content/nsccl/fao_participant_oi_{dmy}.csv"
 
 def build_part_vol_url(trade_date: str) -> str:
-    """2026-05-27 → .../fao_participant_vol_27052026.csv"""
-    compact = trade_date.replace("-", "")
-    return f"{NSE_BASE_URL}/content/nsccl/fao_participant_vol_{compact}.csv"
+    dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
+    return f"{NSE_BASE_URL}/content/nsccl/fao_participant_vol_{dmy}.csv"
 
 def build_fo_volt_url(trade_date: str) -> str:
-    """2026-05-27 → .../FOVOLT_27052026.csv"""
-    compact = trade_date.replace("-", "")
-    return f"{NSE_BASE_URL}/archives/nsccl/volt/FOVOLT_{compact}.csv"
+    dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
+    return f"{NSE_BASE_URL}/archives/nsccl/volt/FOVOLT_{dmy}.csv"
 
 def build_mkt_act_url(trade_date: str) -> str:
     """2026-05-27 → .../MA270526.csv  (note: 2-digit year)"""

@@ -3,24 +3,36 @@
 import pandas as pd
 import duckdb
 
+_INSTR_STR_COLS = [
+    "exchange", "segment", "instrument_type", "ticker",
+    "instrument_name", "isin", "series", "option_type",
+    "underlying_symbol",
+]
 
 def upsert_instruments(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
     """
     df must have columns matching instruments schema.
     Uses vectorized INSERT via registered DataFrame.
     """
+
+    df = df.copy()
+    for col in _INSTR_STR_COLS:
+        if col in df.columns:
+            df[col] = df[col].where(df[col].notna(), None)
+            df[col] = df[col].astype("string")
+
     conn.register("_instr_stage", df)
+
     conn.execute("""
         INSERT INTO instruments
         SELECT * FROM _instr_stage
-        ON CONFLICT (instrument_type, ticker, expiry, strike, option_type, series)
-        DO UPDATE SET
-            instrument_name  = excluded.instrument_name,
-            isin             = excluded.isin,
-            lot_size         = excluded.lot_size,
-            underlying_symbol= excluded.underlying_symbol,
-            actual_expiry    = excluded.actual_expiry,
-            is_active        = TRUE
+        ON CONFLICT (instrument_key) DO UPDATE SET
+            instrument_name   = excluded.instrument_name,
+            isin              = excluded.isin,
+            lot_size          = excluded.lot_size,
+            underlying_symbol = excluded.underlying_symbol,
+            actual_expiry     = excluded.actual_expiry,
+            is_active         = TRUE
     """)
     conn.unregister("_instr_stage")
 

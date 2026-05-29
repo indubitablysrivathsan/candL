@@ -252,12 +252,16 @@ def process(trade_date: str):
     conn = get_conn()
     try:
         conn.execute("BEGIN")
+
         upsert_instruments(conn, all_instr)
         upsert_market_data(conn, all_mdd)
+
         if not fut_raw.empty:
             _process_futures(conn, fut_raw, trade_date)
+
         if not opt_raw.empty:
             _process_options(conn, opt_raw, trade_date)
+
         conn.execute("COMMIT")
         print(f"[fo] {trade_date} — {len(fut_raw)} fut rows, {len(opt_raw)} opt rows")
     except Exception:

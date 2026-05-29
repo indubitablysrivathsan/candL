@@ -20,7 +20,7 @@ import re
 import pandas as pd
 from pathlib import Path
 
-from config import MKT_ACTIVITY_ROOT
+from config import MKT_ACT_ROOT
 from api.db import get_conn, is_processed
 
 
@@ -29,8 +29,7 @@ from api.db import get_conn, is_processed
 def _raw_path(trade_date: str) -> Path:
     dt = pd.to_datetime(trade_date)
     # NSE names these MA{DDMMYY}.csv  e.g. MA260526.csv
-    fname = f"MA{dt.strftime('%d%m%y')}.csv"
-    return Path(MKT_ACTIVITY_ROOT) / dt.strftime("%Y") / dt.strftime("%m") / fname
+    return Path(MKT_ACT_ROOT) / dt.strftime("%Y") / dt.strftime("%m") / f"{trade_date}.csv"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -57,8 +56,14 @@ def _parse(path: Path, trade_date: str) -> tuple[dict, pd.DataFrame]:
         summary  : dict  matching market_activity_summary columns
         idx_df   : DataFrame matching market_activity_index columns
     """
-    raw = pd.read_csv(path, header=None, dtype=str)
-
+    raw = pd.read_csv(
+        path,
+        header=None,
+        dtype=str,
+        names=range(12),        # declare 12 columns, extras become NaN
+        on_bad_lines='skip',    # skip the narrative line safely
+        engine='python',
+    )
     # ── Locate key rows by scanning column A labels ──────────────────────────
     summary = {
         "trade_date":      trade_date,
