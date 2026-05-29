@@ -42,8 +42,17 @@ def _load(trade_date: str) -> pd.DataFrame:
 
 def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["expiry_d"]  = pd.to_datetime(df["XpryDt"], dayfirst=True, errors="coerce").dt.date
-    df["act_exp_d"] = pd.to_datetime(df["FininstrmActlXpryDt"], dayfirst=True, errors="coerce").dt.date
+    df["expiry_d"] = pd.to_datetime(
+        df["XpryDt"],
+        format="%Y-%m-%d",
+        errors="coerce"
+    ).dt.date
+
+    df["act_exp_d"] = pd.to_datetime(
+        df["FininstrmActlXpryDt"],
+        format="%Y-%m-%d",
+        errors="coerce"
+    ).dt.date
     df["strike_f"]  = pd.to_numeric(df["StrkPric"], errors="coerce")
     df["lot_i"]     = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
 

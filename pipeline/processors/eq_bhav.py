@@ -79,8 +79,6 @@ def process(trade_date: str):
     conn = get_conn()
     try:
         conn.execute("BEGIN")
-        print(instr.columns.tolist())
-        print(instr.dtypes)
         upsert_instruments(conn, instr)
         upsert_market_data(conn, mdd)
         conn.execute("COMMIT")

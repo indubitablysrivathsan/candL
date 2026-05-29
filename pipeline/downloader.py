@@ -1,5 +1,7 @@
 from pathlib import Path
 from datetime import datetime
+from io import StringIO
+import pandas as pd
 from typing import Any
 import requests
 import zipfile
@@ -18,6 +20,63 @@ HEADERS = {
 
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
+
+# ── Validators ───────────────────────────────────────────────────────────────
+
+def validate_eq_bhav(content: bytes, expected_date: str) -> bool:
+    df = pd.read_csv(StringIO(content.decode("utf-8")))
+    df.columns = df.columns.str.strip()
+
+    actual = (
+        pd.to_datetime(
+            df["DATE1"].astype(str).str.strip().iloc[0],
+            format="%d-%b-%Y"
+        )
+        .strftime("%Y-%m-%d")
+    )
+
+    return actual == expected_date
+
+def validate_cm_bhav(csv_bytes: bytes, expected_date: str) -> bool:
+    df = pd.read_csv(StringIO(csv_bytes.decode("utf-8")))
+    df.columns = df.columns.str.strip()
+
+    actual = pd.to_datetime(
+        df["BizDt"].iloc[0],
+        format="%d-%m-%Y"
+    ).strftime("%Y-%m-%d")
+
+    return actual == expected_date
+
+def validate_fo_bhav(csv_bytes: bytes, expected_date: str) -> bool:
+    df = pd.read_csv(StringIO(csv_bytes.decode("utf-8")))
+    df.columns = df.columns.str.strip()
+    actual = pd.to_datetime(
+        df["BizDt"].iloc[0],
+        format="%d-%m-%Y"
+    ).strftime("%Y-%m-%d")
+
+    return actual == expected_date
+
+def validate_fo_volt(content: bytes, expected_date: str) -> bool:
+    df = pd.read_csv(StringIO(content.decode("utf-8")))
+    df.columns = df.columns.str.strip()
+    actual = pd.to_datetime(
+        df["Date"].iloc[0],
+        format="%d-%b-%y"
+    ).strftime("%Y-%m-%d")
+
+    return actual == expected_date
+
+def validate_or_market_closed(
+    valid: bool,
+    trade_date: str
+) -> str:
+
+    if valid:
+        return "complete"
+
+    return "market_closed"
 
 
 # ── URL builders ──────────────────────────────────────────────────────────────
@@ -121,9 +180,19 @@ def download_fo_bhav(trade_date: str) -> str:
 
 def download_eq_bhav(trade_date: str) -> str:
     content, status = _fetch(build_eq_bhav_url(trade_date), trade_date)
-    if status == "complete":
-        _output_path(EQ_BHAV_ROOT, trade_date).write_bytes(content)
-    return status
+
+    if status != "complete":
+        return status
+
+    if not validate_eq_bhav(content, trade_date):
+        print(
+            f"[eq_bhav] stale file detected "
+            f"(requested={trade_date})"
+        )
+        return "market_closed"
+
+    _output_path(EQ_BHAV_ROOT, trade_date).write_bytes(content)
+    return "complete"
 
 
 def download_cm_bhav(trade_date: str) -> str:
