@@ -179,7 +179,7 @@ function IndexSnapshot({ marketDates }) {
         <div className="flex justify-center py-8"><LoadingSpinner /></div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-          {data.map((idx) => (
+          {data.filter((idx) => idx.close != null && idx.pct_change != null).map((idx) => (
             <MetricCard
               key={idx.index_name}
               title={idx.index_name}
