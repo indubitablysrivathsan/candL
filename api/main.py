@@ -51,7 +51,7 @@ app = FastAPI(
 
 from api.routes.futures        import futures_router, index_futures_router
 from api.routes.options        import options_router, index_options_router
-from api.routes.stocks_indexes import stocks_router
+from api.routes                import stocks, participant, market, discovery
 
 # ── CORS — allow the React dev server ─────────────────────────────────────────
 app.add_middleware(
@@ -67,8 +67,10 @@ app.include_router(futures_router,       prefix=API_PREFIX)
 app.include_router(index_futures_router, prefix=API_PREFIX)
 app.include_router(options_router,       prefix=API_PREFIX)
 app.include_router(index_options_router, prefix=API_PREFIX)
-app.include_router(stocks_router,        prefix=API_PREFIX)
-
+app.include_router(stocks.router,               prefix=API_PREFIX)
+app.include_router(participant.router,   prefix=API_PREFIX)
+app.include_router(market.router,        prefix=API_PREFIX)
+app.include_router(discovery.router,     prefix=API_PREFIX)
 # ── Health check ──────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():

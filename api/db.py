@@ -725,6 +725,666 @@ def get_futures_cycle_history(
     return df.replace([np.nan, np.inf, -np.inf], None)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# STOCKS  (EQ instruments via market_data_daily + instruments)
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def get_eq_tickers() -> list[str]:
+    """All active EQ tickers."""
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT ticker
+            FROM instruments
+            WHERE instrument_type = 'EQ' AND is_active = TRUE
+            ORDER BY ticker
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+ 
+ 
+def get_eq_ohlc(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """
+    OHLCV + delivery data for a single EQ ticker over a date range.
+    Joins market_data_daily with instruments for metadata.
+    """
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT
+                m.trade_date,
+                i.ticker,
+                i.instrument_name,
+                i.isin,
+                m.open,
+                m.high,
+                m.low,
+                m.close,
+                m.last,
+                m.prev_close,
+                m.avg_price,
+                m.volume,
+                m.turnover,
+                m.trade_count,
+                m.delivery_qty,
+                m.delivery_pct
+            FROM market_data_daily m
+            JOIN instruments i USING (instrument_key)
+            WHERE i.instrument_type = 'EQ'
+              AND i.ticker = ?
+              AND m.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            ORDER BY m.trade_date
+            """,
+            [ticker, start_date, end_date],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_eq_snapshot(trade_date: str, limit: int = 200) -> pd.DataFrame:
+    """
+    Cross-sectional snapshot of all EQ tickers for a given date.
+    Computes pct_change, delivery_pct, volume, turnover.
+    Used for screener / heatmap.
+    """
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT
+                i.ticker,
+                i.instrument_name,
+                i.isin,
+                m.trade_date,
+                m.open,
+                m.high,
+                m.low,
+                m.close,
+                m.prev_close,
+                m.avg_price,
+                m.volume,
+                m.turnover,
+                m.trade_count,
+                m.delivery_qty,
+                m.delivery_pct,
+                ROUND(
+                    (m.close - m.prev_close) / NULLIF(m.prev_close, 0) * 100,
+                    2
+                ) AS pct_change
+            FROM market_data_daily m
+            JOIN instruments i USING (instrument_key)
+            WHERE i.instrument_type = 'EQ'
+              AND m.trade_date = CAST(? AS DATE)
+              AND m.close IS NOT NULL
+              AND m.prev_close IS NOT NULL
+            ORDER BY ABS(
+                (m.close - m.prev_close) / NULLIF(m.prev_close, 0)
+            ) DESC NULLS LAST
+            LIMIT ?
+            """,
+            [trade_date, limit],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_eq_delivery_leaders(trade_date: str, top_n: int = 50) -> pd.DataFrame:
+    """
+    Top stocks by delivery percentage on a given date.
+    High delivery % = strong institutional / conviction buying.
+    """
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT
+                i.ticker,
+                i.instrument_name,
+                m.close,
+                m.prev_close,
+                ROUND(
+                    (m.close - m.prev_close) / NULLIF(m.prev_close, 0) * 100,
+                    2
+                ) AS pct_change,
+                m.volume,
+                m.turnover,
+                m.delivery_qty,
+                m.delivery_pct
+            FROM market_data_daily m
+            JOIN instruments i USING (instrument_key)
+            WHERE i.instrument_type = 'EQ'
+              AND m.trade_date = CAST(? AS DATE)
+              AND m.delivery_pct IS NOT NULL
+            ORDER BY m.delivery_pct DESC NULLS LAST
+            LIMIT ?
+            """,
+            [trade_date, top_n],
+        ).df()
+    finally:
+        conn.close()
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_eq_available_dates() -> list[str]:
+    """All trade dates available in the EQ dataset."""
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT CAST(m.trade_date AS VARCHAR) AS td
+            FROM market_data_daily m
+            JOIN instruments i USING (instrument_key)
+            WHERE i.instrument_type = 'EQ'
+            ORDER BY td
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+ 
+ 
+def get_eq_rolling_stats(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """
+    Returns daily returns + rolling 20d and 5d delivery_pct average.
+    Useful for signal construction research.
+    """
+    df = get_eq_ohlc(ticker, start_date, end_date)
+    if df.empty:
+        return df
+ 
+    df = df.sort_values("trade_date").copy()
+    df["daily_return"] = df["close"].pct_change() * 100
+    df["delivery_pct_ma5"] = df["delivery_pct"].rolling(5, min_periods=1).mean()
+    df["delivery_pct_ma20"] = df["delivery_pct"].rolling(20, min_periods=1).mean()
+    df["volume_ma20"] = df["volume"].rolling(20, min_periods=1).mean()
+    df["rel_volume"] = df["volume"] / df["volume_ma20"]
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# PARTICIPANT ACTIVITY
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def get_participant_net_oi(
+    start_date: str,
+    end_date: str,
+    asset_class: str = "INDEX",   # INDEX | STOCK
+) -> pd.DataFrame:
+    """
+    Net OI (long - short) per participant per day.
+    Used for FII/DII/Client/Pro net positioning time series.
+    Returns columns: trade_date, participant_type, net_oi_futures, net_oi_ce, net_oi_pe
+    """
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT
+                trade_date,
+                participant_type,
+                option_side,
+                SUM(CASE WHEN direction = 'long'  THEN contracts ELSE 0 END) AS long_contracts,
+                SUM(CASE WHEN direction = 'short' THEN contracts ELSE 0 END) AS short_contracts,
+                SUM(CASE WHEN direction = 'long'  THEN contracts ELSE 0 END)
+                - SUM(CASE WHEN direction = 'short' THEN contracts ELSE 0 END) AS net_contracts
+            FROM participant_activity
+            WHERE metric_type = 'OI'
+              AND asset_class = ?
+              AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            GROUP BY trade_date, participant_type, option_side
+            ORDER BY trade_date, participant_type, option_side
+            """,
+            [asset_class, start_date, end_date],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_participant_net_vol(
+    start_date: str,
+    end_date: str,
+    asset_class: str = "INDEX",
+) -> pd.DataFrame:
+    """Net trading volume (buy - sell) per participant per day."""
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT
+                trade_date,
+                participant_type,
+                option_side,
+                SUM(CASE WHEN direction = 'long'  THEN contracts ELSE 0 END) AS buy_contracts,
+                SUM(CASE WHEN direction = 'short' THEN contracts ELSE 0 END) AS sell_contracts,
+                SUM(CASE WHEN direction = 'long'  THEN contracts ELSE 0 END)
+                - SUM(CASE WHEN direction = 'short' THEN contracts ELSE 0 END) AS net_contracts
+            FROM participant_activity
+            WHERE metric_type = 'VOL'
+              AND asset_class = ?
+              AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            GROUP BY trade_date, participant_type, option_side
+            ORDER BY trade_date, participant_type, option_side
+            """,
+            [asset_class, start_date, end_date],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_participant_latest(asset_class: str = "INDEX") -> pd.DataFrame:
+    """
+    Most recent day's full breakdown for all participants.
+    Shows the current positioning table.
+    """
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT *
+            FROM participant_activity
+            WHERE metric_type = 'OI'
+              AND asset_class = ?
+              AND trade_date = (
+                SELECT MAX(trade_date)
+                FROM participant_activity
+                WHERE metric_type = 'OI' AND asset_class = ?
+              )
+            ORDER BY participant_type, option_side, direction
+            """,
+            [asset_class, asset_class],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_participant_available_dates() -> list[str]:
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT CAST(trade_date AS VARCHAR) AS td
+            FROM participant_activity
+            ORDER BY td
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# FII STATISTICS
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def get_fii_stats(
+    start_date: str,
+    end_date: str,
+    instruments: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    FII derivatives stats for a date range.
+    Optionally filter by instrument names.
+    Adds net_contracts and net_amount_cr columns.
+    """
+    where = "trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)"
+    params = [start_date, end_date]
+ 
+    if instruments:
+        placeholders = ", ".join(["?" for _ in instruments])
+        where += f" AND instrument IN ({placeholders})"
+        params.extend(instruments)
+ 
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            f"""
+            SELECT
+                trade_date,
+                instrument,
+                buy_contracts,
+                buy_amount_cr,
+                sell_contracts,
+                sell_amount_cr,
+                oi_contracts,
+                oi_amount_cr,
+                buy_contracts - sell_contracts AS net_contracts,
+                buy_amount_cr - sell_amount_cr AS net_amount_cr
+            FROM fii_stats
+            WHERE {where}
+            ORDER BY trade_date, instrument
+            """,
+            params,
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_fii_index_futures_flow(
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """
+    Convenience: FII net index futures positions over time.
+    The key research signal — lagged against Nifty returns.
+    """
+    return get_fii_stats(
+        start_date, end_date,
+        instruments=["INDEX FUTURES", "NIFTY FUTURES", "BANKNIFTY FUTURES"]
+    )
+ 
+ 
+def get_fii_available_dates() -> list[str]:
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT CAST(trade_date AS VARCHAR) AS td
+            FROM fii_stats ORDER BY td
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+ 
+ 
+def get_fii_instruments() -> list[str]:
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT instrument FROM fii_stats ORDER BY instrument"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# FO VOLATILITY
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def get_volatility(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """EWMA volatility series for a ticker (underlying + futures)."""
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT *
+            FROM fo_volatility
+            WHERE ticker = ?
+              AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            ORDER BY trade_date
+            """,
+            [ticker, start_date, end_date],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_volatility_snapshot(trade_date: str, top_n: int = 50) -> pd.DataFrame:
+    """
+    Cross-sectional volatility snapshot — all tickers on one date.
+    Useful for vol screener / ranking.
+    """
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT *
+            FROM fo_volatility
+            WHERE trade_date = CAST(? AS DATE)
+            ORDER BY applicable_annual_vol DESC NULLS LAST
+            LIMIT ?
+            """,
+            [trade_date, top_n],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_volatility_tickers() -> list[str]:
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT ticker FROM fo_volatility ORDER BY ticker"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+ 
+ 
+def get_volatility_available_dates() -> list[str]:
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT CAST(trade_date AS VARCHAR) AS td
+            FROM fo_volatility ORDER BY td
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# MARKET ACTIVITY
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def get_market_summary(
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """Market-wide daily summary: traded value, qty, trades, market cap."""
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT *
+            FROM market_activity_summary
+            WHERE trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            ORDER BY trade_date
+            """,
+            [start_date, end_date],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_market_index_history(
+    index_name: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """OHLC history for a named index (e.g. 'Nifty 50')."""
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT *
+            FROM market_activity_index
+            WHERE index_name = ?
+              AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            ORDER BY trade_date
+            """,
+            [index_name, start_date, end_date],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_market_index_snapshot(trade_date: str) -> pd.DataFrame:
+    """All index values for a given date."""
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            """
+            SELECT *
+            FROM market_activity_index
+            WHERE trade_date = CAST(? AS DATE)
+            ORDER BY index_name
+            """,
+            [trade_date],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+        df["pct_change"] = (df["gain_loss"] / df["prev_close"] * 100).round(2)
+    return df.replace([np.nan, np.inf, -np.inf], None)
+ 
+ 
+def get_market_available_dates() -> list[str]:
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT CAST(trade_date AS VARCHAR) AS td
+            FROM market_activity_summary ORDER BY td
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+ 
+ 
+def get_market_index_names() -> list[str]:
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT index_name FROM market_activity_index ORDER BY index_name"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [r[0] for r in rows]
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# RESEARCH HELPERS — Signal construction
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def get_fii_vs_nifty(
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """
+    Combines FII net index futures OI with Nifty 50 daily returns.
+    Ready for lagged-correlation research.
+ 
+    Returns columns:
+        trade_date
+        fii_net_oi          (long - short contracts, INDEX FUTURES)
+        nifty_close
+        nifty_return_pct    (daily pct change)
+    """
+    conn = get_conn(read_only=True)
+    try:
+        fii = conn.execute(
+            """
+            SELECT
+                trade_date,
+                SUM(CASE WHEN direction = 'long'  THEN contracts ELSE 0 END)
+                - SUM(CASE WHEN direction = 'short' THEN contracts ELSE 0 END)
+                    AS fii_net_oi
+            FROM participant_activity
+            WHERE metric_type = 'OI'
+              AND asset_class = 'INDEX'
+              AND participant_type = 'FII'
+              AND option_side = 'NA'
+              AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            GROUP BY trade_date
+            ORDER BY trade_date
+            """,
+            [start_date, end_date],
+        ).df()
+ 
+        nifty = conn.execute(
+            """
+            SELECT
+                trade_date,
+                close AS nifty_close,
+                ROUND(
+                    (close - prev_close) / NULLIF(prev_close, 0) * 100,
+                    4
+                ) AS nifty_return_pct
+            FROM market_activity_index
+            WHERE index_name = 'Nifty 50'
+              AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            ORDER BY trade_date
+            """,
+            [start_date, end_date],
+        ).df()
+    finally:
+        conn.close()
+ 
+    if fii.empty or nifty.empty:
+        return pd.DataFrame()
+ 
+    fii["trade_date"] = pd.to_datetime(fii["trade_date"])
+    nifty["trade_date"] = pd.to_datetime(nifty["trade_date"])
+ 
+    merged = pd.merge(fii, nifty, on="trade_date", how="inner")
+    merged["fii_net_oi_lag1"] = merged["fii_net_oi"].shift(1)
+    merged["nifty_return_next"] = merged["nifty_return_pct"].shift(-1)
+    return merged.replace([np.nan, np.inf, -np.inf], None)
+
+
 # ── Processing state checks ───────────────────────────────────────────────────
 # (table, extra_where_clause_or_None, params_list_or_None)
 # Replaces old _PROCESS_CHECK dict — new tables, new keys.

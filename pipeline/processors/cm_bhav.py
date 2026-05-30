@@ -29,7 +29,7 @@ def process(trade_date: str):
     df = pd.read_csv(p, low_memory=False)
     df.columns = df.columns.str.strip()
 
-    trade_dt = pd.to_datetime(df["TradDt"].iloc[0], dayfirst=True).date()
+    trade_dt = pd.to_datetime(df["TradDt"].iloc[0], format="%Y-%m-%d", errors="coerce").date()
 
     df["series_"] = df["SctySrs"].fillna("").str.strip()
     df["itype"]   = df["FinInstrmTp"].fillna("STK").str.strip()

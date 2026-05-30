@@ -32,6 +32,38 @@ export async function healthCheck() {
    Works for: options | index_options | futures | index_futures
 ========================================= */
 
+export const discovery = {
+  /** All tickers grouped by asset type. Pass assetType to filter. */
+  tickers: (assetType = null) => {
+    const p = assetType ? `?asset_type=${encodeURIComponent(assetType)}` : '';
+    return request(`/discovery/tickers${p}`);
+  },
+
+  /** Most recent available date per data domain. */
+  dates: () =>
+    request('/discovery/dates'),
+
+  /** What's available for a single ticker across all asset types. */
+  tickerInfo: (ticker) =>
+    request(`/discovery/ticker/${encodeURIComponent(ticker)}`),
+
+  /** Row count summary per table for a date range — ingestion sanity check. */
+  coverage: (startDate, endDate) => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
+    return request(`/discovery/coverage?${p}`);
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADMIN
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const admin = {
+  /** Processing status for every data domain on a given trade date. */
+  status: (tradeDate) =>
+    request(`/admin/status/${encodeURIComponent(tradeDate)}`),
+};
+
 export async function getTickers(assetType = 'stock_options') {
   return request(`/api/v1/${assetType}/tickers`);
 }
@@ -335,6 +367,147 @@ export async function getFuturesCombinedHistory(assetType = 'stock_futures', all
     })),
   };
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STOCKS (EQ)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const stocks = {
+  tickers: () =>
+    request('/stocks/tickers'),
+
+  dates: () =>
+    request('/stocks/dates'),
+
+  ohlc: (ticker, startDate, endDate) => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
+    return request(`/stocks/${encodeURIComponent(ticker)}/ohlc?${p}`);
+  },
+
+  rolling: (ticker, startDate, endDate) => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
+    return request(`/stocks/${encodeURIComponent(ticker)}/rolling?${p}`);
+  },
+
+  snapshot: (tradeDate, limit = 200) => {
+    const p = new URLSearchParams({ trade_date: tradeDate, limit });
+    return request(`/stocks/snapshot?${p}`);
+  },
+
+  deliveryLeaders: (tradeDate, topN = 50) => {
+    const p = new URLSearchParams({ trade_date: tradeDate, top_n: topN });
+    return request(`/stocks/delivery-leaders?${p}`);
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PARTICIPANT ACTIVITY
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const participant = {
+  dates: () =>
+    request('/participant/dates'),
+
+  netOI: (startDate, endDate, assetClass = 'INDEX') => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate, asset_class: assetClass });
+    return request(`/participant/net-oi?${p}`);
+  },
+
+  netVol: (startDate, endDate, assetClass = 'INDEX') => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate, asset_class: assetClass });
+    return request(`/participant/net-vol?${p}`);
+  },
+
+  latest: (assetClass = 'INDEX') => {
+    const p = new URLSearchParams({ asset_class: assetClass });
+    return request(`/participant/latest?${p}`);
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARKET ACTIVITY
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const market = {
+  dates: () =>
+    request('/market/dates'),
+
+  indexNames: () =>
+    request('/market/index-names'),
+
+  summary: (startDate, endDate) => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
+    return request(`/market/summary?${p}`);
+  },
+
+  indexHistory: (indexName, startDate, endDate) => {
+    const p = new URLSearchParams({ index_name: indexName, start_date: startDate, end_date: endDate });
+    return request(`/market/index-history?${p}`);
+  },
+
+  indexSnapshot: (tradeDate) => {
+    const p = new URLSearchParams({ trade_date: tradeDate });
+    return request(`/market/index-snapshot?${p}`);
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FII STATISTICS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const fii = {
+  dates: () =>
+    request('/fii/dates'),
+
+  instruments: () =>
+    request('/fii/instruments'),
+
+  stats: (startDate, endDate, instruments) => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
+    if (instruments?.length) p.append('instruments', instruments.join(','));
+    return request(`/fii/stats?${p}`);
+  },
+
+  indexFlow: (startDate, endDate) => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
+    return request(`/fii/index-flow?${p}`);
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOLATILITY
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const volatility = {
+  tickers: () =>
+    request('/volatility/tickers'),
+
+  dates: () =>
+    request('/volatility/dates'),
+
+  series: (ticker, startDate, endDate) => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
+    return request(`/volatility/${encodeURIComponent(ticker)}?${p}`);
+  },
+
+  snapshot: (tradeDate, topN = 50) => {
+    const p = new URLSearchParams({ trade_date: tradeDate, top_n: topN });
+    return request(`/volatility/snapshot?${p}`);
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESEARCH
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const research = {
+  fiiVsNifty: (startDate, endDate) => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
+    return request(`/research/fii-vs-nifty?${p}`);
+  },
+};
+
 
 /* =========================================
    MARKET DATES

@@ -23,6 +23,14 @@ const navItems = [
     label: 'Stocks',
     path: '/stocks'
   },
+  {
+    label: 'Market',
+    path: '/market'
+  },
+  {
+    label: 'Participants',
+    path: '/participants'
+  },
 ];
 
 export default function Navbar() {

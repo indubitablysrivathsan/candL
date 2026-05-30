@@ -82,7 +82,7 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
 
 def _build_market_data(df: pd.DataFrame) -> pd.DataFrame:
     d = pd.DataFrame()
-    d["trade_date"]      = pd.to_datetime(df["TradDt"], dayfirst=True, errors="coerce").dt.date
+    d["trade_date"]      = pd.to_datetime(df["TradDt"], format="%Y-%m-%d", errors="coerce").dt.date
     d["instrument_key"]  = df["instrument_key"]
     d["open"]            = pd.to_numeric(df["OpnPric"],        errors="coerce")
     d["high"]            = pd.to_numeric(df["HghPric"],        errors="coerce")
