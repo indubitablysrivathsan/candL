@@ -1,20 +1,50 @@
 """
-market_activity processor — MA{DDMMYY}.csv
-→ market_activity_summary  (one row per trade_date)
-→ market_activity_index    (one row per trade_date × index_name)
+processors/mkt_act.py
+==============================
+Parses the full MA{DDMMYY}.csv file from NSE and loads all five data sections:
 
-File layout (all values in a single sheet, no fixed header row):
-  Row 0  : date string in column B (index 1), rest blank
-  Row 1  : narrative text
+  1. market_activity_summary    — traded value / qty / trades / market cap
+  2. market_activity_index      — all index OHLC rows
+  3. market_activity_breadth    — advances / declines / unchanged / price-band hits
+  4. market_activity_top_stocks — top-25 by value, top-5 gainers, top-5 losers
+  5. market_activity_security   — every symbol's close / traded value / qty
+
+File layout (single-column CSV, no fixed header row):
+  Row 0  : date string in col B (index 1), rest blank
+  Row 1  : narrative text (intraday range blurb) — skip
   Row 2  : blank separator
-  Row 3  : "Traded Value (Rs. In Crores)"   → col B
-  Row 4  : "Traded Quantity (in Lakhs)"      → col B
-  Row 5  : "Number of Trades"                → col B
-  Row 6  : "Total Market Capitalisation ..."  → col B
+  Row 3  : "Traded Value (Rs. In Crores)"     → col B = label, col C = value
+  Row 4  : "Traded Quantity (in Lakhs)"        → col B = label, col C = value
+  Row 5  : "Number of Trades"                  → col B = label, col C = value
+  Row 6  : "Total Market Capitalisation ..."   → col B = label, col C = value
   Row 7  : blank separator
-  Row 8  : header row  (INDEX | PREVIOUS CLOSE | OPEN | HIGH | LOW | CLOSE | GAIN/LOSS)
-  Row 9+ : index data rows
+  Row 8  : INDEX header row
+  Row 9+ : index rows  (until blank / next section)
+  ...
+  After indices:
+    ",ADVANCES,<n>"
+    ",DECLINES,<n>"
+    ",UNCHANGED,<n>"
+    blank
+    ",Total securities that have hit their price bands today,<n>"
+    blank
+    ",TOP 25 Securities Today :"
+    ",SYMBOL,SERIES,PREV. CLOSE,CLOSE PRICE,%VAR,VALUE(Rs Crs)"
+    25 rows …
+    blank
+    ",Top Five Nifty 50 Gainers:"
+    ",SYMBOL,SERIES,CLOSE PRICE,PREV.CLOSE,%CHANGE"
+    5 rows …
+    blank
+    ",Top Five Nifty 50 Losers:"
+    5 rows …
+    blank
+    ",Securities Price Volume Data in Normal market"
+    ",SYMBOL,SERIES,CLOSE PRICE,TRADED VALUE,TRADED QUANTITY"
+    … many thousands of rows …
 """
+
+from __future__ import annotations
 
 import re
 import pandas as pd
@@ -28,43 +58,54 @@ from api.db import get_conn, is_processed
 
 def _raw_path(trade_date: str) -> Path:
     dt = pd.to_datetime(trade_date)
-    # NSE names these MA{DDMMYY}.csv  e.g. MA260526.csv
     return Path(MKT_ACT_ROOT) / dt.strftime("%Y") / dt.strftime("%m") / f"{trade_date}.csv"
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Value coercions ───────────────────────────────────────────────────────────
 
-def _to_float(val) -> float | None:
+def _float(val) -> float | None:
     try:
         return float(str(val).replace(",", "").strip())
     except (ValueError, TypeError):
         return None
 
 
-def _to_int(val) -> int | None:
+def _int(val) -> int | None:
     try:
         return int(str(val).replace(",", "").strip())
     except (ValueError, TypeError):
-        return None
+        v = _float(val)
+        return int(v) if v is not None else None
 
 
-# ── Parser ────────────────────────────────────────────────────────────────────
+def _str(val) -> str | None:
+    s = str(val).strip()
+    return s if s and s.lower() != "nan" else None
 
-def _parse(path: Path, trade_date: str) -> tuple[dict, pd.DataFrame]:
-    """
-    Returns:
-        summary  : dict  matching market_activity_summary columns
-        idx_df   : DataFrame matching market_activity_index columns
-    """
+
+# ── Section detector helpers ──────────────────────────────────────────────────
+
+def _is_blank(row: pd.Series) -> bool:
+    return all(str(v).strip() in ("", "nan") for v in row)
+
+
+def _col(row: pd.Series, idx: int):
+    """Safe column access."""
+    return row.iloc[idx] if len(row) > idx else None
+
+
+# ── Main parser ───────────────────────────────────────────────────────────────
+
+def _parse(path: Path, trade_date: str) -> dict:
     raw = pd.read_csv(
         path,
         header=None,
         dtype=str,
-        names=range(12),        # declare 12 columns, extras become NaN
-        on_bad_lines='skip',    # skip the narrative line safely
-        engine='python',
+        names=range(12),
+        on_bad_lines="skip",
+        engine="python",
     )
-    # ── Locate key rows by scanning column A labels ──────────────────────────
+
     summary = {
         "trade_date":      trade_date,
         "traded_value_cr": None,
@@ -72,54 +113,141 @@ def _parse(path: Path, trade_date: str) -> tuple[dict, pd.DataFrame]:
         "num_trades":      None,
         "market_cap_cr":   None,
     }
+    breadth = {
+        "trade_date":      trade_date,
+        "advances":        None,
+        "declines":        None,
+        "unchanged":       None,
+        "price_band_hits": None,
+    }
+    index_rows: list[dict] = []
 
-    index_header_row = None   # row index where INDEX/PREVIOUS CLOSE header sits
+    mode = "PREAMBLE"
 
-    for i, row in raw.iterrows():
-        label = str(row.iloc[1] if len(row) > 1 else "").strip()   # col B
-        label_upper = label.upper()
+    for _, row in raw.iterrows():
+        b = _str(_col(row, 1)) or ""
+        c = _col(row, 2)
+        b_upper = b.upper()
 
-        if "TRADED VALUE" in label_upper:
-            summary["traded_value_cr"] = _to_float(row.iloc[2] if len(row) > 2 else None)
-        elif "TRADED QUANTITY" in label_upper:
-            summary["traded_qty_lacs"] = _to_float(row.iloc[2] if len(row) > 2 else None)
-        elif "NUMBER OF TRADES" in label_upper:
-            summary["num_trades"] = _to_int(row.iloc[2] if len(row) > 2 else None)
-        elif "MARKET CAPITALISATION" in label_upper or "MARKET CAP" in label_upper:
-            summary["market_cap_cr"] = _to_float(row.iloc[2] if len(row) > 2 else None)
-        elif label_upper == "INDEX":
-            index_header_row = i
+        if _is_blank(row):
+            continue
 
-    # ── Parse index rows ──────────────────────────────────────────────────────
-    idx_rows = []
-    if index_header_row is not None:
-        for i in range(index_header_row + 1, len(raw)):
-            row = raw.iloc[i]
-            name = str(row.iloc[1] if len(row) > 1 else "").strip()
-            if not name or name.upper() in ("", "NAN", "INDEX"):
+        if "TRADED VALUE" in b_upper:
+            summary["traded_value_cr"] = _float(c)
+            continue
+        if "TRADED QUANTITY" in b_upper:
+            summary["traded_qty_lacs"] = _float(c)
+            continue
+        if "NUMBER OF TRADES" in b_upper:
+            summary["num_trades"] = _int(c)
+            continue
+        if "MARKET CAPITALISATION" in b_upper or "MARKET CAP" in b_upper:
+            summary["market_cap_cr"] = _float(c)
+            continue
+
+        if b_upper == "INDEX":
+            mode = "INDEX"
+            continue
+
+        if mode == "INDEX":
+            if b_upper in ("ADVANCES", "DECLINES", "UNCHANGED"):
+                mode = "POST_INDEX"
+                # fall through to breadth handling
+            else:
+                index_rows.append({
+                    "trade_date": trade_date,
+                    "index_name": b,
+                    "prev_close": _float(_col(row, 2)),
+                    "open":       _float(_col(row, 3)),
+                    "high":       _float(_col(row, 4)),
+                    "low":        _float(_col(row, 5)),
+                    "close":      _float(_col(row, 6)),
+                    "gain_loss":  _float(_col(row, 7)),
+                })
                 continue
-            # Stop if we hit another section header or trailing blank block
-            if re.match(r"^\s*$", name):
-                continue
 
-            idx_rows.append({
-                "trade_date":  trade_date,
-                "index_name":  name,
-                "prev_close":  _to_float(row.iloc[2] if len(row) > 2 else None),
-                "open":        _to_float(row.iloc[3] if len(row) > 3 else None),
-                "high":        _to_float(row.iloc[4] if len(row) > 4 else None),
-                "low":         _to_float(row.iloc[5] if len(row) > 5 else None),
-                "close":       _to_float(row.iloc[6] if len(row) > 6 else None),
-                "gain_loss":   _to_float(row.iloc[7] if len(row) > 7 else None),
-            })
+        if mode == "POST_INDEX":
+            if b_upper == "ADVANCES":
+                breadth["advances"] = _int(c)
+            elif b_upper == "DECLINES":
+                breadth["declines"] = _int(c)
+            elif b_upper == "UNCHANGED":
+                breadth["unchanged"] = _int(c)
+            elif "PRICE BAND" in b_upper:
+                breadth["price_band_hits"] = _int(c)
+                break  # done — nothing useful after this
+            continue
 
-    idx_df = pd.DataFrame(idx_rows)
-    return summary, idx_df
+        # handle the fall-through from INDEX -> POST_INDEX for the first breadth row
+        if mode == "INDEX" and b_upper in ("ADVANCES", "DECLINES", "UNCHANGED"):
+            mode = "POST_INDEX"
+            if b_upper == "ADVANCES":
+                breadth["advances"] = _int(c)
+            elif b_upper == "DECLINES":
+                breadth["declines"] = _int(c)
+            elif b_upper == "UNCHANGED":
+                breadth["unchanged"] = _int(c)
+
+    return {
+        "summary":    summary,
+        "index_rows": index_rows,
+        "breadth":    breadth,
+    }
 
 
-# ── Processor ─────────────────────────────────────────────────────────────────
+def _write(conn, parsed: dict, trade_date: str) -> None:
+    s   = parsed["summary"]
+    b   = parsed["breadth"]
+    idx = pd.DataFrame(parsed["index_rows"])
 
-def process(trade_date: str):
+    conn.execute("""
+        INSERT INTO market_activity_summary
+            (trade_date, traded_value_cr, traded_qty_lacs, num_trades, market_cap_cr)
+        VALUES (CAST(? AS DATE), ?, ?, ?, ?)
+        ON CONFLICT (trade_date) DO UPDATE SET
+            traded_value_cr = excluded.traded_value_cr,
+            traded_qty_lacs = excluded.traded_qty_lacs,
+            num_trades      = excluded.num_trades,
+            market_cap_cr   = excluded.market_cap_cr
+    """, [s["trade_date"], s["traded_value_cr"], s["traded_qty_lacs"],
+          s["num_trades"], s["market_cap_cr"]])
+
+    if not idx.empty:
+        for c in ("prev_close", "open", "high", "low", "close", "gain_loss"):
+            idx[c] = pd.to_numeric(idx[c], errors="coerce")
+        conn.register("_mkt_idx_stage", idx)
+        conn.execute("""
+            INSERT INTO market_activity_index
+            SELECT
+                CAST(trade_date AS DATE),
+                index_name,
+                prev_close, open, high, low, close, gain_loss
+            FROM _mkt_idx_stage
+            ON CONFLICT (trade_date, index_name) DO UPDATE SET
+                prev_close = excluded.prev_close,
+                open       = excluded.open,
+                high       = excluded.high,
+                low        = excluded.low,
+                close      = excluded.close,
+                gain_loss  = excluded.gain_loss
+        """)
+        conn.unregister("_mkt_idx_stage")
+
+    conn.execute("""
+        INSERT INTO market_activity_breadth
+            (trade_date, advances, declines, unchanged, price_band_hits)
+        VALUES (CAST(? AS DATE), ?, ?, ?, ?)
+        ON CONFLICT (trade_date) DO UPDATE SET
+            advances        = excluded.advances,
+            declines        = excluded.declines,
+            unchanged       = excluded.unchanged,
+            price_band_hits = excluded.price_band_hits
+    """, [b["trade_date"], b["advances"], b["declines"],
+          b["unchanged"], b["price_band_hits"]])
+
+# ── Public entry point ────────────────────────────────────────────────────────
+
+def process(trade_date: str) -> None:
     if is_processed(trade_date, "mkt_act"):
         print(f"[mkt_act] {trade_date} already processed, skipping")
         return
@@ -128,60 +256,23 @@ def process(trade_date: str):
     if not p.exists():
         raise FileNotFoundError(p)
 
-    summary, idx_df = _parse(p, trade_date)
+    parsed = _parse(p, trade_date)
 
     conn = get_conn()
     try:
         conn.execute("BEGIN")
-
-        # ── market_activity_summary ──────────────────────────────────────────
-        conn.execute("""
-            INSERT INTO market_activity_summary
-                (trade_date, traded_value_cr, traded_qty_lacs, num_trades, market_cap_cr)
-            VALUES (CAST(? AS DATE), ?, ?, ?, ?)
-            ON CONFLICT (trade_date) DO UPDATE SET
-                traded_value_cr = excluded.traded_value_cr,
-                traded_qty_lacs = excluded.traded_qty_lacs,
-                num_trades      = excluded.num_trades,
-                market_cap_cr   = excluded.market_cap_cr
-        """, [
-            summary["trade_date"],
-            summary["traded_value_cr"],
-            summary["traded_qty_lacs"],
-            summary["num_trades"],
-            summary["market_cap_cr"],
-        ])
-
-        # ── market_activity_index ────────────────────────────────────────────
-        if not idx_df.empty:
-            idx_df["trade_date"] = pd.to_datetime(idx_df["trade_date"]).dt.date
-            for c in ("prev_close", "open", "high", "low", "close", "gain_loss"):
-                idx_df[c] = pd.to_numeric(idx_df[c], errors="coerce")
-
-            conn.register("_mkt_idx_stage", idx_df)
-            conn.execute("""
-                INSERT INTO market_activity_index
-                SELECT
-                    CAST(trade_date AS DATE),
-                    index_name,
-                    prev_close, open, high, low, close, gain_loss
-                FROM _mkt_idx_stage
-                ON CONFLICT (trade_date, index_name) DO UPDATE SET
-                    prev_close = excluded.prev_close,
-                    open       = excluded.open,
-                    high       = excluded.high,
-                    low        = excluded.low,
-                    close      = excluded.close,
-                    gain_loss  = excluded.gain_loss
-            """)
-            conn.unregister("_mkt_idx_stage")
-
+        _write(conn, parsed, trade_date)
         conn.execute("COMMIT")
-        print(
-            f"[mkt_act] {trade_date} — summary OK, "
-            f"{len(idx_df)} index rows inserted/updated"
-        )
 
+        n_idx = len(parsed["index_rows"])
+        n_ts  = len(parsed["top_stocks"])
+        n_sec = len(parsed["security_rows"])
+        print(
+            f"[mkt_act] {trade_date} — "
+            f"summary OK | "
+            f"{len(parsed['index_rows'])} index rows | "
+            f"breadth OK"
+        )
     except Exception:
         conn.execute("ROLLBACK")
         raise

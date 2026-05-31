@@ -407,44 +407,14 @@ export const stocks = {
   },
 };
 
-/* =========================================
-   PARTICIPANT ACTIVITY
-   GET /api/v1/participant/dates
-   GET /api/v1/participant/net-oi
-   GET /api/v1/participant/net-vol
-   GET /api/v1/participant/latest
-========================================= */
-
-export const participant = {
-  dates: () =>
-    request('/participant/dates'),
-
-  netOI: (startDate, endDate, assetClass = 'INDEX') => {
-    const p = new URLSearchParams({ start_date: startDate, end_date: endDate, asset_class: assetClass });
-    return request(`/participant/net-oi?${p}`);
-  },
-
-  netVol: (startDate, endDate, assetClass = 'INDEX') => {
-    const p = new URLSearchParams({ start_date: startDate, end_date: endDate, asset_class: assetClass });
-    return request(`/participant/net-vol?${p}`);
-  },
-
-  latest: (assetClass = 'INDEX') => {
-    const p = new URLSearchParams({ asset_class: assetClass });
-    return request(`/participant/latest?${p}`);
-  },
-};
 
 /* =========================================
    MARKET ACTIVITY
-   GET /api/v1/market/dates
-   GET /api/v1/market/index-names
-   GET /api/v1/market/summary
-   GET /api/v1/market/index-history
-   GET /api/v1/market/index-snapshot
 ========================================= */
 
 export const market = {
+  // ── existing ──────────────────────────────────────────────────────────────
+
   dates: () =>
     request('/market/dates'),
 
@@ -465,35 +435,194 @@ export const market = {
     const p = new URLSearchParams({ trade_date: tradeDate });
     return request(`/market/index-snapshot?${p}`);
   },
+
+  // ── breadth ───────────────────────────────────────────────────────────────
+
+  breadth: (startDate, endDate) => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
+    return request(`/market/breadth?${p}`);
+  },
+
+  breadthSnapshot: (tradeDate) => {
+    const p = new URLSearchParams({ trade_date: tradeDate });
+    return request(`/market/breadth/snapshot?${p}`);
+  },
+
+  // ── top stocks ────────────────────────────────────────────────────────────
+
+  /**
+   * Top N stocks by turnover for a given date.
+   * series defaults to 'EQ'. limit defaults to 25.
+   */
+  topStocks: (tradeDate, { series = 'EQ', limit = 25 } = {}) => {
+    const p = new URLSearchParams({ trade_date: tradeDate, series, limit });
+    return request(`/market/top-stocks?${p}`);
+  },
+
+  /**
+   * Top gainers and losers by pct_change for a given date.
+   * Returns { gainers: [...], losers: [...] }
+   * minTurnover is in lacs.
+   */
+  topGainersLosers: (tradeDate, { series = 'EQ', limit = 10, minTurnover = 100.0 } = {}) => {
+    const p = new URLSearchParams({
+      trade_date:   tradeDate,
+      series,
+      limit,
+      min_turnover: minTurnover,
+    });
+    return request(`/market/top-stocks/gainers-losers?${p}`);
+  },
+
+  // ── securities ────────────────────────────────────────────────────────────
+
+  /**
+   * All securities for a date sorted by turnover desc.
+   * series defaults to 'EQ'. minTurnover is optional, in lacs.
+   */
+  securitySnapshot: (tradeDate, { series = 'EQ', minTurnover } = {}) => {
+    const p = new URLSearchParams({ trade_date: tradeDate, series });
+    if (minTurnover != null) p.append('min_turnover', minTurnover);
+    return request(`/market/security/snapshot?${p}`);
+  },
+
+  /**
+   * OHLC + delivery time series for a single symbol.
+   * series defaults to 'EQ'.
+   */
+  securityHistory: (symbol, startDate, endDate, series = 'EQ') => {
+    const p = new URLSearchParams({ start_date: startDate, end_date: endDate, series });
+    return request(`/market/security/${encodeURIComponent(symbol)}?${p}`);
+  },
 };
 
-/* =========================================
-   FII STATISTICS
-   GET /api/v1/fii/dates
-   GET /api/v1/fii/instruments
-   GET /api/v1/fii/stats
-   GET /api/v1/fii/index-flow
-========================================= */
-
+// ─────────────────────────────────────────────────────────────────────────────
+// PARTICIPANT ACTIVITY
+//   GET /api/v1/participant/dates
+//   GET /api/v1/participant/net-oi
+//   GET /api/v1/participant/net-vol
+//   GET /api/v1/participant/latest
+//   GET /api/v1/participant/summary
+// ─────────────────────────────────────────────────────────────────────────────
+ 
+export const participant = {
+  /**
+   * All trade dates with participant activity data.
+   * @returns {Promise<string[]>} sorted array of YYYY-MM-DD strings
+   */
+  dates: () => request('/participant/dates'),
+ 
+  /**
+   * Net OI time series (long − short) per participant, per day.
+   * @param {string} startDate  YYYY-MM-DD
+   * @param {string} endDate    YYYY-MM-DD
+   * @param {'INDEX'|'STOCK'} assetClass
+   * @returns rows: { trade_date, participant_type, option_side, long_contracts, short_contracts, net_contracts }
+   */
+  netOI: (startDate, endDate, assetClass = 'INDEX') => {
+    const p = new URLSearchParams({
+      start_date:  startDate,
+      end_date:    endDate,
+      asset_class: assetClass,
+    });
+    return request(`/participant/net-oi?${p}`);
+  },
+ 
+  /**
+   * Net volume time series (buy − sell) per participant, per day.
+   * Same shape as netOI.
+   */
+  netVol: (startDate, endDate, assetClass = 'INDEX') => {
+    const p = new URLSearchParams({
+      start_date:  startDate,
+      end_date:    endDate,
+      asset_class: assetClass,
+    });
+    return request(`/participant/net-vol?${p}`);
+  },
+ 
+  /**
+   * Latest day's full OI breakdown — all participants × all sides.
+   * @param {'INDEX'|'STOCK'} assetClass
+   */
+  latest: (assetClass = 'INDEX') => {
+    const p = new URLSearchParams({ asset_class: assetClass });
+    return request(`/participant/latest?${p}`);
+  },
+ 
+  /**
+   * Single-day pivot table matching the NSE fao_participant_oi_*.csv layout.
+   * Returns one row per participant with wide columns:
+   *   fut_long, fut_short, fut_net,
+   *   ce_long,  ce_short,  ce_net,
+   *   pe_long,  pe_short,  pe_net,
+   *   total_long, total_short, total_net
+   *
+   * @param {string} tradeDate  YYYY-MM-DD
+   * @param {'INDEX'|'STOCK'} assetClass
+   */
+  summary: (tradeDate, assetClass = 'INDEX') => {
+    const p = new URLSearchParams({
+      trade_date:  tradeDate,
+      asset_class: assetClass,
+    });
+    return request(`/participant/summary?${p}`);
+  },
+};
+ 
+// ─────────────────────────────────────────────────────────────────────────────
+// FII STATISTICS
+//   GET /api/v1/fii/dates
+//   GET /api/v1/fii/instruments
+//   GET /api/v1/fii/stats
+//   GET /api/v1/fii/index-flow
+//   GET /api/v1/fii/summary
+// ─────────────────────────────────────────────────────────────────────────────
+ 
 export const fii = {
-  dates: () =>
-    request('/fii/dates'),
-
-  instruments: () =>
-    request('/fii/instruments'),
-
+  /** All trade dates with FII stats data. */
+  dates: () => request('/fii/dates'),
+ 
+  /** All instrument names present in fii_stats table. */
+  instruments: () => request('/fii/instruments'),
+ 
+  /**
+   * FII buy/sell/OI stats for a date range.
+   * Returns rows: { trade_date, instrument, buy_contracts, buy_amount_cr,
+   *                 sell_contracts, sell_amount_cr, oi_contracts, oi_amount_cr,
+   *                 net_contracts, net_amount_cr }
+   *
+   * @param {string}   startDate
+   * @param {string}   endDate
+   * @param {string[]} [instruments]  optional filter list
+   */
   stats: (startDate, endDate, instruments) => {
     const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
     if (instruments?.length) p.append('instruments', instruments.join(','));
     return request(`/fii/stats?${p}`);
   },
-
+ 
+  /**
+   * FII net index futures positions over time.
+   * Covers INDEX FUTURES + NIFTY FUTURES + BANKNIFTY FUTURES.
+   * The primary institutional-flow signal.
+   */
   indexFlow: (startDate, endDate) => {
     const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
     return request(`/fii/index-flow?${p}`);
   },
+ 
+  /**
+   * Single-day FII snapshot — all instruments with buy/sell/OI/net.
+   * Mirrors the NSE fii_stats_*.xls table layout.
+   * @param {string} tradeDate  YYYY-MM-DD
+   */
+  summary: (tradeDate) => {
+    const p = new URLSearchParams({ trade_date: tradeDate });
+    return request(`/fii/summary?${p}`);
+  },
 };
-
+ 
 /* =========================================
    VOLATILITY
    GET /api/v1/volatility/tickers
@@ -550,6 +679,19 @@ export function formatCurrency(value, digits = 2) {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   })}`;
+}
+
+export function formatK(v) {
+  if (v == null) return '—';
+  const abs = Math.abs(v);
+  if (abs >= 1_00_000) return `${(v / 1_00_000).toFixed(2)}L`;
+  if (abs >= 1_000)    return `${(v /     1_000).toFixed(1)}K`;
+  return formatNumber(v);
+}
+ 
+export function formatCr(v) {
+  if (v == null) return '—';
+  return `₹${formatNumber(v, 2)} Cr`;
 }
 
 export function getMetricFields(metric) {
