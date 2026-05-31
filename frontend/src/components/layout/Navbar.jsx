@@ -31,6 +31,10 @@ const navItems = [
     label: 'Participants',
     path: '/participants'
   },
+  {
+    label: 'FII',
+    path: '/fii'
+  },
 ];
 
 export default function Navbar() {

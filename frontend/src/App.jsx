@@ -13,6 +13,7 @@ import Futures from './pages/Futures';
 import Stocks from './pages/Stocks';
 import Market from './pages/Market';
 import Participants from './pages/Participants';
+import FII from './pages/FII';
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
           <Route path="/stocks" element={<Stocks />} />
           <Route path="/market" element={<Market />} />
           <Route path="/participants" element={<Participants />} />
+          <Route path="/fii" element={<FII />} />
         </Routes>
       </div>
     </BrowserRouter>
