@@ -28,7 +28,7 @@ MANIFEST_PATH    = RAW_ROOT / "manifest.csv"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
 SYNC_ON_STARTUP = True
-SYNC_START_DATE = "2026-05-01"
+SYNC_START_DATE = "2026-03-27"
 
 # ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
 NSE_BASE_URL = "https://nsearchives.nseindia.com"

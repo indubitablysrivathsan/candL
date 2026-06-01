@@ -19,13 +19,13 @@ from config import SYNC_START_DATE
 
 # (processor_key, dl_col, pr_col, is_processed_check_keys)
 _PIPELINE = [
-    ("fo",          "fo_dl",      "sto_pr",     ["STF", "IDF", "STO", "IDO"]),
-    ("eq_bhav",     "eq_bhav_dl", "eq_bhav_pr", ["eq_bhav"]),
-    ("cm_bhav",     "cm_bhav_dl", "cm_bhav_pr", ["cm_bhav"]),
-    ("fii",         "fii_dl",     "fii_pr",     ["fii"]),
-    ("participant", "part_oi_dl", "part_oi_pr", ["part_oi", "part_vol"]),
-    ("fo_volt",     "fo_volt_dl", "fo_volt_pr", ["fo_volt"]),
-    ("mkt_act",     "mkt_act_dl", "mkt_act_pr", ["mkt_act"]),
+    ("fo",          "fo_dl",      ["stf_pr", "idf_pr", "sto_pr", "ido_pr"],     ["STF", "IDF", "STO", "IDO"]),
+    ("eq_bhav",     "eq_bhav_dl", ["eq_bhav_pr"], ["eq_bhav"]),
+    ("cm_bhav",     "cm_bhav_dl", ["cm_bhav_pr"], ["cm_bhav"]),
+    ("fii",         "fii_dl",     ["fii_pr"],     ["fii"]),
+    ("participant", "part_oi_dl", ["part_oi_pr"], ["part_oi", "part_vol"]),
+    ("fo_volt",     "fo_volt_dl", ["fo_volt_pr"], ["fo_volt"]),
+    ("mkt_act",     "mkt_act_dl", ["mkt_act_pr"], ["mkt_act"]),
 ]
 
 # processor keys that also require a second dl flag before processing
@@ -123,13 +123,13 @@ def run_startup_sync():
     print("\nChecking processing state...\n")
     manifest = load_manifest()
 
-    for proc_key, dl_col, pr_col, check_keys in _PIPELINE:
+    for proc_key, dl_col, pr_cols, check_keys in _PIPELINE:
         extra_dl = _EXTRA_DL.get(proc_key)
         extra_pr = _EXTRA_PR.get(proc_key)
 
         candidates = manifest[
             (manifest[dl_col] == 1) &
-            (manifest[pr_col] != 1) &
+            (manifest[pr_cols[0]] != 1) &
             (manifest["status"] != "market_closed")
         ]["trade_date"].tolist()
 
@@ -138,13 +138,17 @@ def run_startup_sync():
 
         for trade_date in sorted(candidates):
             if _all_processed(trade_date, check_keys):
-                manifest = _set(manifest, trade_date, **{pr_col: 1})
-                continue
+                updates = {col: 1 for col in pr_cols}
 
+                if extra_pr:
+                    updates[extra_pr] = 1
+
+                manifest = _set(manifest, trade_date, **updates)
+                continue
             try:
                 PROCESSOR_REGISTRY[proc_key](trade_date)
                 if _all_processed(trade_date, check_keys):
-                    updates = {pr_col: 1}
+                    updates = {col: 1 for col in pr_cols}
                     if extra_pr:
                         updates[extra_pr] = 1
                     manifest = _set(manifest, trade_date, **updates)
