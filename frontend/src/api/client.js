@@ -2,17 +2,17 @@
 
 const API_BASE = '/api/v1';
 
-async function request(url) {
+export async function request(url) {
   const response = await fetch(`${API_BASE}${url}`);
 
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
+
     try {
       const data = await response.json();
       if (data?.detail) message = data.detail;
-    } catch (_) {
-      // ignore json parse failure
-    }
+    } catch (_) {}
+
     throw new Error(message);
   }
 

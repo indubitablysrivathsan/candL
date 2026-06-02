@@ -2,3 +2,4 @@ fastapi
 duckdb
 xlrd
 python-dotenv
+uvicorn

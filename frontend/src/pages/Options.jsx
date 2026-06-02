@@ -426,7 +426,14 @@ export default function Options({ assetType = 'stock_options' }) {
         setTickerList(tickers); // store base list without combined
         if (tickers.length > 0) setSelectedTicker(tickers[0]);
       })
-      .catch((err) => { if (mounted) setError(err.message || 'Failed to load tickers'); })
+      .catch((err) => {
+        console.error(err);
+
+        if (!mounted) return;
+
+        setBackendAvailable(false);
+        setTickerList([]);
+      })
       .finally(() => { if (mounted) setLoading(false); });
 
     return () => { mounted = false; };
@@ -491,14 +498,9 @@ export default function Options({ assetType = 'stock_options' }) {
     </div>
   );
 
-  if (error) return (
-    <div className="p-6">
-      <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-6">
-        <h2 className="text-red-400 text-lg font-semibold">Failed to load dashboard</h2>
-        <p className="mt-3 text-sm text-red-100/80">{error}</p>
-      </div>
-    </div>
-  );
+  if (error) {
+    console.error(error);
+  }
 
   const label = assetType === 'index_options' ? 'Index Options' : 'Stock Options';
 

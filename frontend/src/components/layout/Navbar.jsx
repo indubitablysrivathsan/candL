@@ -78,7 +78,7 @@ export default function Navbar() {
         <div className="flex items-center gap-8">
           <div>
             <h1 className="text-lg font-bold tracking-wide text-white">
-              NSE
+              candL
             </h1>
 
             <p className="text-[11px] text-white/45">

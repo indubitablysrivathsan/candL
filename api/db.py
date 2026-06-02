@@ -589,15 +589,15 @@ def get_chart_scale(
     col = METRIC_COL.get(metric)
     if col is None:
         return {"y_min": 0.0, "y_max": 1.0, "x_min": 0.0, "x_max": 0.0, "strike_gap": 50.0}
-
+ 
     instr = _instr(asset_type)
     conn = get_conn(read_only=True)
     try:
-        minmax = conn.execute(
+        # ── Y scale: min/max values within the requested date range only ──
+        # (so the y-axis is still scaled to what the user is actually viewing)
+        y_row = conn.execute(
             f"""
-            SELECT
-                MIN({col}), MAX({col}),
-                MIN(i.strike),  MAX(i.strike)
+            SELECT MIN({col}), MAX({col})
             FROM market_data_daily m
             JOIN instruments i USING (instrument_key)
             WHERE i.instrument_type = ?
@@ -608,17 +608,30 @@ def get_chart_scale(
             """,
             [instr, ticker, expiry, start_date, end_date],
         ).fetchone()
-
+ 
+        # ── X scale: ALL strikes ever recorded for this ticker+expiry ────
+        # Deliberately ignores start_date/end_date so the strike window is
+        # identical no matter which date slice the user is viewing.
+        x_row = conn.execute(
+            """
+            SELECT MIN(i.strike), MAX(i.strike)
+            FROM instruments i
+            WHERE i.instrument_type = ?
+              AND i.ticker = ?
+              AND i.expiry = CAST(? AS DATE)
+            """,
+            [instr, ticker, expiry],
+        ).fetchone()
+ 
+        # ── Strike gap: most common gap across ALL dates ──────────────────
         gap_row = conn.execute(
             """
             WITH strikes AS (
                 SELECT DISTINCT i.strike AS s
-                FROM market_data_daily m
-                JOIN instruments i USING (instrument_key)
+                FROM instruments i
                 WHERE i.instrument_type = ?
                   AND i.ticker = ?
                   AND i.expiry = CAST(? AS DATE)
-                  AND m.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
                 ORDER BY s
             ),
             diffs AS (
@@ -627,17 +640,17 @@ def get_chart_scale(
             SELECT gap FROM diffs WHERE gap > 0
             GROUP BY gap ORDER BY COUNT(*) DESC LIMIT 1
             """,
-            [instr, ticker, expiry, start_date, end_date],
+            [instr, ticker, expiry],
         ).fetchone()
     finally:
         conn.close()
-
-    y_raw_min  = float(minmax[0]) if minmax[0] is not None else 0.0
-    y_raw_max  = float(minmax[1]) if minmax[1] is not None else 1.0
-    x_min      = float(minmax[2]) if minmax[2] is not None else 0.0
-    x_max      = float(minmax[3]) if minmax[3] is not None else 0.0
+ 
+    y_raw_min  = float(y_row[0]) if y_row and y_row[0] is not None else 0.0
+    y_raw_max  = float(y_row[1]) if y_row and y_row[1] is not None else 1.0
+    x_min      = float(x_row[0]) if x_row and x_row[0] is not None else 0.0
+    x_max      = float(x_row[1]) if x_row and x_row[1] is not None else 0.0
     strike_gap = float(gap_row[0]) if gap_row and gap_row[0] else 50.0
-
+ 
     y_pad = max(abs(y_raw_min), abs(y_raw_max)) * 0.08
     return {
         "y_min":      y_raw_min - y_pad,

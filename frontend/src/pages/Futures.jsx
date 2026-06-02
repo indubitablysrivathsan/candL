@@ -679,14 +679,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
   }
 
   if (error) {
-    return (
-      <div className="p-6">
-        <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-6">
-          <h2 className="text-red-400 text-lg font-semibold">Failed to load futures data</h2>
-          <p className="mt-3 text-sm text-red-100/80">{error}</p>
-        </div>
-      </div>
-    );
+    console.error(error);
   }
 
   const label = assetType === 'index_futures' ? 'Index Futures' : 'Stock Futures';

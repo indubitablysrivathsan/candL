@@ -12,6 +12,11 @@ import os
 # ─── ROOT ─────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+env_file = PROJECT_ROOT / ".env"
+
+if env_file.exists():
+    load_dotenv(env_file)
+
 # ─── DATA ─────────────────────────────────────────────────────────────────────
 DATA_ROOT = PROJECT_ROOT / "data"
 
@@ -29,13 +34,8 @@ MKT_ACT_ROOT     = RAW_ROOT / "mkt_act"
 MANIFEST_PATH    = RAW_ROOT / "manifest.csv"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
-env_file = PROJECT_ROOT / ".env"
-
-if env_file.exists():
-    load_dotenv(env_file)
-
 SYNC_ON_STARTUP = os.getenv("SYNC_ON_STARTUP", "True").lower() == "true"
-SYNC_START_DATE = "2026-03-25"
+SYNC_START_DATE = "2026-05-22"
 
 # ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
 NSE_BASE_URL = "https://nsearchives.nseindia.com"
@@ -48,10 +48,12 @@ API_HOST   = "127.0.0.1"
 API_PORT   = 8000
 API_PREFIX = "/api/v1"
 
-CORS_ORIGINS = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-]
+CORS_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:3000"
+).split(",")
 
 # ─── DUCKDB ───────────────────────────────────────────────────────────────────
-NSE_DB_PATH = DATA_ROOT / "nse.db"
+db_name = os.getenv("DB_FILE", "nse.db")
+
+NSE_DB_PATH = DATA_ROOT / db_name
