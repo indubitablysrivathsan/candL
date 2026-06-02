@@ -1,0 +1,4 @@
+fastapi
+duckdb
+xlrd
+python-dotenv

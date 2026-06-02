@@ -112,17 +112,16 @@ export default function StrikeBarChart({
           <div className="flex items-center gap-2">
             <div
               className="w-3 h-3 rounded-full"
-              style={{ background: colors.ce }}
-            />
-            <span className="text-white/70">CE</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <div
-              className="w-3 h-3 rounded-full"
               style={{ background: colors.pe }}
             />
             <span className="text-white/70">PE</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div
+              className="w-3 h-3 rounded-full"
+              style={{ background: colors.ce }}
+            />
+            <span className="text-white/70">CE</span>
           </div>
         </div>
       </div>
@@ -209,21 +208,17 @@ export default function StrikeBarChart({
             )}
 
             <Bar
-              dataKey="ce"
-              name="CE"
-              fill={colors.ce}
-              radius={[4, 4, 0, 0]}
-              isAnimationActive={true}
-              animationDuration={180}
-            />
-
-            <Bar
               dataKey="pe"
               name="PE"
               fill={colors.pe}
               radius={[4, 4, 0, 0]}
-              isAnimationActive={true}
-              animationDuration={180}
+            />
+
+            <Bar
+              dataKey="ce"
+              name="CE"
+              fill={colors.ce}
+              radius={[4, 4, 0, 0]}
             />
           </BarChart>
         </ResponsiveContainer>

@@ -6,6 +6,8 @@ No manual path editing needed across devices.
 """
 
 from pathlib import Path
+from dotenv import load_dotenv
+import os
 
 # ─── ROOT ─────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -27,8 +29,13 @@ MKT_ACT_ROOT     = RAW_ROOT / "mkt_act"
 MANIFEST_PATH    = RAW_ROOT / "manifest.csv"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
-SYNC_ON_STARTUP = True
-SYNC_START_DATE = "2026-03-27"
+env_file = PROJECT_ROOT / ".env"
+
+if env_file.exists():
+    load_dotenv(env_file)
+
+SYNC_ON_STARTUP = os.getenv("SYNC_ON_STARTUP", "True").lower() == "true"
+SYNC_START_DATE = "2026-03-25"
 
 # ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
 NSE_BASE_URL = "https://nsearchives.nseindia.com"

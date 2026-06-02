@@ -1,6 +1,8 @@
 // frontend/src/components/layout/Navbar.jsx
 
 import { NavLink } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { healthCheck } from '../../api/client';
 
 const navItems = [
   {
@@ -38,6 +40,26 @@ const navItems = [
 ];
 
 export default function Navbar() {
+
+  const [backendStatus, setBackendStatus] = useState('checking');
+
+  useEffect(() => {
+    const check = async () => {
+      try {
+        await healthCheck();
+        setBackendStatus('online');
+      } catch {
+        setBackendStatus('offline');
+      }
+    };
+
+    check();
+
+    const interval = setInterval(check, 30000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <header
       className="
@@ -105,17 +127,26 @@ export default function Navbar() {
         {/* Right */}
         <div className="flex items-center gap-3">
           <div
-            className="
+            className={`
               w-2.5
               h-2.5
               rounded-full
-              bg-emerald-400
-              animate-pulse
-            "
+              ${
+                backendStatus === 'online'
+                  ? 'bg-emerald-400 animate-pulse'
+                  : backendStatus === 'offline'
+                  ? 'bg-red-500'
+                  : 'bg-yellow-400 animate-pulse'
+              }
+            `}
           />
 
           <span className="text-xs text-white/50">
-            Local Backend Connected
+            {backendStatus === 'online'
+              ? 'Backend Connected'
+              : backendStatus === 'offline'
+              ? 'Backend Offline'
+              : 'Checking Backend...'}
           </span>
         </div>
       </div>
