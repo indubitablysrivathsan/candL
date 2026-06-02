@@ -3,3 +3,6 @@ duckdb
 xlrd
 python-dotenv
 uvicorn
+numpy
+pandas
+requests
