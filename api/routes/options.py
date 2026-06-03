@@ -50,6 +50,13 @@ def _make_options_router(asset_type: str) -> APIRouter:
     @router.get("/tickers", response_model=TickerListResponse)
     def _tickers():
         return TickerListResponse(asset_type=asset_type, tickers=list_tickers(asset_type))
+    
+    @router.get("/expiries", response_model=ExpiriesResponse)
+    def _all_expiries():
+        exp = list_expiries(asset_type)
+        if not exp:
+            raise HTTPException(404, "No expiries found")
+        return ExpiriesResponse(asset_type=asset_type, ticker=None, expiries=exp)
 
     @router.get("/expiries/{ticker}", response_model=ExpiriesResponse)
     def _expiries(ticker: str):

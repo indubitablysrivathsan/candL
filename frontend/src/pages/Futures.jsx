@@ -15,6 +15,7 @@ import {
   getFuturesAnalytics,
   getFuturesRollup,
   getFuturesCombinedHistory,
+  getMarketDates,
   formatCurrency,
   formatNumber,
   QUADRANT_META,
@@ -77,25 +78,22 @@ function AnalyticsPanel({ assetType, ticker, expiry, allExpiries }) {
   const cycleData = useMemo(() => {
     if (!data.length) return data;
 
+    if (assetType === 'index_futures') return data;
+
     const current = new Date(expiry);
 
+    const sortedExpiryChain = [...allExpiries].sort((a, b) => new Date(a) - new Date(b));
+    const idx = sortedExpiryChain.indexOf(expiry);
+
     // find nearest older expiry
-    const prevExpiry = allExpiries
-      .map((e) => new Date(e))
-      .filter((e) => e < current)
-      .sort((a, b) => b - a)[0];
+    const prevExpiry = idx > 0 ? new Date(sortedExpiryChain[idx - 1]) : null;
 
     if (!prevExpiry) return data;
 
     return data.filter((r) => {
       const td = new Date(r.trade_date);
-
-      return (
-        td > prevExpiry &&
-        td <= current
-      );
+      return td > prevExpiry && td <= current;
     });
-
   }, [data, expiry, allExpiries]);
 
   const stats = useMemo(() => {
@@ -274,11 +272,9 @@ function RollupPanel({
   assetType,
   allDates,
   screenerExpiries,
-  // Charts sub-tab props
   chartSelectedExpiries,
   allScreenerExpiries,
   chartTicker,
-  // Screener table props
   activeScreenerExpiry,
   onScreenerExpiryChange,
   activeTab,
@@ -356,7 +352,7 @@ function RollupPanel({
   const activeRows = grouped[activeQuadrant] ?? [];
   const meta       = QUADRANT_META[activeQuadrant] ?? QUADRANT_META.long_buildup;
 
-  /* ── Charts sub-tab: delegate to ScreenerOIChart ── */
+  /* ── Charts sub-tab ── */
   if (activeTab === 'charts') {
     return (
       <ScreenerOIChart
@@ -497,58 +493,75 @@ function RollupPanel({
 ───────────────────────────────────────────────────────────────── */
 
 export default function Futures({ assetType = 'stock_futures' }) {
-  const [tickerList, setTickerList]           = useState([]);
-  const [selectedTicker, setSelectedTicker]   = useState('');
-  const [expiries, setExpiries]               = useState([]);
+  // ── Ticker list (used internally for expiry/dates loading only) ──
+  const [tickerList, setTickerList]   = useState([]);
+
+  // ── Ticker Analytics mode: ticker is selected from the screener table click
+  //    or from an internal picker in the main area — NOT from the sidebar ──
+  const [selectedTicker, setSelectedTicker] = useState('');
+
+  // ── Shared expiry chain (loaded once from first ticker, same for all) ──
+  const [allExpiries, setAllExpiries]   = useState([]);
+
+  // ── Ticker Analytics mode: which expiries are selected / active ──
   const [selectedExpiries, setSelectedExpiries] = useState([]);
-  const [activeExpiry, setActiveExpiry]       = useState('');
-  const [loading, setLoading]                 = useState(true);
-  const [error, setError]                     = useState('');
-  const [mode, setMode]                       = useState('screener'); // 'screener' | 'expiry'
-  const [allDates, setAllDates]               = useState([]);
+  const [activeExpiry, setActiveExpiry]         = useState('');
 
-  // Full master expiry chain (from API, no sorting)
-  const [screenerExpiries, setScreenerExpiries]           = useState([]);
-  // Subset driving the 3-tab view in the screener table
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
+  const [mode, setMode]       = useState('screener'); // 'screener' | 'expiry'
 
-  const validChartExpiries = useMemo(() => {
-    if (!screenerExpiries.length) return [];
-    const today = new Date();
-    // completed cycles (expiry already passed) + the single nearest upcoming/active cycle
-    const completed = screenerExpiries.filter((e) => new Date(e) < today);
-    const inProgress = screenerExpiries.find((e) => new Date(e) >= today);
-    return inProgress ? [inProgress, ...completed] : completed;
-  }, [screenerExpiries]);
+  // ── Market dates from API (valid trading days) ──
+  const [marketDates, setMarketDates] = useState([]);
 
+  // ── Screener: date slider dates (cycle-scoped) ──
+  const [allDates, setAllDates] = useState([]);
+
+  // ── Screener expiry state ──
   const [screenerSelectedExpiry, setScreenerSelectedExpiry] = useState('');
-  const [activeScreenerExpiry, setActiveScreenerExpiry]   = useState('');
-  // Subset selected for the Charts sub-tab (max 5)
+  const [activeScreenerExpiry, setActiveScreenerExpiry]     = useState('');
+
+  // ── Charts sub-tab ──
   const [chartSelectedExpiries, setChartSelectedExpiries] = useState([]);
+  const [screenerTab, setScreenerTab]                     = useState('screener');
 
-  // Top-level screener tab: 'screener' | 'charts'
-  const [screenerTab, setScreenerTab] = useState('screener');
+  /* ── validChartExpiries: completed cycles + nearest upcoming ── */
+  const validChartExpiries = useMemo(() => {
+    if (!allExpiries.length) return [];
+    const today = new Date();
+    const completed  = allExpiries.filter((e) => new Date(e) < today);
+    const inProgress = allExpiries.find((e) => new Date(e) >= today);
+    return inProgress ? [inProgress, ...completed] : completed;
+  }, [allExpiries]);
 
+  /* ── Ticker shown in Charts sub-tab ── */
+  const chartTicker = useMemo(() => {
+    if (screenerTab === 'charts') {
+      // In charts mode allow FUTURES_COMBINED_TICKER or any real ticker
+      return selectedTicker || tickerList[0] || '';
+    }
+    return selectedTicker || tickerList[0] || '';
+  }, [screenerTab, selectedTicker, tickerList]);
+
+  /* ── Ticker list shown in sidebar only for Charts sub-tab ── */
   const displayTickerList = useMemo(() =>
     (mode === 'screener' && screenerTab === 'charts')
       ? [...tickerList, FUTURES_COMBINED_TICKER]
       : tickerList,
   [tickerList, mode, screenerTab]);
 
-  /* ── The 3 expiry tabs for the screener table: selected + next 2 ── */
+  /* ── The 3 expiry tabs for the screener table ── */
   const screenerThreeExpiries = useMemo(() => {
-    if (!screenerSelectedExpiry || !screenerExpiries.length) return [];
-    const idx = screenerExpiries.indexOf(screenerSelectedExpiry);
+    if (!screenerSelectedExpiry || !allExpiries.length) return [];
+    const idx = allExpiries.indexOf(screenerSelectedExpiry);
     if (idx === -1) return [screenerSelectedExpiry];
-    return screenerExpiries.slice(idx, idx + 3);
-  }, [screenerExpiries, screenerSelectedExpiry]);
+    return allExpiries.slice(idx, idx + 3);
+  }, [allExpiries, screenerSelectedExpiry]);
 
-
+  /* ── Seed chartSelectedExpiries when validChartExpiries loads ── */
   useEffect(() => {
     if (!validChartExpiries.length) return;
-
-    setChartSelectedExpiries(
-      validChartExpiries.slice(0, 5)
-    );
+    setChartSelectedExpiries(validChartExpiries.slice(0, 5));
   }, [validChartExpiries]);
 
   /* ── Keep activeScreenerExpiry pointing at first of the three ── */
@@ -565,11 +578,11 @@ export default function Futures({ assetType = 'stock_futures' }) {
   useEffect(() => {
     setTickerList([]);
     setSelectedTicker('');
-    setExpiries([]);
+    setAllExpiries([]);
     setSelectedExpiries([]);
     setActiveExpiry('');
     setAllDates([]);
-    setScreenerExpiries([]);
+    setMarketDates([]);
     setScreenerSelectedExpiry('');
     setActiveScreenerExpiry('');
     setChartSelectedExpiries([]);
@@ -579,7 +592,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
     setLoading(true);
   }, [assetType]);
 
-  /* ── Load tickers ── */
+  /* ── Load tickers (internal use only — not shown in sidebar for futures) ── */
   useEffect(() => {
     let mounted = true;
     setLoading(true);
@@ -589,6 +602,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
         if (!mounted) return;
         const tickers = res?.tickers || [];
         setTickerList(tickers);
+        // Default selected ticker for analytics mode
         if (tickers.length > 0) setSelectedTicker(tickers[0]);
       })
       .catch((err) => { if (mounted) setError(err.message); })
@@ -597,71 +611,68 @@ export default function Futures({ assetType = 'stock_futures' }) {
     return () => { mounted = false; };
   }, [assetType]);
 
-  /* ── Load expiries for ticker analytics ── */
-  useEffect(() => {
-    if (!selectedTicker || selectedTicker === FUTURES_COMBINED_TICKER) return;
-    let mounted = true;
-
-    getExpiries(assetType, selectedTicker)
-      .then((res) => {
-        if (!mounted) return;
-        const list     = res?.expiries || [];
-        setExpiries(list);
-        const defaults = list.slice(0, 3);
-        setSelectedExpiries(defaults);
-        if (defaults.length > 0) setActiveExpiry(defaults[0]);
-      })
-      .catch(console.error);
-
-    return () => { mounted = false; };
-  }, [assetType, selectedTicker]);
-
-  useEffect(() => {
-    if (!(mode === 'screener' && screenerTab === 'charts') && selectedTicker === FUTURES_COMBINED_TICKER) {
-      setSelectedTicker(tickerList[0] || '');
-    }
-  }, [mode, screenerTab, selectedTicker, tickerList]);
-
-  /* ── Load screener expiries from first ticker (master chain) ── */
+  /* ── Load shared expiry chain from first ticker ── */
   useEffect(() => {
     if (!tickerList.length) return;
     let mounted = true;
 
-    getExpiries(assetType, tickerList[0])
+    getExpiries(assetType)
       .then((res) => {
         if (!mounted) return;
         const list = res?.expiries || [];
-        setScreenerExpiries(list);
+        setAllExpiries(list);
         if (list.length > 0) {
           setScreenerSelectedExpiry(list[0]);
+          // Default ticker analytics to first 3 expiries
+          const defaults = list.slice(0, 3);
+          setSelectedExpiries(defaults);
+          if (defaults.length > 0) setActiveExpiry(defaults[0]);
         }
       })
-      .catch((err) => console.error('Failed loading screener expiries', err));
+      .catch((err) => console.error('Failed loading expiries', err));
 
     return () => { mounted = false; };
   }, [assetType, tickerList]);
 
-  /* ── Load dates for screener slider ── */
+  /* ── Load market dates (valid trading days) ── */
+  useEffect(() => {
+    let mounted = true;
+
+    getMarketDates(assetType)
+      .then((res) => {
+        if (!mounted) return;
+        const dates = (res?.dates || []).sort();
+        setMarketDates(dates);
+      })
+      .catch((err) => console.error('Failed loading market dates', err));
+
+    return () => { mounted = false; };
+  }, [assetType]);
+
+  /* ── Load screener slider dates (cycle-scoped) ── */
   useEffect(() => {
     if (!tickerList.length || !screenerSelectedExpiry) return;
     let mounted = true;
 
-    getDates(assetType, tickerList[0], screenerSelectedExpiry)
+    getDates(assetType, screenerSelectedExpiry)
       .then((res) => {
         if (!mounted) return;
         const sorted = [...(res?.dates || [])].sort((a, b) => new Date(a) - new Date(b));
-
-        const idx        = screenerExpiries.indexOf(screenerSelectedExpiry);
-        const prevExpiry = idx > 0 ? screenerExpiries[idx - 1] : null;
-        const cycleStart = prevExpiry ? sorted.find((d) => d > prevExpiry) : sorted[0];
-        const cycleDates = cycleStart ? sorted.filter((d) => d >= cycleStart) : sorted;
-
-        setAllDates(cycleDates);
+        const sortedExpiryChain = [...allExpiries].sort((a, b) => new Date(a) - new Date(b));
+        if (assetType === 'index_futures') {
+          setAllDates(sorted);
+        } else{
+          const idx        = sortedExpiryChain.indexOf(screenerSelectedExpiry);
+          const prevExpiry = idx > 0 ? sortedExpiryChain[idx - 1] : null;
+          const cycleStart = prevExpiry ? sorted.find((d) => d > prevExpiry) : sorted[0];
+          const cycleDates = cycleStart ? sorted.filter((d) => d >= cycleStart) : sorted;
+          setAllDates(cycleDates);
+        }
       })
       .catch((err) => console.error('Failed loading screener dates', err));
 
     return () => { mounted = false; };
-  }, [assetType, tickerList, screenerSelectedExpiry, screenerExpiries]);
+  }, [assetType, tickerList, screenerSelectedExpiry, allExpiries]);
 
   /* ── Keep activeExpiry valid in ticker analytics ── */
   useEffect(() => {
@@ -669,6 +680,16 @@ export default function Futures({ assetType = 'stock_futures' }) {
       setActiveExpiry(selectedExpiries[0]);
     }
   }, [selectedExpiries, activeExpiry]);
+
+  /* ── Guard: FUTURES_COMBINED_TICKER only valid in screener/charts ── */
+  useEffect(() => {
+    if (
+      !(mode === 'screener' && screenerTab === 'charts') &&
+      selectedTicker === FUTURES_COMBINED_TICKER
+    ) {
+      setSelectedTicker(tickerList[0] || '');
+    }
+  }, [mode, screenerTab, selectedTicker, tickerList]);
 
   if (loading && tickerList.length === 0) {
     return (
@@ -690,25 +711,16 @@ export default function Futures({ assetType = 'stock_futures' }) {
         mode={mode}
         screenerTab={screenerTab}
         assetType={assetType}
-        tickerList={displayTickerList}
+        // Only pass tickerList in screener+charts mode (Charts sub-tab needs ticker selector)
+        tickerList={mode === 'screener' && screenerTab === 'charts' ? displayTickerList : []}
         selectedTicker={selectedTicker}
-        onTickerChange={(t) => {
-          setSelectedTicker(t);
-          // In expiry mode: switching ticker navigates to that ticker's analytics.
-          // In screener+charts mode: just update selectedTicker for the chart (no mode switch).
-          // In screener+screener mode: switch to expiry mode (existing behaviour).
-          if (mode === 'screener' && screenerTab === 'charts') {
-            // stay in screener/charts — ticker update is enough
-          } else if (mode === 'screener') {
-            setMode('expiry');
-          }
-        }}
+        onTickerChange={(t) => setSelectedTicker(t)}
         expiries={
           mode === 'screener'
             ? screenerTab === 'charts'
-              ? validChartExpiries          // full chain for "Add Expiry" dropdown
-              : screenerExpiries
-            : expiries
+              ? validChartExpiries
+              : allExpiries
+            : allExpiries
         }
         selectedExpiries={
           mode === 'screener'
@@ -722,10 +734,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
             ? screenerTab === 'charts'
               ? (arr) => {
                   const deduped = [...new Set(arr)];
-                  // preserve master expiry order
-                  const ordered = validChartExpiries.filter((e) =>
-                    deduped.includes(e)
-                  );
+                  const ordered = validChartExpiries.filter((e) => deduped.includes(e));
                   setChartSelectedExpiries(ordered.slice(0, 5));
                 }
               : (arr) => {
@@ -739,6 +748,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
         endDate=""
         onStartDateChange={() => {}}
         onEndDateChange={() => {}}
+        validDates={marketDates}
       />
 
       <main className="flex-1 p-6 overflow-x-hidden">
@@ -779,6 +789,27 @@ export default function Futures({ assetType = 'stock_futures' }) {
           </div>
         </div>
 
+        {/* ── Ticker selector row (only visible in Ticker Analytics mode) ── */}
+        {mode === 'expiry' && tickerList.length > 0 && (
+          <div className="mb-5">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs text-white/45 uppercase tracking-wide">Ticker</span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Show a compact inline search/select for ticker in the main area */}
+              <select
+                value={selectedTicker}
+                onChange={(e) => setSelectedTicker(e.target.value)}
+                className="rounded-xl border border-white/10 bg-[#151922] text-white text-sm px-3 py-2 focus:outline-none focus:border-[#00B0F0]/40"
+              >
+                {tickerList.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
         {/* ── SCREENER MODE ── */}
         {mode === 'screener' && (
           <div className="space-y-4">
@@ -810,11 +841,9 @@ export default function Futures({ assetType = 'stock_futures' }) {
               assetType={assetType}
               allDates={allDates}
               screenerExpiries={screenerThreeExpiries}
-              // Charts sub-tab
               chartSelectedExpiries={chartSelectedExpiries}
-              allScreenerExpiries={screenerExpiries}
-              chartTicker={selectedTicker}
-              // Screener table
+              allScreenerExpiries={allExpiries}
+              chartTicker={chartTicker}
               activeScreenerExpiry={activeScreenerExpiry}
               onScreenerExpiryChange={setActiveScreenerExpiry}
               activeTab={screenerTab}
@@ -853,7 +882,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
                     assetType={assetType}
                     ticker={selectedTicker}
                     expiry={activeExpiry}
-                    allExpiries={expiries}
+                    allExpiries={allExpiries}
                   />
                 )}
               </>

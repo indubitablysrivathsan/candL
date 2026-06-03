@@ -18,7 +18,7 @@ class TickerListResponse(BaseModel):
 
 class ExpiriesResponse(BaseModel):
     asset_type: str
-    ticker: str
+    ticker: Optional[str] = None
     expiries: list[str]
 
 

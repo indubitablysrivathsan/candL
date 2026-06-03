@@ -428,17 +428,14 @@ export default function Options({ assetType = 'stock_options' }) {
       })
       .catch((err) => {
         console.error(err);
-
         if (!mounted) return;
-
-        setBackendAvailable(false);
         setTickerList([]);
       })
       .finally(() => { if (mounted) setLoading(false); });
 
     return () => { mounted = false; };
   }, [assetType]);
-
+  
   /* ── Fetch expiries ── */
   useEffect(() => {
     if (!selectedTicker || selectedTicker === OPTIONS_COMBINED_TICKER) return;

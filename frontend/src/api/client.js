@@ -1,7 +1,8 @@
 // frontend/src/api/client.js
 
 const API_BASE =
-  `${import.meta.env.VITE_API_URL}/api/v1`;
+  import.meta.env.VITE_API_URL
+  || 'http://127.0.0.1:8000/api/v1';
 
 export async function request(url) {
   const response = await fetch(`${API_BASE}${url}`);
@@ -105,17 +106,27 @@ function _sortExpiries(expiries) {
   return [...future, ...past];
 }
 
-export async function getExpiries(assetType = 'stock_options', ticker) {
-  if (!ticker) throw new Error('Ticker required');
-  const res = await request(`/${assetType}/expiries/${encodeURIComponent(ticker)}`);
-  return { ...res, expiries: _sortExpiries(res?.expiries ?? []) };
+export async function getExpiries(assetType = 'stock_options', ticker = null) {
+  const endpoint = ticker
+    ? `/${assetType}/expiries/${encodeURIComponent(ticker)}`
+    : `/${assetType}/expiries`;
+
+  const res = await request(endpoint);
+
+  return {
+    ...res,
+    expiries: _sortExpiries(res?.expiries ?? []),
+  };
 }
 
-export async function getDates(assetType = 'stock_options', ticker, expiry) {
-  if (!ticker || !expiry) throw new Error('Ticker and expiry required');
-  return request(
-    `/${assetType}/dates/${encodeURIComponent(ticker)}/${encodeURIComponent(expiry)}`
-  );
+export async function getDates(assetType = 'stock_options', expiry, ticker = null) {
+  if (!expiry) throw new Error('Expiry required');
+
+  const endpoint = ticker
+    ? `/${assetType}/dates/${encodeURIComponent(ticker)}/${encodeURIComponent(expiry)}`
+    : `/${assetType}/dates/${encodeURIComponent(expiry)}`;
+
+  return request(endpoint);
 }
 
 export async function getMarketDates(assetType = 'stock_futures') {

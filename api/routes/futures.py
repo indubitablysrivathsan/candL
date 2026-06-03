@@ -28,6 +28,10 @@ from api.db import (
     get_futures_cycle_history,
 )
 
+from api.schemas import (
+    ExpiriesResponse,
+)
+
 
 def _make_futures_router(asset_type: str) -> APIRouter:
     prefix = f"/{asset_type}"
@@ -37,13 +41,29 @@ def _make_futures_router(asset_type: str) -> APIRouter:
     @router.get("/tickers")
     def _tickers():
         return {"asset_type": asset_type, "tickers": list_tickers(asset_type)}
+    
+    @router.get("/expiries", response_model=ExpiriesResponse)
+    def _all_expiries():
+        exp = list_expiries(asset_type)
+        if not exp:
+            raise HTTPException(404, "No expiries found")
+        return ExpiriesResponse(asset_type=asset_type, ticker=None, expiries=exp)
 
-    @router.get("/expiries/{ticker}")
+    @router.get("/expiries/{ticker}", response_model=ExpiriesResponse)
     def _expiries(ticker: str):
         expiries = list_expiries(asset_type, ticker)
         if not expiries:
             raise HTTPException(404, f"No {asset_type} data for ticker: {ticker}")
         return {"asset_type": asset_type, "ticker": ticker, "expiries": expiries}
+    
+    @router.get("/dates/{expiry}")
+    def _dates_no_ticker(expiry: str):
+        return {
+            "asset_type": asset_type,
+            "ticker":     None,
+            "expiry":     expiry,
+            "dates":      get_available_dates(asset_type, expiry),
+        }
 
     @router.get("/dates/{ticker}/{expiry}")
     def _dates(ticker: str, expiry: str):
@@ -51,7 +71,7 @@ def _make_futures_router(asset_type: str) -> APIRouter:
             "asset_type": asset_type,
             "ticker":     ticker,
             "expiry":     expiry,
-            "dates":      get_available_dates(asset_type, ticker, expiry),
+            "dates":      get_available_dates(asset_type, expiry, ticker),
         }
 
     @router.get("/analytics/{ticker}/{expiry}")

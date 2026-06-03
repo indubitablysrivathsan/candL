@@ -349,26 +349,42 @@ def list_tickers(asset_type: str) -> list[str]:
     return [r[0] for r in rows]
 
 
-def list_expiries(asset_type: str, ticker: str) -> list[str]:
-    """Returns all expiries for a ticker in ascending date order."""
+def list_expiries(asset_type: str, ticker: str | None = None) -> list[str]:
+    """Returns expiries for a ticker, or all expiries for an asset type if ticker is omitted."""
     instr = _instr(asset_type)
     conn = get_conn(read_only=True)
+
     try:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT CAST(expiry AS VARCHAR) AS exp
-            FROM instruments
-            WHERE instrument_type = ? AND ticker = ? AND expiry IS NOT NULL
-            ORDER BY exp
-            """,
-            [instr, ticker],
-        ).fetchall()
+        if ticker:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT CAST(expiry AS VARCHAR) AS exp
+                FROM instruments
+                WHERE instrument_type = ?
+                  AND ticker = ?
+                  AND expiry IS NOT NULL
+                ORDER BY exp
+                """,
+                [instr, ticker],
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT CAST(expiry AS VARCHAR) AS exp
+                FROM instruments
+                WHERE instrument_type = ?
+                  AND expiry IS NOT NULL
+                ORDER BY exp
+                """,
+                [instr],
+            ).fetchall()
     finally:
         conn.close()
+
     return [r[0] for r in rows]
 
 
-def get_available_dates(asset_type: str, ticker: str, expiry: str) -> list[str]:
+def get_available_dates(asset_type: str, expiry: str, ticker: str | None = None) -> list[str]:
     instr = _instr(asset_type)
     table = (
         "futures_analytics"
@@ -377,15 +393,18 @@ def get_available_dates(asset_type: str, ticker: str, expiry: str) -> list[str]:
     )
     conn = get_conn(read_only=True)
     try:
-        rows = conn.execute(
-            f"""
+        query = f"""
             SELECT DISTINCT CAST(trade_date AS VARCHAR) AS td
             FROM {table}
-            WHERE instrument_type = ? AND ticker = ? AND expiry = CAST(? AS DATE)
-            ORDER BY td
-            """,
-            [instr, ticker, expiry],
-        ).fetchall()
+            WHERE instrument_type = ?
+              AND expiry = CAST(? AS DATE)
+        """
+        params = [instr, expiry]
+        if ticker:
+            query += " AND ticker = ?"
+            params.append(ticker)
+        query += " ORDER BY td"
+        rows = conn.execute(query, params).fetchall()
     finally:
         conn.close()
     return [r[0] for r in rows]
