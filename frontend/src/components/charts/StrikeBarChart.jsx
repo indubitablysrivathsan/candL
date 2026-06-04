@@ -5,11 +5,13 @@ import { useMemo } from 'react';
 import {
   ResponsiveContainer,
   BarChart,
+  Customized,
   CartesianGrid,
   XAxis,
   YAxis,
   Tooltip,
   Bar,
+  Rectangle,
   ReferenceLine,
 } from 'recharts';
 
@@ -53,27 +55,96 @@ function CustomTooltip({ active, payload, label, metric }) {
 ────────────────────────────────────────────────────────────────── */
 
 function AnimatedBar(props) {
-  const { x, y, width, height, fill, radius } = props;
+  let { x, y, width, height, fill } = props;
 
-  if (!width || !height || height <= 0 || isNaN(y) || isNaN(height)) return null;
+  if (!width || !height || isNaN(y) || isNaN(height)) {
+    return null;
+  }
 
-  const r        = Array.isArray(radius) ? radius[0] : (radius ?? 0);
-  const clampedR = Math.min(r, height / 2, width / 2);
+  const isNegative = height < 0;
+
+  if (isNegative) {
+    y += height;
+    height = Math.abs(height);
+  }
 
   return (
-    <rect
+    <Rectangle
+      {...props}
       x={x}
       y={y}
       width={width}
       height={height}
-      rx={clampedR}
-      ry={clampedR}
       fill={fill}
-      style={{
-        transition:
-          'height 350ms cubic-bezier(0.4, 0, 0.2, 1), y 350ms cubic-bezier(0.4, 0, 0.2, 1)',
-      }}
+      radius={
+        isNegative
+          ? [0, 0, 4, 4] // round bottom
+          : [4, 4, 0, 0] // round top
+      }
     />
+  );
+}
+
+/* ─── Horizontal Candle ───────────────────────────────────────────
+   Rendered as a custom SVG overlay inside the chart's top margin.
+   The chart has margin.top = 20, so we draw inside that 20px band.
+   x/width come from the XAxis scale, so it's perfectly aligned.
+────────────────────────────────────────────────────────────────── */
+
+function HorizontalCandle({ ohlcData, xScale, chartWidth, chartLeft }) {
+  if (!ohlcData || !xScale) return null;
+
+  const { open, high, low, close, prevClose } = ohlcData;
+  if ([open, high, low, close].some((v) => v == null || isNaN(v))) return null;
+
+  const { x_min, x_max, strike_gap } = xScale;
+  const domainMin = x_min - strike_gap;
+  const domainMax = x_max + strike_gap;
+  const domainRange = domainMax - domainMin;
+
+  // Map a price value → pixel x inside the chart plot area
+  const toX = (val) => chartLeft + ((val - domainMin) / domainRange) * chartWidth;
+
+  const xOpen  = toX(open);
+  const xClose = toX(close);
+  const xHigh  = toX(high);
+  const xLow   = toX(low);
+
+  const isBullish =
+    ohlcData.prevClose != null
+      ? close > ohlcData.prevClose
+      : close >= open; // fallback
+  const bodyLeft   = Math.min(xOpen, xClose);
+  const bodyWidth  = Math.max(Math.abs(xClose - xOpen), 2);
+  const isHollow = close >= open;
+
+  // Candle sits in the top margin band (0–20px). Centre it at y=10.
+  const cy        = 10;
+  const bodyH     = 16;
+  const bodyTop   = cy - bodyH / 2;
+  const wickColor = isBullish ? '#26a69a' : '#ef5350';
+
+  return (
+    <g style={{ pointerEvents: 'none' }}>
+      {/* Wick: low → high */}
+      <line
+        x1={xLow}  y1={cy}
+        x2={xHigh} y2={cy}
+        stroke={wickColor}
+        strokeWidth={1.5}
+      />
+      {/* Body */}
+      <rect
+        x={bodyLeft}
+        y={bodyTop}
+        width={bodyWidth}
+        height={bodyH}
+        fill={isHollow ? 'none' : wickColor}
+        stroke={wickColor}
+        strokeWidth={1.5}
+        rx={1}
+      />
+    </g>
   );
 }
 
@@ -84,6 +155,7 @@ export default function StrikeBarChart({
   metric  = 'oi',
   yDomain = null,
   xScale  = null,  // { x_min, x_max, strike_gap }
+  ohlcData = null,
 }) {
   const fields = getMetricFields(metric);
   const colors = getMetricColors(metric);
@@ -234,6 +306,20 @@ export default function StrikeBarChart({
               fill={colors.ce}
               shape={<AnimatedBar radius={[4, 4, 0, 0]} fill={colors.ce} />}
               isAnimationActive={false}
+            />
+            <Customized
+              component={({ xAxisMap, offset }) => {
+                const axis = xAxisMap?.[0];
+                if (!axis) return null;
+                return (
+                  <HorizontalCandle
+                    ohlcData={ohlcData}
+                    xScale={xScale}
+                    chartWidth={offset?.width ?? 0}
+                    chartLeft={offset?.left ?? 0}
+                  />
+                );
+              }}
             />
           </BarChart>
         </ResponsiveContainer>

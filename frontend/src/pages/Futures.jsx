@@ -343,7 +343,7 @@ function RollupPanel({
     });
 
     QUADRANTS.forEach((q) => {
-      map[q].sort((a, b) => Math.abs(b.chng_in_oi ?? 0) - Math.abs(a.chng_in_oi ?? 0));
+      map[q].sort((a, b) => Math.abs(b.chng_oi_per ?? 0) - Math.abs(a.chng_oi_per ?? 0));
     });
 
     return map;

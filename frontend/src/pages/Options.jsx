@@ -21,6 +21,7 @@ import {
   getAnalytics,
   getDailyExpirySnapshot,
   getChartScale,
+  stocks,
   formatCurrency,
   formatNumber,
   calculateTotals,
@@ -48,6 +49,7 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
   const [xScale, setXScale]                   = useState(null);
   const [error, setError]                     = useState('');
   const [innerTab, setInnerTab]               = useState('chart');
+  const [ohlcData, setOhlcData] = useState(null);
 
   /* ── Fetch dates ── */
   useEffect(() => {
@@ -100,6 +102,28 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
 
     return () => { mounted = false; };
   }, [assetType, ticker, expiry, selectedDate, metric]);
+
+  /* ── Fetch OHLC (for horizontal candle) ── */
+  useEffect(() => {
+    if (metric === 'ts' || metric === 'daily_expiry_snapshot' || !filteredDates.length || !ticker) return;
+    let mounted = true;
+
+    const start = filteredDates[0];
+    const end   = filteredDates[filteredDates.length - 1];
+
+    stocks.ohlc(ticker, start, end)
+      .then((rows) => {
+        if (!mounted) return;
+        // find the row matching selectedDate, fall back to last row
+        const idx = rows.findIndex((r) => r.trade_date === selectedDate);
+        const row =   idx >= 0 ? rows[idx] : rows[rows.length - 1] ?? null;
+        const prevRow =   idx >= 0 ? rows[idx-1] : null;
+        setOhlcData({...row, prevClose: prevRow?.close});
+      })
+      .catch(() => { if (mounted) setOhlcData(null); });
+
+    return () => { mounted = false; };
+  }, [ticker, metric, filteredDates, selectedDate]);
 
   /* ── Fetch chart scale ── */
   useEffect(() => {
@@ -327,7 +351,7 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
       </div>
 
       {innerTab === 'chart' && (
-        <StrikeBarChart snapshotData={snapshotData} metric={metric} yDomain={yDomain} xScale={xScale} />
+        <StrikeBarChart snapshotData={snapshotData} metric={metric} yDomain={yDomain} xScale={xScale} ohlcData={ohlcData} />
       )}
 
       <DateSlider dates={filteredDates} selectedDate={selectedDate} onChange={setSelectedDate} />
@@ -387,7 +411,9 @@ export default function Options({ assetType = 'stock_options' }) {
 
   useEffect(() => {
     if (!validChartExpiries.length) return;
-    setChartSelectedExpiries(validChartExpiries.slice(0, 5));
+    setChartSelectedExpiries((prev) =>
+      prev.length > 0 ? prev : validChartExpiries.slice(0, 5)
+    );
   }, [validChartExpiries]);
 
   const isDailySnapshot = selectedMetric === 'daily_expiry_snapshot';

@@ -365,9 +365,13 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
 
   /* ── Init colors ── */
   useEffect(() => {
-    const map = {};
-    allExpiries.forEach((exp, i) => { map[exp] = PALETTE[i % PALETTE.length]; });
-    setColorMap(map);
+    setColorMap((prev) => {
+      const map = { ...prev };
+      allExpiries.forEach((exp, i) => {
+        if (!map[exp]) map[exp] = PALETTE[i % PALETTE.length];
+      });
+      return map;
+    });
   }, [allExpiries]);
 
   /* ── Reset drag when cycle changes ── */
@@ -428,16 +432,23 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
         });
       }
 
-      // sum OI per date
+      // sum OI per date and calc pcr
       const groupedByDate = {};
       cycleRows.forEach((r) => {
         const td = r.trade_date?.split?.('T')[0] ?? String(r.trade_date).slice(0, 10);
-        if (resolvedMetricKey) {
-          groupedByDate[td] = (groupedByDate[td] ?? 0) + (Number(r[resolvedMetricKey]) || 0);
-        } else {
-          // combined = ce_oi + pe_oi
-          groupedByDate[td] = (groupedByDate[td] ?? 0) + (Number(r.ce_oi) || 0) + (Number(r.pe_oi) || 0);
-        }
+        if (!groupedByDate[td]) groupedByDate[td] = { ce: 0, pe: 0 };
+        groupedByDate[td].ce += Number(r.ce_oi) || 0;
+        groupedByDate[td].pe += Number(r.pe_oi) || 0;
+      });
+
+      // Derive the actual plotted value per date
+      const plotByDate = {};
+      Object.entries(groupedByDate).forEach(([td, { ce, pe }]) => {
+        if (activeMetric === 'ce_oi')    plotByDate[td] = ce;
+        else if (activeMetric === 'pe_oi')    plotByDate[td] = pe;
+        else if (activeMetric === 'combined') plotByDate[td] = ce + pe;
+        else if (activeMetric === 'pcr')      plotByDate[td] = ce > 0 ? pe / ce : null;
+        else if (resolvedMetricKey)           plotByDate[td] = (groupedByDate[td]?.[resolvedMetricKey] ?? 0); // fallback for futures path
       });
 
       const tradingDates = Object.keys(groupedByDate).sort((a, b) => new Date(a) - new Date(b));
@@ -456,7 +467,7 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
         if (offset < -24 || offset > 0) return;
 
         if (!offsetMap[offset]) offsetMap[offset] = { offset };
-        offsetMap[offset][cycleExp]              = groupedByDate[date];
+        offsetMap[offset][cycleExp]              = plotByDate[date] ?? null;
         offsetMap[offset][`${cycleExp}_date`]    = date;
       });
     });
@@ -516,7 +527,11 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
                   )}
                 </div>
                 {tradeDate && <div className="text-[11px] text-white/45">{tradeDate}</div>}
-                <div className="text-sm text-white">{formatOI(p.value)}</div>
+                <div className="text-sm text-white">
+                  {activeMetric === 'pcr'
+                    ? (p.value != null ? p.value.toFixed(3) : '--')
+                    : formatOI(p.value)}
+                </div>
               </div>
             );
           })}
@@ -562,6 +577,7 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
                 { key: 'ce_oi',    label: 'CE OI',   color: '#00B0F0' },
                 { key: 'pe_oi',    label: 'PE OI',   color: '#FF00FF' },
                 { key: 'combined', label: 'CE + PE', color: '#92D050' },
+                { key: 'pcr',      label: 'PCR',     color: '#FFD700' },
               ].map(({ key, label, color }) => (
                 <button
                   key={key}
@@ -623,7 +639,7 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
                 />
                 <YAxis
                   tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                  tickFormatter={formatOI}
+                  tickFormatter={activeMetric === 'pcr' ? (v) => v != null ? v.toFixed(2) : '' : formatOI}
                   tickLine={false}
                   axisLine={{ stroke: 'rgba(255,255,255,0.08)' }}
                   width={70}
