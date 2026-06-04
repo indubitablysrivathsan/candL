@@ -1,8 +1,8 @@
 // frontend/src/pages/Stocks.jsx
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis,
+  LineChart, Line, BarChart, ComposedChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Cell,
 } from 'recharts';
 
@@ -112,22 +112,28 @@ function OHLCView({ tickers, dates }) {
   const [startDate, setStartDate] = useState(dates.at(-60) ?? '');
   const [endDate,   setEndDate]   = useState(dates.at(-1)  ?? '');
   const [data,      setData]      = useState([]);
+  const [rollData,  setRollData]  = useState([]);
   const [loading,   setLoading]   = useState(false);
   const [chartTab,  setChartTab]  = useState('price');
+  const [showCandles, setShowCandles] = useState(true);
+  const [showAvg,     setShowAvg]     = useState(false);
+  const scaleRef = useRef(null);
 
   const load = useCallback(async () => {
     if (!ticker || !startDate || !endDate) return;
     setLoading(true);
     try {
-      const d = await stocks.rolling(ticker, startDate, endDate);
+      const d = await stocks.ohlc(ticker, startDate, endDate);
       setData(d);
+      const rolling = await stocks.rolling(ticker, startDate, endDate);
+      setRollData(rolling);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, [ticker, startDate, endDate]);
 
   useEffect(() => { load(); }, [load]);
 
-  const latest = data.at(-1);
+  const latest = rollData.at(-1);
 
   const metricCards = latest ? [
     { title: 'Close',       value: formatCurrency(latest.close, 2),                            accent: CHART_COLORS.gold   },
@@ -203,23 +209,136 @@ function OHLCView({ tickers, dates }) {
         >
           <TabBar tabs={chartTabs} activeTab={chartTab} onChange={setChartTab} />
 
-          {/* Price */}
-          {chartTab === 'price' && (
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                <XAxis dataKey="trade_date" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                  tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" tickLine={false}
-                  axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                <YAxis tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} domain={['auto', 'auto']}
-                  tickFormatter={(v) => `₹${fmt(v, 0)}`} width={72} tickLine={false}
-                  axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                <Tooltip content={<ChartTooltip valueFormatter={(v) => formatCurrency(v, 2)} />} />
-                <Line dataKey="close"     name="Close"   stroke={CHART_COLORS.accent} dot={false} strokeWidth={2} />
-                <Line dataKey="avg_price" name="Avg"     stroke={CHART_COLORS.amber}  dot={false} strokeWidth={1.5} strokeDasharray="4 3" />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
+          {/* Price — Candlestick */}
+          {chartTab === 'price' && (() => {
+            const green = '#26a69a';
+            const red   = '#ef5350';
+
+            // Collect pixel positions from both bars to build the scale
+            const pixelMap = {};  // { index -> { closeY, lowY } }
+
+            const CloseShape = (props) => {
+              const { x, y, width, height, index, payload } = props;
+              if (!pixelMap[index]) pixelMap[index] = {};
+              pixelMap[index].closeY  = y;
+              pixelMap[index].closeVal = payload?.close;
+              pixelMap[index].x = x;
+              pixelMap[index].width = width;
+              return null; // rendered by CandleShape after LowShape fires
+            };
+
+            const LowShape = (props) => {
+              const { x, y, width, height, index, payload } = props;
+              if (!pixelMap[index]) pixelMap[index] = {};
+              pixelMap[index].lowY   = y;
+              pixelMap[index].lowVal = payload?.low;
+
+              // Both anchors available — render the candle now
+              const pm = pixelMap[index];
+              if (pm.closeY == null || pm.lowY == null || pm.closeVal == null || pm.lowVal == null) return null;
+
+              const { open, high, low, close, prev_close } = payload;
+              if ([open, high, low, close].some(v => v == null || isNaN(v))) return null;
+
+              // Derive linear scale from two anchors:
+              // close -> pm.closeY,  low -> pm.lowY
+              const pxPerUnit = (pm.lowY - pm.closeY) / (low - close);
+              const scaleY = (val) => pm.closeY + (val - close) * pxPerUnit;
+
+              const isBullish = prev_close != null ? close > prev_close : close >= open;
+              const isHollow  = close >= open;
+              const color     = isBullish ? green : red;
+              const cx        = pm.x + pm.width / 2;
+
+              const yOpen      = scaleY(open);
+              const yClose     = scaleY(close);
+              const yHigh      = scaleY(high);
+              const yLow       = scaleY(low);
+              const bodyTop    = Math.min(yOpen, yClose);
+              const bodyHeight = Math.max(Math.abs(yClose - yOpen), 1);
+              const bodyWidth  = Math.max(pm.width * 0.6, 3);
+              const bodyX      = cx - bodyWidth / 2;
+
+              return (
+                <g>
+                  <line x1={cx} y1={yHigh} x2={cx} y2={yLow} stroke={color} strokeWidth={1} />
+                  <rect
+                    x={bodyX} y={bodyTop}
+                    width={bodyWidth} height={bodyHeight}
+                    fill={isHollow ? 'transparent' : color}
+                    stroke={color} strokeWidth={1.5} rx={1}
+                  />
+                </g>
+              );
+            };
+
+            const PriceTooltip = ({ active, payload, label }) => {
+              if (!active || !payload?.length) return null;
+              const row = payload[0]?.payload;
+              if (!row) return null;
+              const fields = [
+                showCandles && row.open     != null && { label: 'Open',  value: formatCurrency(row.open,     2), color: 'rgba(255,255,255,0.7)' },
+                showCandles && row.high     != null && { label: 'High',  value: formatCurrency(row.high,     2), color: green },
+                showCandles && row.low      != null && { label: 'Low',   value: formatCurrency(row.low,      2), color: red   },
+                showCandles && row.close    != null && { label: 'Close', value: formatCurrency(row.close,    2), color: 'rgba(255,255,255,0.7)' },
+                showAvg && row.avg_price   != null && { label: 'Avg',   value: formatCurrency(row.avg_price, 2), color: CHART_COLORS.amber },
+              ].filter(Boolean);
+              return (
+                <div className="bg-[#11151d] border border-white/10 rounded-xl px-4 py-3 shadow-2xl min-w-[160px]">
+                  <p className="text-xs text-white/50 mb-2">{label}</p>
+                  <div className="space-y-1.5">
+                    {fields.map(({ label, value, color }) => (
+                      <div key={label} className="flex items-center justify-between gap-4 text-sm">
+                        <span style={{ color }}>{label}</span>
+                        <span className="text-white font-medium tabular-nums">{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            };
+
+            const btnClass = (active) =>
+              `px-3 py-1 rounded-lg border text-xs transition ${
+                active
+                  ? 'border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0]'
+                  : 'border-white/10 bg-[#151922] text-white/45 hover:bg-white/5'
+              }`;
+
+            return (
+              <>
+                <ResponsiveContainer width="100%" height={600}>
+                  <ComposedChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                    <XAxis dataKey="trade_date"
+                      tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                      tickFormatter={(d) => d.slice(5)}
+                      interval="preserveStartEnd" tickLine={false}
+                      axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
+                    <YAxis
+                      domain={['auto', 'auto']}
+                      tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                      tickFormatter={(v) => `₹${fmt(v, 0)}`}
+                      width={72} tickLine={false}
+                      axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
+                    <Tooltip content={<PriceTooltip />} />
+                    {showAvg && (
+                      <Line dataKey="avg_price" name="Avg"
+                        stroke={CHART_COLORS.amber} dot={false}
+                        strokeWidth={1.5} strokeDasharray="4 3" />
+                    )}
+                    {/* Two hidden bars to capture pixel positions for scale derivation */}
+                    <Bar dataKey="close" shape={<CloseShape />} isAnimationActive={false} legendType="none" tooltipType="none" />
+                    <Bar dataKey="low"   shape={<LowShape />}   isAnimationActive={false} legendType="none" tooltipType="none" />
+                  </ComposedChart>
+                </ResponsiveContainer>
+                <div className="flex items-center gap-2 mt-3">
+                  <button className={btnClass(showCandles)} onClick={() => setShowCandles(v => !v)}>Candles</button>
+                  <button className={btnClass(showAvg)}     onClick={() => setShowAvg(v => !v)}>Avg Price</button>
+                </div>
+              </>
+            );
+          })()}
 
           {/* Delivery */}
           {chartTab === 'delivery' && (

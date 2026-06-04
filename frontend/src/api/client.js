@@ -1,12 +1,10 @@
 // frontend/src/api/client.js
 
 const API_BASE =
-  import.meta.env.VITE_API_URL
-  || 'http://127.0.0.1:8000/api/v1';
+  import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 export async function request(url) {
-  const response = await fetch(`${API_BASE}${url}`);
-
+  const response = await fetch(`${API_BASE}/api/v1${url}`);
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
 
