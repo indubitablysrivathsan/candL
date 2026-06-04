@@ -386,7 +386,7 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
     const fetcher = fetchHistory
       ? fetchHistory(assetType, ticker)
       : isCombined
-        ? getFuturesCombinedHistory(assetType, allDates)
+        ? getFuturesCombinedHistory(assetType, allDates, selectedCycles, orderedExpiries)
         : getFuturesCycleHistory(assetType, ticker);
 
     fetcher
@@ -396,7 +396,7 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
     return () => { mounted = false; };
   // allDates deliberately excluded for options path — only re-fetch when ticker/assetType change
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assetType, ticker, fetchHistory, isCombined]);
+  }, [assetType, ticker, fetchHistory, isCombined, allDates, selectedCycles]);
 
   /* ── Build chart data — fixed 25-day x-axis (-24 to 0) ── */
   const chartData = useMemo(() => {
@@ -433,22 +433,65 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
       }
 
       // sum OI per date and calc pcr
+
       const groupedByDate = {};
+
       cycleRows.forEach((r) => {
-        const td = r.trade_date?.split?.('T')[0] ?? String(r.trade_date).slice(0, 10);
-        if (!groupedByDate[td]) groupedByDate[td] = { ce: 0, pe: 0 };
-        groupedByDate[td].ce += Number(r.ce_oi) || 0;
-        groupedByDate[td].pe += Number(r.pe_oi) || 0;
+        const td =
+          r.trade_date?.split?.('T')[0] ??
+          String(r.trade_date).slice(0, 10);
+
+        if (!groupedByDate[td]) {
+          groupedByDate[td] = {};
+        }
+
+        // OPTIONS
+        if (metricToggle) {
+          groupedByDate[td].ce =
+            (groupedByDate[td].ce || 0) +
+            (Number(r.ce_oi) || 0);
+
+          groupedByDate[td].pe =
+            (groupedByDate[td].pe || 0) +
+            (Number(r.pe_oi) || 0);
+        }
+
+        // FUTURES
+        else {
+          groupedByDate[td].open_int =
+            (groupedByDate[td].open_int || 0) +
+            (Number(r.open_int) || 0);
+
+          groupedByDate[td].chng_in_oi =
+            (groupedByDate[td].chng_in_oi || 0) +
+            (Number(r.chng_in_oi) || 0);
+        }
       });
 
-      // Derive the actual plotted value per date
       const plotByDate = {};
-      Object.entries(groupedByDate).forEach(([td, { ce, pe }]) => {
-        if (activeMetric === 'ce_oi')    plotByDate[td] = ce;
-        else if (activeMetric === 'pe_oi')    plotByDate[td] = pe;
-        else if (activeMetric === 'combined') plotByDate[td] = ce + pe;
-        else if (activeMetric === 'pcr')      plotByDate[td] = ce > 0 ? pe / ce : null;
-        else if (resolvedMetricKey)           plotByDate[td] = (groupedByDate[td]?.[resolvedMetricKey] ?? 0); // fallback for futures path
+
+      Object.entries(groupedByDate).forEach(([td, values]) => {
+        if (metricToggle) {
+          const ce = values.ce || 0;
+          const pe = values.pe || 0;
+
+          if (activeMetric === 'ce_oi')
+            plotByDate[td] = ce;
+
+          else if (activeMetric === 'pe_oi')
+            plotByDate[td] = pe;
+
+          else if (activeMetric === 'combined')
+            plotByDate[td] = ce + pe;
+
+          else if (activeMetric === 'pcr')
+            plotByDate[td] = ce > 0 ? pe / ce : null;
+        }
+
+        else {
+          plotByDate[td] =
+            values[resolvedMetricKey] ?? null;
+        }
       });
 
       const tradingDates = Object.keys(groupedByDate).sort((a, b) => new Date(a) - new Date(b));

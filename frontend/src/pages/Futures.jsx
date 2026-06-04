@@ -271,6 +271,7 @@ function AnalyticsPanel({ assetType, ticker, expiry, allExpiries }) {
 function RollupPanel({
   assetType,
   allDates,
+  marketDates,
   screenerExpiries,
   chartSelectedExpiries,
   allScreenerExpiries,
@@ -360,7 +361,7 @@ function RollupPanel({
         ticker={chartTicker}
         allExpiries={allScreenerExpiries}
         selectedCycles={chartSelectedExpiries}
-        allDates={allDates}
+        allDates={marketDates}
       />
     );
   }
@@ -533,6 +534,17 @@ export default function Futures({ assetType = 'stock_futures' }) {
     const inProgress = allExpiries.find((e) => new Date(e) >= today);
     return inProgress ? [inProgress, ...completed] : completed;
   }, [allExpiries]);
+
+  const relevantMarketDates = useMemo(() => {
+    if (!chartSelectedExpiries.length || !allExpiries.length || !marketDates.length) return [];
+    const indices = chartSelectedExpiries.map((c) => allExpiries.indexOf(c));
+    const minIdx = Math.min(...indices);
+    const earliestPrevExpiry = minIdx > 0 ? allExpiries[minIdx - 1] : null;
+    const latestCycle = chartSelectedExpiries.reduce((a, b) => new Date(a) > new Date(b) ? a : b);
+    return marketDates.filter((d) =>
+      (!earliestPrevExpiry || d > earliestPrevExpiry) && d <= latestCycle
+    );
+  }, [marketDates, chartSelectedExpiries, allExpiries]);
 
   /* ── Ticker shown in Charts sub-tab ── */
   const chartTicker = useMemo(() => {
@@ -840,6 +852,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
             <RollupPanel
               assetType={assetType}
               allDates={allDates}
+              marketDates={relevantMarketDates}
               screenerExpiries={screenerThreeExpiries}
               chartSelectedExpiries={chartSelectedExpiries}
               allScreenerExpiries={allExpiries}

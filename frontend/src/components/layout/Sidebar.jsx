@@ -120,7 +120,7 @@ export default function Sidebar({
       <div className="space-y-6">
 
         {/* ── TICKER — hidden for futures entirely ───────────────── */}
-        {!isFutures && (
+        {!disableTicker && (
           <section>
             <div className="mb-3">
               <h2 className="text-sm font-semibold text-white">Ticker</h2>
