@@ -1,4 +1,5 @@
 // frontend/src/components/charts/OIChart.jsx
+// Bloomberg/Reuters terminal aesthetic — matches TimeSeriesChart design language
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -12,24 +13,54 @@ import {
   Legend,
 } from 'recharts';
 
-import { getFuturesCycleHistory, getFuturesCombinedHistory, getOptionsCycleHistory, getOptionsMarketHistory, getFuturesRollup, formatNumber, FUTURES_COMBINED_TICKER, OPTIONS_COMBINED_TICKER } from '../../api/client';
+import {
+  getFuturesCycleHistory,
+  getFuturesCombinedHistory,
+  getOptionsCycleHistory,
+  getOptionsMarketHistory,
+  formatNumber,
+  FUTURES_COMBINED_TICKER,
+  OPTIONS_COMBINED_TICKER,
+} from '../../api/client';
 import LoadingSpinner from '../shared/LoadingSpinner';
 
 /* ─────────────────────────────────────────────────────────────────
-   CONSTANTS
+   DESIGN TOKENS  (mirrors TimeSeriesChart)
 ───────────────────────────────────────────────────────────────── */
+const T = {
+  bg:        '#06080C',
+  surface:   '#0B0F16',
+  elevated:  '#111720',
+  border:    'rgba(255,255,255,0.07)',
+  borderHi:  'rgba(255,255,255,0.14)',
+  amber:     '#F0A500',
+  green:     '#00C896',
+  red:       '#E05252',
+  pink:      '#D66E9A',
+  blue:      '#4A9EFF',
+  textHi:    'rgba(255,255,255,0.90)',
+  textMid:   'rgba(255,255,255,0.50)',
+  textLo:    'rgba(255,255,255,0.25)',
+  grid:      'rgba(255,255,255,0.05)',
+  axis:      'rgba(255,255,255,0.10)',
+};
+
+const mono = "'IBM Plex Mono','Fira Code','Consolas',monospace";
 
 const PALETTE = [
-  '#00B0F0', // cyan
-  '#92D050', // green
-  '#FFA726', // orange
-  '#FF6B9D', // pink
+  '#4A9EFF', // blue
+  '#00C896', // green
+  '#F0A500', // amber
+  '#D66E9A', // pink
   '#B39DDB', // lavender
-  '#26a69a', // teal
-  '#ef5350', // red
-  '#FFD700', // gold
+  '#26C6DA', // cyan
+  '#E05252', // red
+  '#FFD54F', // yellow
 ];
 
+/* ─────────────────────────────────────────────────────────────────
+   HELPERS
+───────────────────────────────────────────────────────────────── */
 const formatOI = (v) => {
   if (v == null || Number.isNaN(v)) return '--';
   const abs = Math.abs(v);
@@ -39,65 +70,112 @@ const formatOI = (v) => {
   return formatNumber(v);
 };
 
+const tickStyle = {
+  fill: T.textMid,
+  fontSize: 10,
+  fontFamily: mono,
+  letterSpacing: '0.03em',
+};
+
 /* ─────────────────────────────────────────────────────────────────
-   TOOLTIP  (ticker mode)
+   SHARED TOOLTIP
 ───────────────────────────────────────────────────────────────── */
-
-function CustomTooltip({ active, payload, label }) {
+function TerminalTooltip({ active, payload, label, isPcr = false }) {
   if (!active || !payload?.length) return null;
-
   return (
-    <div className="bg-[#11151d] border border-white/10 rounded-xl px-4 py-3 shadow-2xl min-w-[180px]">
-      <p className="text-xs font-semibold text-white/60 mb-2">{label === 0 ? 'Expiry' : `${label}d`}</p>
-      <div className="space-y-1.5">
-        {payload.map((p, i) =>
-          p.value != null && (
-            <div key={i} className="flex items-center justify-between gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
-                <span style={{ color: p.color }}>{p.name}</span>
+    <div style={{
+      background: T.surface,
+      border: `1px solid ${T.borderHi}`,
+      padding: '10px 14px',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.7)',
+      minWidth: 200,
+      fontFamily: mono,
+    }}>
+      <div style={{
+        fontSize: 9,
+        fontWeight: 700,
+        letterSpacing: '0.14em',
+        textTransform: 'uppercase',
+        color: T.textLo,
+        marginBottom: 8,
+      }}>
+        {label === 0 ? 'EXPIRY DAY' : `${Math.abs(label)}D TO EXPIRY`}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {payload.map((p) => {
+          if (p.value == null) return null;
+          const tradeDate = p.payload?.[`${p.dataKey}_date`];
+          return (
+            <div key={p.dataKey}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 20 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{
+                    display: 'inline-block',
+                    width: 6,
+                    height: 6,
+                    background: p.color,
+                    flexShrink: 0,
+                  }} />
+                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.10em', color: p.color, textTransform: 'uppercase' }}>
+                    {p.name}
+                  </span>
+                </div>
+                <span style={{ fontSize: 12, color: T.textHi, fontVariantNumeric: 'tabular-nums' }}>
+                  {isPcr ? (p.value != null ? p.value.toFixed(3) : '--') : formatOI(p.value)}
+                </span>
               </div>
-              <span className="text-white font-medium tabular-nums">{formatOI(p.value)}</span>
+              {tradeDate && (
+                <div style={{ fontSize: 9, color: T.textLo, paddingLeft: 12, marginTop: 2, letterSpacing: '0.06em' }}>
+                  {tradeDate}
+                </div>
+              )}
             </div>
-          )
-        )}
+          );
+        })}
       </div>
     </div>
   );
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   COLOR SELECTOR ROW  (screener chart — selection owned by sidebar)
+   COLOR SWATCH ROW
 ───────────────────────────────────────────────────────────────── */
-
 function ColorSelectorRow({ expiry, color, onColorChange }) {
   return (
-    <div className="flex items-center gap-3">
-      {/* Cycle label */}
-      <div
-        className="flex items-center gap-2 px-3 py-2 rounded-xl border text-xs"
-        style={{
-          borderColor: `${color}40`,
-          backgroundColor: `${color}12`,
-          color,
-        }}
-      >
-        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 10px',
+        border: `1px solid ${color}50`,
+        background: `${color}0F`,
+        fontFamily: mono,
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '0.10em',
+        color,
+        textTransform: 'uppercase',
+        minWidth: 110,
+      }}>
+        <span style={{ display: 'inline-block', width: 6, height: 6, background: color, flexShrink: 0 }} />
         {expiry}
       </div>
-
-      {/* Color swatches */}
-      <div className="flex gap-1">
+      <div style={{ display: 'flex', gap: 4 }}>
         {PALETTE.map((c) => (
           <button
             key={c}
             onClick={() => onColorChange(c)}
             title={c}
-            className="w-4 h-4 rounded-full transition hover:scale-110"
             style={{
-              backgroundColor: c,
-              outline: c === color ? '2px solid white' : '1px solid transparent',
-              outlineOffset: '1px',
+              width: 12,
+              height: 12,
+              background: c,
+              border: c === color ? `1px solid ${T.textHi}` : '1px solid transparent',
+              cursor: 'pointer',
+              padding: 0,
+              flexShrink: 0,
+              transition: 'transform 100ms',
             }}
           />
         ))}
@@ -107,23 +185,83 @@ function ColorSelectorRow({ expiry, color, onColorChange }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   MAIN CHART COMPONENT  (ticker analytics mode)
+   SECTION HEADER  (matches TimeSeriesChart header strip)
 ───────────────────────────────────────────────────────────────── */
+function SectionHeader({ title, subtitle, right }) {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '8px 14px',
+      borderBottom: `1px solid ${T.border}`,
+      background: T.surface,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          color: T.textHi,
+          fontFamily: mono,
+        }}>
+          {title}
+        </span>
+        {subtitle && (
+          <span style={{
+            fontSize: 9,
+            letterSpacing: '0.10em',
+            textTransform: 'uppercase',
+            color: T.textLo,
+            fontFamily: mono,
+          }}>
+            {subtitle}
+          </span>
+        )}
+      </div>
+      {right && <div>{right}</div>}
+    </div>
+  );
+}
 
-export default function OIChart({
-  assetType,
-  ticker,
-  expiries = [],
-  mode = 'ticker',
-}) {
-  const [seriesData, setSeriesData] = useState({});
-  const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState('');
+/* ─────────────────────────────────────────────────────────────────
+   PILL TOGGLE BUTTON
+───────────────────────────────────────────────────────────────── */
+function ToggleBtn({ active, onClick, children, color = T.amber }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '3px 10px',
+        border: `1px solid ${active ? `${color}60` : T.border}`,
+        background: active ? `${color}14` : 'transparent',
+        color: active ? color : T.textMid,
+        fontFamily: mono,
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '0.10em',
+        textTransform: 'uppercase',
+        cursor: 'pointer',
+        transition: 'all 120ms',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   MAIN OI CHART  (ticker analytics mode)
+───────────────────────────────────────────────────────────────── */
+export default function OIChart({ assetType, ticker, expiries = [], mode = 'ticker' }) {
+  const [seriesData, setSeriesData]         = useState({});
+  const [loading, setLoading]               = useState(false);
+  const [error, setError]                   = useState('');
   const [activeExpiries, setActiveExpiries] = useState([]);
   const [colorMap, setColorMap]             = useState({});
   const [chartMetric, setChartMetric]       = useState('oi');
 
-  /* ── Init active expiries + colors ── */
   useEffect(() => {
     if (!expiries.length) return;
     setActiveExpiries(expiries.slice(0, 3));
@@ -132,7 +270,6 @@ export default function OIChart({
     setColorMap(map);
   }, [expiries]);
 
-  /* ── Fetch per-expiry analytics (ticker mode) ── */
   useEffect(() => {
     if (!ticker || !expiries.length) return;
     let mounted = true;
@@ -156,7 +293,6 @@ export default function OIChart({
     return () => { mounted = false; };
   }, [assetType, ticker, expiries]);
 
-  /* ── Build end-aligned chart data ── */
   const chartData = useMemo(() => {
     const activeKeys = activeExpiries.filter((e) => seriesData[e]?.length);
     if (!activeKeys.length) return [];
@@ -177,58 +313,54 @@ export default function OIChart({
 
     return allOffsets.map((offset) => {
       const point = { offset };
-
       activeKeys.forEach((exp, i) => {
         const row = seriesByOffset[i].find((r) => r.offset === offset);
-
         if (row) {
           point[`${exp}_oi`]      = row.oi;
           point[`${exp}_chng_oi`] = row.chng_oi;
           point[`${exp}_date`]    = row.trade_date;
         }
       });
-
       return point;
     });
   }, [activeExpiries, seriesData]);
 
   if (loading) return (
-    <div className="card flex items-center justify-center py-16"><LoadingSpinner /></div>
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, padding: 40, display: 'flex', justifyContent: 'center' }}>
+      <LoadingSpinner />
+    </div>
   );
   if (error) return (
-    <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-red-300 text-sm">{error}</div>
+    <div style={{ border: `1px solid ${T.red}30`, background: `${T.red}0F`, padding: '10px 14px', color: T.red, fontFamily: mono, fontSize: 11 }}>
+      {error}
+    </div>
   );
 
+  const metrics = [
+    { key: 'oi',      label: 'Open Interest' },
+    { key: 'chng_oi', label: 'OI Change'     },
+  ];
+
   return (
-    <div className="space-y-4">
-      {/* Controls */}
-      <div className="card p-4 space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-white/45 font-medium uppercase tracking-wider">Metric</span>
-            {[
-              { key: 'oi',      label: 'Open Interest' },
-              { key: 'chng_oi', label: 'OI Change'     },
-            ].map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => setChartMetric(key)}
-                className="px-3 py-1.5 rounded-lg border text-xs transition"
-                style={{
-                  borderColor:     chartMetric === key ? '#00B0F040' : 'rgba(255,255,255,0.08)',
-                  backgroundColor: chartMetric === key ? '#00B0F012' : '#151922',
-                  color:           chartMetric === key ? '#00B0F0'   : 'rgba(255,255,255,0.55)',
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="text-xs text-white/30">X-axis aligned to expiry end (0 = last day)</p>
-        </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* Control strip */}
+      <div style={{ background: T.surface, border: `1px solid ${T.border}` }}>
+        <SectionHeader
+          title={`OI Cycle — ${ticker}`}
+          subtitle="Expiry series aligned by DTE"
+          right={
+            <div style={{ display: 'flex', gap: 2 }}>
+              {metrics.map(({ key, label }) => (
+                <ToggleBtn key={key} active={chartMetric === key} onClick={() => setChartMetric(key)}>
+                  {label}
+                </ToggleBtn>
+              ))}
+            </div>
+          }
+        />
 
         {/* Expiry toggles */}
-        <div className="flex flex-wrap gap-2">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, padding: '8px 14px' }}>
           {expiries.map((exp, i) => {
             const active = activeExpiries.includes(exp);
             const color  = colorMap[exp] ?? PALETTE[i % PALETTE.length];
@@ -240,69 +372,85 @@ export default function OIChart({
                     prev.includes(exp) ? prev.filter((e) => e !== exp) : [...prev, exp]
                   )
                 }
-                className="px-3 py-2 rounded-xl border text-xs transition"
                 style={{
-                  borderColor:     active ? `${color}40` : 'rgba(255,255,255,0.08)',
-                  backgroundColor: active ? `${color}12` : '#151922',
-                  color:           active ? color         : 'rgba(255,255,255,0.45)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '3px 10px',
+                  border: `1px solid ${active ? `${color}50` : T.border}`,
+                  background: active ? `${color}0F` : 'transparent',
+                  color: active ? color : T.textLo,
+                  fontFamily: mono,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.10em',
+                  textTransform: 'uppercase',
+                  cursor: 'pointer',
+                  transition: 'all 120ms',
                 }}
               >
-                <span className="inline-flex items-center gap-2">
-                  <span
-                    className="w-2.5 h-2.5 rounded-full"
-                    style={{ backgroundColor: active ? color : 'rgba(255,255,255,0.2)' }}
-                  />
-                  {exp}
-                </span>
+                <span style={{
+                  display: 'inline-block',
+                  width: 6,
+                  height: 6,
+                  background: active ? color : T.textLo,
+                  flexShrink: 0,
+                }} />
+                {exp}
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Chart */}
-      <div className="card p-4">
-        <div className="mb-3">
-          <h3 className="text-sm font-semibold text-white">OI Cycle Comparison — {ticker}</h3>
-          <p className="text-xs text-white/40 mt-0.5">Expiry series aligned by Days To Expiry end.</p>
-        </div>
-
+      {/* Chart panel */}
+      <div style={{ background: T.surface, border: `1px solid ${T.border}` }}>
         {chartData.length === 0 ? (
-          <p className="text-white/40 text-sm py-8 text-center">No data — toggle at least one expiry above.</p>
+          <div style={{ padding: '40px 20px', textAlign: 'center', fontFamily: mono, fontSize: 11, color: T.textLo, letterSpacing: '0.10em', textTransform: 'uppercase' }}>
+            No data — toggle at least one expiry above
+          </div>
         ) : (
-          <div style={{ height: 380 }}>
+          <div style={{ width: '100%', height: 380, padding: '8px 0 0' }}>
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <LineChart data={chartData} margin={{ top: 16, right: 20, left: 0, bottom: 20 }}>
+                <CartesianGrid strokeDasharray="2 4" stroke={T.grid} vertical={false} />
                 <XAxis
                   dataKey="offset"
-                  tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                  tick={tickStyle}
                   tickLine={false}
-                  axisLine={{ stroke: 'rgba(255,255,255,0.08)' }}
-                  tickFormatter={(v) => v === 0 ? 'Exp' : `${v}d`}
+                  axisLine={{ stroke: T.axis }}
+                  tickFormatter={(v) => v === 0 ? 'EXP' : `${v}D`}
                 />
                 <YAxis
-                  tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                  tick={tickStyle}
                   tickFormatter={formatOI}
                   tickLine={false}
-                  axisLine={{ stroke: 'rgba(255,255,255,0.08)' }}
+                  axisLine={false}
                   width={65}
                 />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend formatter={(value) => (
-                  <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11 }}>{value}</span>
-                )} />
+                <Tooltip
+                  content={<TerminalTooltip />}
+                  cursor={{ stroke: T.borderHi, strokeWidth: 1, strokeDasharray: '3 3' }}
+                />
+                <Legend
+                  formatter={(value) => (
+                    <span style={{ fontFamily: mono, fontSize: 10, fontWeight: 700, letterSpacing: '0.10em', textTransform: 'uppercase', color: T.textMid }}>
+                      {value}
+                    </span>
+                  )}
+                />
                 {activeExpiries.map((exp) => (
                   <Line
                     key={exp}
                     type="linear"
                     dataKey={`${exp}_${chartMetric}`}
                     name={exp}
-                    stroke={colorMap[exp] ?? '#00B0F0'}
+                    stroke={colorMap[exp] ?? T.blue}
                     strokeWidth={2}
                     dot={false}
                     connectNulls={false}
-                    activeDot={{ r: 4 }}
+                    activeDot={{ r: 3 }}
+                    isAnimationActive={false}
                   />
                 ))}
               </LineChart>
@@ -316,38 +464,28 @@ export default function OIChart({
 
 /* ─────────────────────────────────────────────────────────────────
    SCREENER OI CHART
-   Plots one line per selected cycle expiry.
-   Each line = combined OI of (cycleExpiry + next1 + next2)
-   for the selected ticker, aligned by DTE.
-
-   Props:
-     assetType       – 'stock_futures' | 'index_futures'
-     ticker          – selected ticker (e.g. 'RELIANCE')
-     allExpiries     – full master expiry chain from API (used for
-                       cycle boundaries + next2 constituent lookup)
-     selectedCycles  – subset chosen in sidebar (max 5); each entry
-                       is one line on the chart
 ───────────────────────────────────────────────────────────────── */
-
-export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedCycles = [], allDates = [], metricToggle = false, fetchHistory = null, metricKeys = null,}) {
+export function ScreenerOIChart({
+  assetType,
+  ticker,
+  allExpiries = [],
+  selectedCycles = [],
+  allDates = [],
+  metricToggle = false,
+  fetchHistory = null,
+  metricKeys = null,
+}) {
   const [historyRows, setHistoryRows] = useState([]);
   const [loading, setLoading]         = useState(false);
   const [colorMap, setColorMap]       = useState({});
-  // drag offset for in-progress cycle (in trading-day units, 0 = right-anchored)
   const [dragOffset, setDragOffset]   = useState(0);
+  const [activeMetric, setActiveMetric] = useState(metricKeys?.default ?? 'open_int');
 
-  const [activeMetric, setActiveMetric] = useState(
-    metricKeys?.default ?? 'open_int'
-  );
+  const resolvedMetricKey = activeMetric === 'combined' ? null : activeMetric;
 
-  // derive the actual field(s) to sum per row:
-  const resolvedMetricKey = activeMetric === 'combined'
-    ? null   // special case handled below
-    : activeMetric;
-
-  const isDragging                    = useRef(false);
-  const dragStartX                    = useRef(0);
-  const dragStartOffset               = useRef(0);
+  const isDragging     = useRef(false);
+  const dragStartX     = useRef(0);
+  const dragStartOffset = useRef(0);
 
   const isCombined = ticker === FUTURES_COMBINED_TICKER;
 
@@ -355,15 +493,12 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
     [...allExpiries].sort((a, b) => new Date(a) - new Date(b)),
   [allExpiries]);
 
-  // The in-progress cycle is the latest expiry in the selected set
   const inProgressCycle = useMemo(() => {
     if (!selectedCycles.length || !orderedExpiries.length) return null;
     const today = new Date();
-    // first expiry in ordered list that hasn't fully expired yet
     return orderedExpiries.find((e) => new Date(e) >= today) ?? null;
   }, [orderedExpiries, selectedCycles]);
 
-  /* ── Init colors ── */
   useEffect(() => {
     setColorMap((prev) => {
       const map = { ...prev };
@@ -374,10 +509,8 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
     });
   }, [allExpiries]);
 
-  /* ── Reset drag when cycle changes ── */
   useEffect(() => { setDragOffset(0); }, [inProgressCycle]);
 
-  /* ── Fetch history ── */
   useEffect(() => {
     if (!ticker) return;
     let mounted = true;
@@ -394,15 +527,11 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
       .catch(() => { if (mounted) { setHistoryRows([]); setLoading(false); } });
 
     return () => { mounted = false; };
-  // allDates deliberately excluded for options path — only re-fetch when ticker/assetType change
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assetType, ticker, fetchHistory, isCombined, allDates, selectedCycles]);
 
-  /* ── Build chart data — fixed 25-day x-axis (-24 to 0) ── */
   const chartData = useMemo(() => {
-    // fixed frame: offsets -24 … 0
-    const FRAME = Array.from({ length: 25 }, (_, i) => i - 24); // [-24, -23, … 0]
-
+    const FRAME = Array.from({ length: 25 }, (_, i) => i - 24);
     const offsetMap = {};
     FRAME.forEach((o) => { offsetMap[o] = { offset: o }; });
 
@@ -418,79 +547,44 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
 
       let cycleRows;
       if (isCombined) {
-        // for combined, historyRows has no expiry column — just filter by date window
         cycleRows = historyRows.filter((r) => {
           const td = r.trade_date?.split?.('T')[0] ?? String(r.trade_date).slice(0, 10);
           return (!prevExpiry || td > prevExpiry) && td <= cycleExp;
         });
       } else {
         cycleRows = historyRows.filter((r) => {
-          const td         = r.trade_date?.split?.('T')[0] ?? String(r.trade_date).slice(0, 10);
-          const rowExpiry  = r.expiry?.split?.('T')[0]     ?? String(r.expiry).slice(0, 10);
-          const inWindow   = (!prevExpiry || td > prevExpiry) && td <= cycleExp;
+          const td        = r.trade_date?.split?.('T')[0] ?? String(r.trade_date).slice(0, 10);
+          const rowExpiry = r.expiry?.split?.('T')[0]     ?? String(r.expiry).slice(0, 10);
+          const inWindow  = (!prevExpiry || td > prevExpiry) && td <= cycleExp;
           return inWindow && constituents.includes(rowExpiry);
         });
       }
 
-      // sum OI per date and calc pcr
-
       const groupedByDate = {};
-
       cycleRows.forEach((r) => {
-        const td =
-          r.trade_date?.split?.('T')[0] ??
-          String(r.trade_date).slice(0, 10);
+        const td = r.trade_date?.split?.('T')[0] ?? String(r.trade_date).slice(0, 10);
+        if (!groupedByDate[td]) groupedByDate[td] = {};
 
-        if (!groupedByDate[td]) {
-          groupedByDate[td] = {};
-        }
-
-        // OPTIONS
         if (metricToggle) {
-          groupedByDate[td].ce =
-            (groupedByDate[td].ce || 0) +
-            (Number(r.ce_oi) || 0);
-
-          groupedByDate[td].pe =
-            (groupedByDate[td].pe || 0) +
-            (Number(r.pe_oi) || 0);
-        }
-
-        // FUTURES
-        else {
-          groupedByDate[td].open_int =
-            (groupedByDate[td].open_int || 0) +
-            (Number(r.open_int) || 0);
-
-          groupedByDate[td].chng_in_oi =
-            (groupedByDate[td].chng_in_oi || 0) +
-            (Number(r.chng_in_oi) || 0);
+          groupedByDate[td].ce = (groupedByDate[td].ce || 0) + (Number(r.ce_oi) || 0);
+          groupedByDate[td].pe = (groupedByDate[td].pe || 0) + (Number(r.pe_oi) || 0);
+        } else {
+          groupedByDate[td].open_int    = (groupedByDate[td].open_int    || 0) + (Number(r.open_int)    || 0);
+          groupedByDate[td].chng_in_oi = (groupedByDate[td].chng_in_oi || 0) + (Number(r.chng_in_oi) || 0);
         }
       });
 
       const plotByDate = {};
-
       Object.entries(groupedByDate).forEach(([td, values]) => {
         if (metricToggle) {
           const ce = values.ce || 0;
           const pe = values.pe || 0;
-
-          if (activeMetric === 'ce_oi')
-            plotByDate[td] = ce;
-
-          else if (activeMetric === 'pe_oi')
-            plotByDate[td] = pe;
-
-          else if (activeMetric === 'combined')
-            plotByDate[td] = ce + pe;
-
-          else if (activeMetric === 'pcr')
-            plotByDate[td] = ce > 0 ? pe / ce : null;
-        }
-
-        else {
-          plotByDate[td] =
-            values[resolvedMetricKey] ?? null;
+          if (activeMetric === 'ce_oi')     plotByDate[td] = ce;
+          else if (activeMetric === 'pe_oi')     plotByDate[td] = pe;
+          else if (activeMetric === 'combined')  plotByDate[td] = ce + pe;
+          else if (activeMetric === 'pcr')       plotByDate[td] = ce > 0 ? pe / ce : null;
+        } else {
+          plotByDate[td] = values[resolvedMetricKey] ?? null;
         }
       });
 
@@ -498,20 +592,12 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
       const lastIdx      = tradingDates.length - 1;
 
       tradingDates.forEach((date, i) => {
-        // natural offset relative to last trading day
-        let offset = i - lastIdx; // 0 = last day, -1 = day before, etc.
-
-        // apply drag shift for in-progress cycle
-        if (isInProgress) {
-          offset = offset + dragOffset;
-        }
-
-        // only plot within our fixed frame
+        let offset = i - lastIdx;
+        if (isInProgress) offset = offset + dragOffset;
         if (offset < -24 || offset > 0) return;
-
         if (!offsetMap[offset]) offsetMap[offset] = { offset };
-        offsetMap[offset][cycleExp]              = plotByDate[date] ?? null;
-        offsetMap[offset][`${cycleExp}_date`]    = date;
+        offsetMap[offset][cycleExp]           = plotByDate[date] ?? null;
+        offsetMap[offset][`${cycleExp}_date`] = date;
       });
     });
 
@@ -520,140 +606,135 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
 
   /* ── Drag handlers ── */
   const handleMouseDown = (e) => {
-    isDragging.current    = true;
-    dragStartX.current    = e.clientX;
+    isDragging.current      = true;
+    dragStartX.current      = e.clientX;
     dragStartOffset.current = dragOffset;
     e.preventDefault();
   };
 
   useEffect(() => {
-    const PIXELS_PER_DAY = 18; // approximate; feels natural
-
+    const PIXELS_PER_DAY = 18;
     const onMove = (e) => {
       if (!isDragging.current) return;
-      const deltaX   = e.clientX - dragStartX.current;
+      const deltaX    = e.clientX - dragStartX.current;
       const deltaDays = Math.round(deltaX / PIXELS_PER_DAY);
       const newOffset = Math.max(-24, Math.min(0, dragStartOffset.current + deltaDays));
       setDragOffset(newOffset);
     };
-
     const onUp = () => { isDragging.current = false; };
-
     window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup',   onUp);
+    window.addEventListener('mouseup', onUp);
     return () => {
       window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup',   onUp);
+      window.removeEventListener('mouseup', onUp);
     };
   }, [dragOffset]);
 
-  /* ── Tooltip ── */
-  const TooltipContent = ({ active, payload, label }) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div className="bg-[#11151d] border border-white/10 rounded-xl px-4 py-3 shadow-2xl min-w-[220px]">
-        <p className="text-xs font-semibold text-white/60 mb-3">
-          {label === 0 ? 'Expiry Day' : `${Math.abs(label)}d to expiry`}
-        </p>
-        <div className="space-y-2">
-          {payload.map((p) => {
-            if (p.value == null) return null;
-            const tradeDate = p.payload[`${p.dataKey}_date`];
-            return (
-              <div key={p.dataKey} className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold" style={{ color: p.color }}>
-                    {p.dataKey} cycle
-                  </span>
-                  {p.dataKey === inProgressCycle && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white/10 text-white/50">live</span>
-                  )}
-                </div>
-                {tradeDate && <div className="text-[11px] text-white/45">{tradeDate}</div>}
-                <div className="text-sm text-white">
-                  {activeMetric === 'pcr'
-                    ? (p.value != null ? p.value.toFixed(3) : '--')
-                    : formatOI(p.value)}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
   /* ── Empty states ── */
   if (!ticker) return (
-    <div className="card p-8 text-center">
-      <p className="text-white/40 text-sm">Select a ticker in the sidebar to view the OI chart.</p>
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, padding: '40px 20px', textAlign: 'center', fontFamily: mono, fontSize: 11, color: T.textLo, letterSpacing: '0.10em', textTransform: 'uppercase' }}>
+      Select a ticker to view OI chart
     </div>
   );
   if (!selectedCycles.length) return (
-    <div className="card p-8 text-center">
-      <p className="text-white/40 text-sm">Select up to 5 expiry cycles in the sidebar to compare.</p>
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, padding: '40px 20px', textAlign: 'center', fontFamily: mono, fontSize: 11, color: T.textLo, letterSpacing: '0.10em', textTransform: 'uppercase' }}>
+      Select up to 5 expiry cycles to compare
     </div>
   );
 
-  return (
-    <div className="space-y-4">
-      {/* Color selector panel */}
-      <div className="card p-4 space-y-3">
-        <div>
-          <h3 className="text-sm font-semibold text-white">
-            Combined OI Cycle Comparison — {isCombined ? 'All Tickers' : ticker}
-          </h3>
-          <p className="text-xs text-white/40 mt-1">
-            {isCombined
-              ? 'Sum of all tickers OI aligned by Days To Expiry. '
-              : metricToggle
-                ? 'Sum of all constituent expiries within cycle window. '
-                : 'Sum of current + next + far month OI aligned by Days To Expiry. '}
-            Fixed 25-day window. Cycles selected in sidebar (max 5).
-          </p>
-        </div>
+  const isPcr = activeMetric === 'pcr';
 
-        <div className="flex flex-col gap-2">
-          {metricToggle && (
-            <div className="flex items-center gap-2 pb-1">
-              {[
-                { key: 'ce_oi',    label: 'CE OI',   color: '#00B0F0' },
-                { key: 'pe_oi',    label: 'PE OI',   color: '#FF00FF' },
-                { key: 'combined', label: 'CE + PE', color: '#92D050' },
-                { key: 'pcr',      label: 'PCR',     color: '#FFD700' },
-              ].map(({ key, label, color }) => (
-                <button
+  /* ── Options metric buttons ── */
+  const optionMetrics = [
+    { key: 'ce_oi',    label: 'CE OI',   color: T.blue  },
+    { key: 'pe_oi',    label: 'PE OI',   color: T.pink  },
+    { key: 'combined', label: 'CE+PE',   color: T.green },
+    { key: 'pcr',      label: 'PCR',     color: T.amber },
+  ];
+
+  const futuresMetrics = [
+    { key: 'open_int',    label: 'Open Interest' },
+    { key: 'chng_in_oi',  label: 'OI Change'     },
+  ];
+
+  const metricButtons = metricToggle ? optionMetrics : futuresMetrics;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* Control / color panel */}
+      <div style={{ background: T.surface, border: `1px solid ${T.border}` }}>
+        <SectionHeader
+          title={isCombined ? 'OI CYCLE — ALL TICKERS' : `OI CYCLE — ${ticker}`}
+          subtitle={
+            isCombined
+              ? 'Sum of all tickers · Fixed 25D window'
+              : metricToggle
+                ? 'Constituent expiries within cycle window · 25D'
+                : 'Current + next + far month · 25D window'
+          }
+          right={
+            <div style={{ display: 'flex', gap: 2 }}>
+              {metricButtons.map(({ key, label, color }) => (
+                <ToggleBtn
                   key={key}
+                  active={activeMetric === key}
                   onClick={() => setActiveMetric(key)}
-                  className="px-3 py-1.5 rounded-lg border text-xs transition"
-                  style={{
-                    borderColor:     activeMetric === key ? `${color}40` : 'rgba(255,255,255,0.08)',
-                    backgroundColor: activeMetric === key ? `${color}12` : '#151922',
-                    color:           activeMetric === key ? color        : 'rgba(255,255,255,0.55)',
-                  }}
+                  color={color ?? T.amber}
                 >
                   {label}
-                </button>
+                </ToggleBtn>
               ))}
             </div>
-          )}
+          }
+        />
+
+        {/* Cycle rows */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '10px 14px' }}>
           {selectedCycles.map((exp) => {
             const isInProgress = exp === inProgressCycle;
             return (
-              <div key={exp} className="flex items-center gap-3">
+              <div key={exp} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <ColorSelectorRow
                   expiry={exp}
-                  color={colorMap[exp] ?? '#00B0F0'}
+                  color={colorMap[exp] ?? T.blue}
                   onColorChange={(c) => setColorMap((prev) => ({ ...prev, [exp]: c }))}
                 />
                 {isInProgress && (
-                  <div
-                    onMouseDown={handleMouseDown}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/15 bg-white/5 text-white/50 text-xs cursor-ew-resize select-none hover:bg-white/10 transition"
-                    title="Drag to shift in-progress cycle"
-                  >
-                    ⟷ drag {dragOffset === 0 ? '(anchored)' : `${dragOffset > 0 ? '+' : ''}${dragOffset}d`}
-                  </div>
+                  <>
+                    <span style={{
+                      fontFamily: mono,
+                      fontSize: 9,
+                      letterSpacing: '0.12em',
+                      textTransform: 'uppercase',
+                      color: T.amber,
+                      padding: '2px 6px',
+                      border: `1px solid ${T.amber}40`,
+                      background: `${T.amber}0F`,
+                    }}>
+                      LIVE
+                    </span>
+                    <div
+                      onMouseDown={handleMouseDown}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '3px 10px',
+                        border: `1px solid ${T.border}`,
+                        background: 'transparent',
+                        fontFamily: mono,
+                        fontSize: 10,
+                        color: T.textMid,
+                        letterSpacing: '0.08em',
+                        cursor: 'ew-resize',
+                        userSelect: 'none',
+                        transition: 'background 120ms',
+                      }}
+                      title="Drag to shift in-progress cycle"
+                    >
+                      ⟷ {dragOffset === 0 ? 'ANCHORED' : `${dragOffset > 0 ? '+' : ''}${dragOffset}D`}
+                    </div>
+                  </>
                 )}
               </div>
             );
@@ -662,36 +743,41 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
       </div>
 
       {/* Chart */}
-      <div className="card p-4">
+      <div style={{ background: T.surface, border: `1px solid ${T.border}` }}>
         {loading ? (
-          <div className="flex items-center justify-center py-16"><LoadingSpinner /></div>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+            <LoadingSpinner />
+          </div>
         ) : (
-          <div style={{ height: 420 }}>
+          <div style={{ width: '100%', height: 420, padding: '8px 0 0' }}>
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <LineChart data={chartData} margin={{ top: 16, right: 20, left: 0, bottom: 20 }}>
+                <CartesianGrid strokeDasharray="2 4" stroke={T.grid} vertical={false} />
                 <XAxis
                   dataKey="offset"
                   type="number"
                   domain={[-24, 0]}
                   ticks={[-24, -20, -15, -10, -5, 0]}
-                  tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
+                  tick={tickStyle}
                   tickLine={false}
-                  axisLine={{ stroke: 'rgba(255,255,255,0.08)' }}
-                  tickFormatter={(v) => v === 0 ? 'Exp' : `${v}d`}
+                  axisLine={{ stroke: T.axis }}
+                  tickFormatter={(v) => v === 0 ? 'EXP' : `${v}D`}
                 />
                 <YAxis
-                  tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                  tickFormatter={activeMetric === 'pcr' ? (v) => v != null ? v.toFixed(2) : '' : formatOI}
+                  tick={tickStyle}
+                  tickFormatter={isPcr ? (v) => v != null ? v.toFixed(2) : '' : formatOI}
                   tickLine={false}
-                  axisLine={{ stroke: 'rgba(255,255,255,0.08)' }}
+                  axisLine={false}
                   width={70}
                 />
-                <Tooltip content={<TooltipContent />} />
+                <Tooltip
+                  content={<TerminalTooltip isPcr={isPcr} />}
+                  cursor={{ stroke: T.borderHi, strokeWidth: 1, strokeDasharray: '3 3' }}
+                />
                 <Legend
                   formatter={(value) => (
-                    <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11 }}>
-                      {value} cycle{value === inProgressCycle ? ' 🔴' : ''}
+                    <span style={{ fontFamily: mono, fontSize: 10, fontWeight: 700, letterSpacing: '0.10em', textTransform: 'uppercase', color: T.textMid }}>
+                      {value}{value === inProgressCycle ? ' ●' : ''}
                     </span>
                   )}
                 />
@@ -701,12 +787,13 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
                     type="monotone"
                     dataKey={exp}
                     name={exp}
-                    stroke={colorMap[exp] ?? '#00B0F0'}
-                    strokeWidth={exp === inProgressCycle ? 2.8 : 2.2}
+                    stroke={colorMap[exp] ?? T.blue}
+                    strokeWidth={exp === inProgressCycle ? 2.5 : 1.8}
                     strokeDasharray={exp === inProgressCycle ? '6 3' : undefined}
                     dot={false}
                     connectNulls
-                    activeDot={{ r: 4 }}
+                    activeDot={{ r: 3 }}
+                    isAnimationActive={false}
                   />
                 ))}
               </LineChart>
@@ -720,12 +807,7 @@ export function ScreenerOIChart({ assetType, ticker, allExpiries = [], selectedC
 
 /* ─────────────────────────────────────────────────────────────────
    OPTIONS OI CHART
-   Three views: CE / PE / CE+PE
-   One line per selected cycle. Each cycle sums all constituent
-   expiries active within (prevExpiry, cycleExp] window.
-   Fixed 25-day x-axis. In-progress cycle is draggable.
 ───────────────────────────────────────────────────────────────── */
-
 export function OptionsOIChart({ assetType, ticker, allExpiries, selectedCycles }) {
   const fetchHistory = useCallback((at, t) =>
     t === OPTIONS_COMBINED_TICKER

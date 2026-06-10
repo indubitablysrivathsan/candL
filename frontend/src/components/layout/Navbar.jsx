@@ -5,42 +5,17 @@ import { useEffect, useState } from 'react';
 import { healthCheck } from '../../api/client';
 
 const navItems = [
-  {
-    label: 'Stock Options',
-    path: '/sto'
-  },
-  {
-    label: 'Stock Futures',
-    path: '/stf'
-  },
-  {
-    label: 'Index Options',
-    path: '/ido'
-  },
-  {
-    label: 'Index Futures',
-    path: '/idf'
-  },
-  {
-    label: 'Stocks',
-    path: '/stocks'
-  },
-  {
-    label: 'Market',
-    path: '/market'
-  },
-  {
-    label: 'Participants',
-    path: '/participants'
-  },
-  {
-    label: 'FII',
-    path: '/fii'
-  },
+  { label: 'STOCK OPT',   path: '/sto'          },
+  { label: 'STOCK FUT',   path: '/stf'          },
+  { label: 'INDEX OPT',   path: '/ido'          },
+  { label: 'INDEX FUT',   path: '/idf'          },
+  { label: 'STOCKS',      path: '/stocks'       },
+  { label: 'MARKET',      path: '/market'       },
+  { label: 'PARTICIPANTS',path: '/participants'  },
+  { label: 'FII',         path: '/fii'          },
 ];
 
 export default function Navbar() {
-
   const [backendStatus, setBackendStatus] = useState('checking');
 
   useEffect(() => {
@@ -52,104 +27,87 @@ export default function Navbar() {
         setBackendStatus('offline');
       }
     };
-
     check();
-
-    const interval = setInterval(check, 30000);
-
+    const interval = setInterval(check, 60000);
     return () => clearInterval(interval);
   }, []);
 
   return (
-    <header
-      className="
-        sticky
-        top-0
-        z-50
-        h-[64px]
-        border-b
-        border-white/10
-        bg-[#11151d]/95
-        backdrop-blur-md
-      "
-    >
-      <div className="h-full px-6 flex items-center justify-between">
-        {/* Left */}
-        <div className="flex items-center gap-8">
-          <div>
-            <h1 className="text-lg font-bold tracking-wide text-white">
-              candL
-            </h1>
+    <>
+      {/* Inject IBM Plex Mono once at the top level */}
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+        *, *::before, *::after { font-family: 'IBM Plex Mono', 'Courier New', monospace; }
+      `}</style>
 
-            <p className="text-[11px] text-white/45">
-              Asset Analytics Dashboard
-            </p>
+      <header
+        style={{ background: '#080b0f', borderBottom: '1px solid rgba(255,255,255,0.08)' }}
+        className="sticky top-0 z-50 h-[52px]"
+      >
+        <div className="h-full px-4 flex items-center justify-between gap-6">
+
+          {/* Brand */}
+          <div className="flex items-center gap-3 shrink-0">
+            <div style={{ borderRight: '1px solid rgba(255,255,255,0.12)' }} className="pr-3">
+              <span
+                style={{ color: '#F5A623', letterSpacing: '0.12em', fontSize: '15px', fontWeight: 600 }}
+              >
+                CANDL
+              </span>
+            </div>
+            <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: '12px', letterSpacing: '0.1em' }}>
+              NSE ANALYTICS
+            </span>
           </div>
 
-          <nav className="flex items-center gap-2">
-            {navItems.map((item) => (
+          {/* Nav */}
+          <nav className="flex items-center gap-0 overflow-x-auto flex-1">
+            {navItems.map((item, i) => (
               <NavLink
                 key={item.path}
                 to={item.path}
-                className={({ isActive }) =>
-                  `
-                    px-4
-                    py-2
-                    rounded-xl
-                    text-sm
-                    font-medium
-                    transition-all
-                    border
-                    ${
-                      isActive
-                        ? `
-                          bg-[#1a1d26]
-                          border-[#00B0F0]/40
-                          text-[#00B0F0]
-                          shadow-[0_0_20px_rgba(0,176,240,0.12)]
-                        `
-                        : `
-                          border-transparent
-                          text-white/65
-                          hover:text-white
-                          hover:bg-white/5
-                        `
-                    }
-                  `
-                }
+                style={({ isActive }) => ({
+                  padding: '0 12px',
+                  height: '52px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  letterSpacing: '0.08em',
+                  borderRight: i < navItems.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                  borderBottom: isActive ? '2px solid #F5A623' : '2px solid transparent',
+                  color: isActive ? '#F5A623' : 'rgba(255,255,255,0.75)',
+                  background: isActive ? 'rgba(245,166,35,0.05)' : 'transparent',
+                  transition: 'color 0.15s, background 0.15s',
+                  textDecoration: 'none',
+                  whiteSpace: 'nowrap',
+                })}
               >
                 {item.label}
               </NavLink>
             ))}
           </nav>
-        </div>
 
-        {/* Right */}
-        <div className="flex items-center gap-3">
-          <div
-            className={`
-              w-2.5
-              h-2.5
-              rounded-full
-              ${
-                backendStatus === 'online'
-                  ? 'bg-emerald-400 animate-pulse'
-                  : backendStatus === 'offline'
-                  ? 'bg-red-500'
-                  : 'bg-yellow-400 animate-pulse'
-              }
-            `}
-          />
+          {/* Status */}
+          <div className="flex items-center gap-2 shrink-0">
+            <div
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background:
+                  backendStatus === 'online'  ? '#00C896' :
+                  backendStatus === 'offline' ? '#E05252' : '#F5A623',
+              }}
+            />
+            <span style={{ fontSize: '10px', letterSpacing: '0.06em', color: 'rgba(255,255,255,0.3)' }}>
+              {backendStatus === 'online'   ? 'LIVE'    :
+               backendStatus === 'offline'  ? 'OFFLINE' : 'CONNECTING'}
+            </span>
+          </div>
 
-          <span className="text-xs text-white/50">
-            {backendStatus === 'online'
-              ? 'Backend Connected'
-              : backendStatus === 'offline'
-              ? 'Backend Offline'
-              : 'Checking Backend...'}
-          </span>
         </div>
-      </div>
-    </header>
+      </header>
+    </>
   );
 }

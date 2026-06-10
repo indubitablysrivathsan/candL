@@ -1,46 +1,42 @@
 // frontend/src/components/shared/MetricCard.jsx
 
-export default function MetricCard({
-  title,
-  value,
-  subtitle,
-  accent = '#00B0F0'
-}) {
+export default function MetricCard({ title, value, subtitle, accent = '#F5A623' }) {
   return (
-    <div
-      className="
-        card
-        relative
-        overflow-hidden
-        p-5
-        min-h-[120px]
-      "
-    >
-      {/* Accent Bar */}
-      <div
-        className="absolute top-0 left-0 h-1 w-full"
-        style={{
-          background: accent
-        }}
-      />
-
-      <div className="flex flex-col h-full justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-white/50">
-            {title}
-          </p>
-
-          <h3 className="mt-3 text-2xl font-semibold text-white break-words">
-            {value}
-          </h3>
-        </div>
-
-        {subtitle && (
-          <p className="mt-4 text-xs text-white/45">
-            {subtitle}
-          </p>
-        )}
-      </div>
+    <div style={{
+      flex: '1 1 0',
+      minWidth: 0,
+      background: '#0d1117',
+      borderRight: '1px solid rgba(255,255,255,0.08)',
+      borderBottom: `2px solid ${accent}`,
+      padding: '14px 20px 12px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+    }}>
+      <span style={{
+        fontSize: 15,
+        fontWeight: 600,
+        letterSpacing: '0.12em',
+        textTransform: 'uppercase',
+        color: 'rgba(255,255,255,0.28)',
+      }}>
+        {title}
+      </span>
+      <span style={{
+        fontSize: 22,
+        fontWeight: 600,
+        color: accent,
+        letterSpacing: '0.02em',
+        lineHeight: 1.1,
+        wordBreak: 'break-all',
+      }}>
+        {value ?? '--'}
+      </span>
+      {subtitle && (
+        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.04em' }}>
+          {subtitle}
+        </span>
+      )}
     </div>
   );
 }

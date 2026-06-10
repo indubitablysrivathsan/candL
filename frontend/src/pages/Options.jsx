@@ -1,8 +1,7 @@
 // frontend/src/pages/Options.jsx
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-import Sidebar from '../components/layout/Sidebar';
 import MetricCard from '../components/shared/MetricCard';
 import LoadingSpinner from '../components/shared/LoadingSpinner';
 import DateSlider from '../components/shared/DateSlider';
@@ -28,35 +27,599 @@ import {
   getMetricFields,
   getOptionsCycleHistory,
   getOptionsMarketHistory,
-  OPTIONS_COMBINED_TICKER 
+  OPTIONS_COMBINED_TICKER,
 } from '../api/client';
 
-/* ─────────────────────────────────────────────────────────────────
-   EXPIRY PANEL
-───────────────────────────────────────────────────────────────── */
+/* ─── design tokens ──────────────────────────────────────────── */
+const T = {
+  bg:         '#06080c',
+  surface:    '#0b0f16',
+  surfaceHi:  '#111720',
+  border:     'rgba(255,255,255,0.07)',
+  borderHi:   'rgba(255,255,255,0.14)',
+  amber:      '#F0A500',
+  amberDim:   'rgba(240,165,0,0.12)',
+  green:      '#00C896',
+  red:        '#E05252',
+  pink:       '#D66E9A',
+  blue:       '#4A9EFF',
+  purple:     '#A855F7',
+  textHi:     'rgba(255,255,255,0.90)',
+  textMid:    'rgba(255,255,255,0.50)',
+  textLo:     'rgba(255,255,255,0.25)',
+  textGhost:  'rgba(255,255,255,0.12)',
+};
 
+/* ─── shared inline style helpers ───────────────────────────── */
+const panelStyle = {
+  background: T.surface,
+  border: `1px solid ${T.border}`,
+};
+
+const sectionLabel = (extra = {}) => ({
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '0.14em',
+  textTransform: 'uppercase',
+  color: T.textLo,
+  ...extra,
+});
+
+const monoSm = {
+  fontSize: 11,
+  letterSpacing: '0.04em',
+  color: T.textMid,
+  fontFamily: 'inherit',
+};
+
+/* ─── tiny sub-components ────────────────────────────────────── */
+
+function Divider({ vertical }) {
+  return vertical
+    ? <div style={{ width: 1, alignSelf: 'stretch', background: T.border, flexShrink: 0 }} />
+    : <div style={{ height: 1, background: T.border }} />;
+}
+
+function TerminalBtn({ active, children, onClick, disabled, style = {} }) {
+  const base = {
+    padding: '4px 11px',
+    fontSize: 10,
+    fontWeight: 600,
+    letterSpacing: '0.10em',
+    textTransform: 'uppercase',
+    border: `1px solid ${active ? T.amber : T.border}`,
+    background: active ? T.amberDim : 'transparent',
+    color: active ? T.amber : T.textMid,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.4 : 1,
+    transition: 'color 0.15s, border-color 0.15s, background 0.15s',
+    whiteSpace: 'nowrap',
+    borderRadius: 0,
+    ...style,
+  };
+  return <button style={base} onClick={onClick} disabled={disabled}>{children}</button>;
+}
+
+/* ─── METRIC STRIP using MetricCard ─────────────────────────── */
+function MetricStrip({ items }) {
+  return (
+    <div style={{
+      display: 'flex',
+      width: '100%',
+      border: `1px solid ${T.border}`,
+      overflow: 'hidden',
+    }}>
+      {items.map(({ title, value, subtitle, accent = T.amber }, i) => (
+        <MetricCard
+          key={title}
+          title={title}
+          value={value}
+          subtitle={subtitle}
+          accent={accent}
+        />
+      ))}
+    </div>
+  );
+}
+
+/* ─── PORTAL DROPDOWN ────────────────────────────────────────── */
+function PortalDropdown({ anchorRef, open, children, minWidth = 160 }) {
+  const [rect, setRect] = useState(null);
+
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const r = anchorRef.current.getBoundingClientRect();
+    setRect(r);
+  }, [open, anchorRef]);
+
+  if (!open || !rect) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: rect.bottom + 2,
+        left: rect.left,
+        minWidth: Math.max(rect.width, minWidth),
+        maxHeight: 300,
+        overflowY: 'auto',
+        background: '#0b0f16',
+        border: `1px solid ${T.borderHi}`,
+        zIndex: 9999,
+        boxShadow: '0 12px 40px rgba(0,0,0,0.7)',
+        borderRadius: 0,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/* shared dropdown item style */
+const dropItem = (active, disabled) => ({
+  display: 'block',
+  width: '100%',
+  textAlign: 'left',
+  padding: '7px 12px',
+  fontSize: 11,
+  fontFamily: 'inherit',
+  letterSpacing: '0.05em',
+  color: disabled ? T.textGhost : active ? T.amber : T.textHi,
+  background: active ? T.amberDim : 'transparent',
+  border: 'none',
+  borderBottom: `1px solid ${T.border}`,
+  cursor: disabled ? 'not-allowed' : 'pointer',
+  opacity: disabled ? 0.4 : 1,
+  borderRadius: 0,
+  textTransform: 'uppercase',
+  transition: 'background 0.1s',
+});
+
+/* ─── TICKER SEARCH DROPDOWN ─────────────────────────────────── */
+function TickerSearch({ tickerList, selectedTicker, onChange, disabled }) {
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+
+  const filtered = useMemo(() =>
+    !search.trim() ? tickerList : tickerList.filter((t) => t.toLowerCase().includes(search.toLowerCase())),
+  [search, tickerList]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div ref={wrapRef} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <span style={sectionLabel()}>Ticker</span>
+      <div style={{ position: 'relative' }} ref={inputRef}>
+        <input
+          type="text"
+          value={search}
+          disabled={disabled}
+          placeholder={selectedTicker || 'Search...'}
+          onFocus={() => { if (!disabled) setOpen(true); }}
+          onChange={(e) => { if (!disabled) { setSearch(e.target.value); setOpen(true); } }}
+          style={{
+            width: '100%',
+            background: T.bg,
+            border: `1px solid ${open ? T.amber : T.border}`,
+            padding: '5px 28px 5px 10px',
+            minWidth: 200,
+            fontSize: 12,
+            fontFamily: 'inherit',
+            color: T.textHi,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            outline: 'none',
+            opacity: disabled ? 0.4 : 1,
+            cursor: disabled ? 'not-allowed' : 'text',
+            transition: 'border-color 0.15s',
+            boxSizing: 'border-box',
+            borderRadius: 0,
+            height: 30,
+          }}
+        />
+        <span style={{
+          position: 'absolute', right: 9, top: '50%', transform: 'translateY(-50%)',
+          fontSize: 10, color: T.textLo, pointerEvents: 'none',
+        }}>▾</span>
+      </div>
+      <PortalDropdown anchorRef={inputRef} open={open} minWidth={180}>
+        {filtered.length === 0
+          ? <div style={{ padding: '8px 12px', ...monoSm }}>No results</div>
+          : filtered.map((ticker) => (
+            <button
+              key={ticker}
+              onMouseDown={(e) => { e.preventDefault(); onChange(ticker); setSearch(''); setOpen(false); }}
+              style={dropItem(ticker === selectedTicker, false)}
+            >
+              {ticker}
+            </button>
+          ))
+        }
+      </PortalDropdown>
+    </div>
+  );
+}
+
+/* ─── EXPIRY MULTI-SELECT DROPDOWN ───────────────────────────── */
+function ExpiryDropdown({ expiries, selectedExpiries, onToggle, singleSelect, maxSelect, label: labelText }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const triggerRef = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const triggerLabel = useMemo(() => {
+    if (selectedExpiries.length === 0) return 'Select expiry…';
+    if (selectedExpiries.length === 1) return selectedExpiries[0];
+    return `${selectedExpiries.length} selected`;
+  }, [selectedExpiries]);
+
+  const isAtMax = maxSelect && selectedExpiries.length >= maxSelect;
+
+  return (
+    <div ref={wrapRef} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <span style={sectionLabel()}>
+        {labelText}
+        {maxSelect ? <span style={{ color: T.textGhost, marginLeft: 5 }}>max {maxSelect}</span> : ''}
+      </span>
+      <div ref={triggerRef}>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            padding: '5px 10px',
+            minWidth: 200,
+            height: 30,
+            background: T.bg,
+            border: `1px solid ${open ? T.amber : T.border}`,
+            color: selectedExpiries.length ? T.textHi : T.textMid,
+            fontSize: 11,
+            fontFamily: 'inherit',
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            cursor: 'pointer',
+            transition: 'border-color 0.15s',
+            whiteSpace: 'nowrap',
+            borderRadius: 0,
+          }}
+        >
+          <span>{triggerLabel}</span>
+          <span style={{ fontSize: 10, color: T.textLo }}>▾</span>
+        </button>
+      </div>
+      <PortalDropdown anchorRef={triggerRef} open={open} minWidth={200}>
+        {expiries.length === 0
+          ? <div style={{ padding: '8px 12px', ...monoSm }}>No expiries</div>
+          : expiries.map((exp) => {
+            const active = selectedExpiries.includes(exp);
+            const disabled = !active && isAtMax;
+            return (
+              <button
+                key={exp}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  if (disabled) return;
+                  onToggle(exp);
+                  if (singleSelect) setOpen(false);
+                }}
+                style={{
+                  ...dropItem(active, disabled),
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                {/* checkbox — sharp, consistent */}
+                <span style={{
+                  width: 11,
+                  height: 11,
+                  flexShrink: 0,
+                  border: `1px solid ${active ? T.amber : T.border}`,
+                  background: active ? T.amber : 'transparent',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: 0,
+                }}>
+                  {active && <span style={{ fontSize: 9, color: '#000', lineHeight: 1, fontWeight: 800 }}>✓</span>}
+                </span>
+                {exp}
+              </button>
+            );
+          })
+        }
+      </PortalDropdown>
+    </div>
+  );
+}
+
+/* ─── METRIC OPTIONS ─────────────────────────────────────────── */
+const METRIC_OPTIONS = [
+  { label: 'OI',        value: 'oi'                    },
+  { label: 'OI Δ',      value: 'oi_chng'               },
+  { label: 'Volume',    value: 'vol'                   },
+  { label: 'T-Series',  value: 'ts'                    },
+  { label: 'Dly Snap',  value: 'daily_expiry_snapshot' },
+  { label: 'Tkr Anly',  value: 'ticker_analysis'       },
+  { label: 'OI Chart',  value: 'oi_charts'             },
+];
+
+const rowStyle = {
+  display: 'flex',
+  alignItems: 'stretch',
+  gap: 0,
+  borderBottom: `1px solid ${T.border}`,
+  background: T.surface,
+  flexShrink: 0,
+};
+
+const cellStyle = (extra = {}) => ({
+  padding: '10px 16px',
+  borderRight: `1px solid ${T.border}`,
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'center',
+  gap: 5,
+  flexShrink: 0,
+  ...extra,
+});
+
+/* ─── SELECTED EXPIRY CHIPS — only scrolls when chips overflow ─ */
+function ExpiryChips({ activeExpiries, onRemove }) {
+  const containerRef = useRef(null);
+  const [overflows, setOverflows] = useState(false);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const check = () => setOverflows(el.scrollWidth > el.clientWidth + 2);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [activeExpiries]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        display: 'flex',
+        gap: 5,
+        alignItems: 'center',
+        overflowX: overflows ? 'auto' : 'visible',
+        flexWrap: overflows ? 'nowrap' : 'wrap',
+        minWidth: 0,
+        paddingBottom: overflows ? 2 : 0,
+      }}
+    >
+      {activeExpiries.map((exp) => (
+        <div
+          key={exp}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '3px 8px',
+            border: `1px solid ${T.amber}`,
+            background: T.amberDim,
+            fontSize: 10,
+            color: T.amber,
+            letterSpacing: '0.07em',
+            textTransform: 'uppercase',
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
+            borderRadius: 0,
+          }}
+        >
+          <span>{exp}</span>
+          <button
+            onMouseDown={(e) => { e.preventDefault(); onRemove(exp); }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: T.textLo,
+              cursor: 'pointer',
+              padding: 0,
+              fontSize: 11,
+              lineHeight: 1,
+              display: 'flex',
+              alignItems: 'center',
+            }}
+          >✕</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ─── CONTROL BAR ────────────────────────────────────────────── */
+function ControlBar({
+  tickerList, selectedTicker, onTickerChange,
+  expiries, selectedExpiries, onExpiriesChange,
+  selectedMetric, onMetricChange,
+  startDate, endDate, onStartDateChange, onEndDateChange,
+  isOICharts, validChartExpiries, chartSelectedExpiries, onChartExpiriesChange,
+}) {
+  const isDailySnapshot  = selectedMetric === 'daily_expiry_snapshot';
+  const isTimeSeries     = selectedMetric === 'ts';
+  const isTickerAnalysis = selectedMetric === 'ticker_analysis';
+  const dateRangeDisabled = isTimeSeries || isTickerAnalysis;
+  const disableEndDate    = isTimeSeries || isDailySnapshot;
+  const singleSelect      = isDailySnapshot || isTickerAnalysis;
+
+  const displayExpiries = isOICharts ? validChartExpiries : expiries;
+  const activeExpiries  = isOICharts ? chartSelectedExpiries : selectedExpiries;
+
+  const handleExpiryToggle = (exp) => {
+    if (isOICharts) {
+      if (chartSelectedExpiries.includes(exp)) {
+        onChartExpiriesChange(chartSelectedExpiries.filter((e) => e !== exp));
+      } else {
+        const next = validChartExpiries
+          .filter((e) => [...chartSelectedExpiries, exp].includes(e))
+          .slice(0, 5);
+        onChartExpiriesChange(next);
+      }
+    } else if (singleSelect) {
+      onExpiriesChange([exp]);
+    } else {
+      if (selectedExpiries.includes(exp)) {
+        onExpiriesChange(selectedExpiries.filter((e) => e !== exp));
+      } else {
+        onExpiriesChange([...selectedExpiries, exp]);
+      }
+    }
+  };
+
+  const dateInputStyle = {
+    background: T.bg,
+    border: `1px solid ${T.border}`,
+    color: T.textHi,
+    fontSize: 11,
+    fontFamily: 'inherit',
+    padding: '5px 8px',
+    outline: 'none',
+    letterSpacing: '0.03em',
+    colorScheme: 'dark',
+    width: 130,
+    height: 30,
+    borderRadius: 0,
+    boxSizing: 'border-box',
+  };
+
+  return (
+    <div style={{ background: T.surface, flexShrink: 0 }}>
+
+      {/* ROW 1: Ticker + Metric */}
+      <div style={rowStyle}>
+        <div style={cellStyle({ minWidth: 180 })}>
+          <TickerSearch
+            tickerList={tickerList}
+            selectedTicker={selectedTicker}
+            onChange={onTickerChange}
+            disabled={isDailySnapshot}
+          />
+        </div>
+
+        <div style={cellStyle({ flex: 1 })}>
+          <span style={sectionLabel({ marginBottom: 1 })}>Metric</span>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {METRIC_OPTIONS.map((opt) => (
+              <TerminalBtn
+                key={opt.value}
+                active={selectedMetric === opt.value}
+                onClick={() => onMetricChange(opt.value)}
+              >
+                {opt.label}
+              </TerminalBtn>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ROW 2: Expiry + Chips + Date range */}
+      <div style={{ ...rowStyle, borderBottom: `2px solid ${T.border}` }}>
+        {/* Expiry dropdown */}
+        <div style={cellStyle({ minWidth: 200 })}>
+          <ExpiryDropdown
+            expiries={displayExpiries}
+            selectedExpiries={activeExpiries}
+            onToggle={handleExpiryToggle}
+            singleSelect={singleSelect}
+            maxSelect={isOICharts ? 5 : undefined}
+            label="Expiry"
+          />
+        </div>
+
+        {/* Chips — only rendered (and only scrolls) when > 1 expiry selected */}
+        {!singleSelect && activeExpiries.length > 1 && (
+          <div style={{
+            ...cellStyle({ flex: 1 }),
+            flexDirection: 'row',
+            alignItems: 'center',
+            overflow: 'hidden',
+          }}>
+            <ExpiryChips activeExpiries={activeExpiries} onRemove={handleExpiryToggle} />
+          </div>
+        )}
+
+        {/* Date range — push to right */}
+        {!isOICharts && (
+          <div style={{
+            ...cellStyle({ marginLeft: 'auto', borderRight: 'none' }),
+            opacity: dateRangeDisabled ? 0.30 : 1,
+            pointerEvents: dateRangeDisabled ? 'none' : 'auto',
+          }}>
+            <span style={sectionLabel()}>{isDailySnapshot ? 'Date' : 'Date Range'}</span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="date"
+                value={startDate || ''}
+                onChange={(e) => onStartDateChange(e.target.value)}
+                style={dateInputStyle}
+              />
+              {!disableEndDate && (
+                <>
+                  <span style={{ color: T.textLo, fontSize: 10 }}>→</span>
+                  <input
+                    type="date"
+                    value={endDate || ''}
+                    onChange={(e) => onEndDateChange(e.target.value)}
+                    disabled={disableEndDate}
+                    style={{ ...dateInputStyle, opacity: disableEndDate ? 0.4 : 1 }}
+                  />
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── EXPIRY PANEL ───────────────────────────────────────────── */
 function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) {
-  const [availableDates, setAvailableDates]   = useState([]);
-  const [selectedDate, setSelectedDate]       = useState('');
-  const [snapshotData, setSnapshotData]       = useState(null);
-  const [analyticsData, setAnalyticsData]     = useState([]);
-  const [summaryRow, setSummaryRow]           = useState(null);
-  const [loadingDates, setLoadingDates]       = useState(true);
-  const [loadingSnapshot, setLoadingSnapshot] = useState(false);
+  const [availableDates, setAvailableDates]     = useState([]);
+  // selectedDate intentionally starts empty so it's always set fresh from filteredDates
+  const [selectedDate, setSelectedDate]         = useState('');
+  const [snapshotData, setSnapshotData]         = useState(null);
+  const [analyticsData, setAnalyticsData]       = useState([]);
+  const [summaryRow, setSummaryRow]             = useState(null);
+  const [loadingDates, setLoadingDates]         = useState(true);
+  const [loadingSnapshot, setLoadingSnapshot]   = useState(false);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
-  const [loadingSummary, setLoadingSummary]   = useState(false);
-  const [yDomain, setYDomain]                 = useState(null);
-  const [xScale, setXScale]                   = useState(null);
-  const [error, setError]                     = useState('');
-  const [innerTab, setInnerTab]               = useState('chart');
-  const [ohlcData, setOhlcData] = useState(null);
+  const [loadingSummary, setLoadingSummary]     = useState(false);
+  const [yDomain, setYDomain]                   = useState(null);
+  const [xScale, setXScale]                     = useState(null);
+  const [error, setError]                       = useState('');
+  const [innerTab, setInnerTab]                 = useState('chart');
+  const [ohlcData, setOhlcData]                 = useState(null);
 
-  /* ── Fetch dates ── */
+  /* ── fetch dates — reset selectedDate on key change ── */
   useEffect(() => {
     let mounted = true;
     setLoadingDates(true);
     setError('');
-
+    setSelectedDate('');          // ← reset whenever ticker/expiry changes
+    setAvailableDates([]);
     getDates(assetType, ticker, expiry)
       .then((res) => {
         if (!mounted) return;
@@ -66,11 +629,9 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
       })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load dates'); })
       .finally(() => { if (mounted) setLoadingDates(false); });
-
     return () => { mounted = false; };
   }, [assetType, ticker, expiry]);
 
-  /* ── Filtered dates ── */
   const filteredDates = useMemo(() => {
     if (metric === 'ts') return availableDates;
     return availableDates.filter((date) => {
@@ -80,59 +641,49 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
     });
   }, [availableDates, startDate, endDate, metric]);
 
-  /* ── Auto-correct selected date ── */
+  /* ── when date filter changes, clamp selectedDate into range ── */
   useEffect(() => {
     if (!filteredDates.length) return;
+    // Only reset if current selectedDate is outside the filtered range
     if (!selectedDate || !filteredDates.includes(selectedDate)) {
       setSelectedDate(filteredDates[filteredDates.length - 1]);
     }
-  }, [filteredDates, selectedDate]);
+  }, [filteredDates]);   // intentionally exclude selectedDate to avoid loops
 
-  /* ── Fetch snapshot (oi / oi_chng / vol) ── */
   useEffect(() => {
     if (metric === 'ts' || metric === 'daily_expiry_snapshot' || !selectedDate) return;
     let mounted = true;
     setLoadingSnapshot(true);
     setError('');
-
     getSnapshot(assetType, ticker, expiry, selectedDate)
       .then((res) => { if (mounted) setSnapshotData(res); })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load snapshot'); })
       .finally(() => { if (mounted) setLoadingSnapshot(false); });
-
     return () => { mounted = false; };
   }, [assetType, ticker, expiry, selectedDate, metric]);
 
-  /* ── Fetch OHLC (for horizontal candle) ── */
   useEffect(() => {
     if (metric === 'ts' || metric === 'daily_expiry_snapshot' || !filteredDates.length || !ticker) return;
     let mounted = true;
-
     const start = filteredDates[0];
     const end   = filteredDates[filteredDates.length - 1];
-
     stocks.ohlc(ticker, start, end)
       .then((rows) => {
         if (!mounted) return;
-        // find the row matching selectedDate, fall back to last row
-        const idx = rows.findIndex((r) => r.trade_date === selectedDate);
-        const row =   idx >= 0 ? rows[idx] : rows[rows.length - 1] ?? null;
-        const prevRow =   idx >= 0 ? rows[idx-1] : null;
-        setOhlcData({...row, prevClose: prevRow?.close});
+        const idx  = rows.findIndex((r) => r.trade_date === selectedDate);
+        const row     = idx >= 0 ? rows[idx] : rows[rows.length - 1] ?? null;
+        const prevRow = idx >= 0 ? rows[idx - 1] : null;
+        setOhlcData({ ...row, prevClose: prevRow?.close });
       })
       .catch(() => { if (mounted) setOhlcData(null); });
-
     return () => { mounted = false; };
   }, [ticker, metric, filteredDates, selectedDate]);
 
-  /* ── Fetch chart scale ── */
   useEffect(() => {
     if (metric === 'ts' || metric === 'daily_expiry_snapshot' || !filteredDates.length) return;
     let mounted = true;
-
     const start = filteredDates[0];
     const end   = filteredDates[filteredDates.length - 1];
-
     getChartScale(assetType, ticker, expiry, start, end, metric)
       .then((res) => {
         if (!mounted) return;
@@ -140,44 +691,35 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
         setXScale({ x_min: res.x_min, x_max: res.x_max, strike_gap: res.strike_gap });
       })
       .catch(() => { if (mounted) { setYDomain(null); setXScale(null); } });
-
     return () => { mounted = false; };
   }, [assetType, ticker, expiry, metric, filteredDates]);
 
-  /* ── Fetch analytics (time series) ── */
   useEffect(() => {
     if (metric !== 'ts') return;
     let mounted = true;
     setLoadingAnalytics(true);
     setError('');
-
     getAnalytics(assetType, ticker, expiry)
       .then((res) => { if (mounted) setAnalyticsData(res?.rows || []); })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load analytics'); })
       .finally(() => { if (mounted) setLoadingAnalytics(false); });
-
     return () => { mounted = false; };
   }, [assetType, ticker, expiry, metric]);
 
-  /* ── Fetch summary row (daily_expiry_snapshot) ── */
   useEffect(() => {
     if (metric !== 'daily_expiry_snapshot' || !selectedDate) return;
     let mounted = true;
     setLoadingSummary(true);
     setSummaryRow(null);
     setError('');
-
     getAnalytics(assetType, ticker, expiry, selectedDate, selectedDate)
       .then((res) => { if (mounted) setSummaryRow(res?.rows?.[0] ?? null); })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load summary'); })
       .finally(() => { if (mounted) setLoadingSummary(false); });
-
     return () => { mounted = false; };
   }, [assetType, ticker, expiry, selectedDate, metric]);
 
-  /* ── Derived ── */
-  const totals = useMemo(() => calculateTotals(snapshotData, metric), [snapshotData, metric]);
-
+  const totals   = useMemo(() => calculateTotals(snapshotData, metric), [snapshotData, metric]);
   const atmStrike = useMemo(() => {
     if (!snapshotData?.strikes?.length || snapshotData?.underlying == null) return null;
     let closest = snapshotData.strikes[0];
@@ -195,158 +737,53 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
     return snapshotData.strikes.map((row) => ({ strike: row.strike, ce: row[fields.ce], pe: row[fields.pe] }));
   }, [snapshotData, metric]);
 
-  /* ── Render guards ── */
+  /* ── render guards ── */
   if (error) return (
-    <div className="card p-6">
-      <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4">
-        <h3 className="text-red-400 font-semibold">Error</h3>
-        <p className="mt-2 text-sm text-red-200/80">{error}</p>
-      </div>
+    <div style={{ ...panelStyle, padding: 16, borderLeft: `3px solid ${T.red}` }}>
+      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.14em', color: T.red, marginBottom: 6, textTransform: 'uppercase' }}>Error</div>
+      <div style={{ fontSize: 11, color: T.textMid }}>{error}</div>
     </div>
   );
 
   if (loadingDates || loadingAnalytics) return (
-    <div className="card min-h-[400px] flex items-center justify-center"><LoadingSpinner /></div>
+    <div style={{ ...panelStyle, minHeight: 320, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <LoadingSpinner />
+    </div>
   );
 
   if (metric !== 'ts' && metric !== 'daily_expiry_snapshot' && !snapshotData) return (
-    <div className="card p-8"><p className="text-white/60">No snapshot data available</p></div>
+    <div style={{ ...panelStyle, padding: 24 }}>
+      <span style={monoSm}>No snapshot data available</span>
+    </div>
   );
 
-  /* ── Time series view ── */
+  /* ── time series ── */
   if (metric === 'ts') {
     return (
-      <div className="space-y-5">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setInnerTab('chart')}
-            className={`px-4 py-2 rounded-xl border text-sm transition ${
-              innerTab === 'chart'
-                ? 'border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0]'
-                : 'border-white/10 bg-[#151922] text-white/65'
-            }`}
-          >
-            Price & Max Pain
-          </button>
-          <button
-            onClick={() => setInnerTab('pcr')}
-            className={`px-4 py-2 rounded-xl border text-sm transition ${
-              innerTab === 'pcr'
-                ? 'border-[#FFA726]/30 bg-[#FFA726]/10 text-[#FFA726]'
-                : 'border-white/10 bg-[#151922] text-white/65'
-            }`}
-          >
-            PCR
-          </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {[['chart', 'Price & Max Pain'], ['pcr', 'PCR']].map(([tab, lbl]) => (
+            <TerminalBtn key={tab} active={innerTab === tab} onClick={() => setInnerTab(tab)}>{lbl}</TerminalBtn>
+          ))}
         </div>
-        {innerTab === 'chart'
-          ? <TimeSeriesChart analyticsData={analyticsData} />
-          : <PCRChart        analyticsData={analyticsData} />
-        }
+        {innerTab === 'chart' ? <TimeSeriesChart analyticsData={analyticsData} /> : <PCRChart analyticsData={analyticsData} />}
       </div>
     );
   }
 
-  /* ── Daily expiry snapshot view ── */
-  if (metric === 'daily_expiry_snapshot') {
-    return (
-      <div className="space-y-5">
-        <div className="grid grid-cols-1 xl:grid-cols-4 md:grid-cols-2 gap-4">
-          <MetricCard title="Underlying" value={formatCurrency(summaryRow?.underlying, 2)} accent="#FFD700" />
-          <MetricCard title="Max Pain"   value={formatCurrency(summaryRow?.max_pain, 2)}   accent="#FF69B4" />
-          <MetricCard
-            title="PCR"
-            value={summaryRow?.pcr != null ? Number(summaryRow.pcr).toFixed(3) : '--'}
-            accent="#FFA726"
-          />
-          <MetricCard
-            title="CE | PE Total"
-            value={summaryRow?.ce != null && summaryRow?.pe != null
-              ? `${formatNumber(summaryRow.ce)} | ${formatNumber(summaryRow.pe)}`
-              : '--'}
-            accent="#00B0F0"
-          />
-        </div>
-
-        <DateSlider dates={filteredDates} selectedDate={selectedDate} onChange={setSelectedDate} />
-
-        {loadingSummary ? (
-          <div className="card min-h-[200px] flex items-center justify-center"><LoadingSpinner /></div>
-        ) : (
-          <div className="card overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Daily Expiry Snapshot</h3>
-                <p className="mt-0.5 text-xs text-white/45">{ticker} · {expiry} · {selectedDate}</p>
-              </div>
-              <button
-                onClick={() => {
-                  if (!summaryRow) return;
-                  const csv = [
-                    ['Ticker','Expiry','Trade Date','Underlying','Max Pain','PCR','CE','PE'].join(','),
-                    [ticker, expiry, selectedDate, summaryRow.underlying ?? '', summaryRow.max_pain ?? '',
-                     summaryRow.pcr ?? '', summaryRow.ce ?? '', summaryRow.pe ?? ''].join(','),
-                  ].join('\n');
-                  const a = Object.assign(document.createElement('a'), {
-                    href: URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })),
-                    download: `${ticker}_${expiry}_${selectedDate}_daily_expiry_snapshot.csv`,
-                  });
-                  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                }}
-                className="px-4 py-2 rounded-xl border border-[#00B0F0]/25 bg-[#00B0F0]/10 text-[#00B0F0] text-sm transition hover:bg-[#00B0F0]/20"
-              >
-                Download CSV
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table>
-                <thead><tr><th>Field</th><th>Value</th></tr></thead>
-                <tbody>
-                  <tr><td>Underlying</td><td>{formatCurrency(summaryRow?.underlying, 2)}</td></tr>
-                  <tr><td>Max Pain</td>  <td>{formatCurrency(summaryRow?.max_pain, 2)}</td></tr>
-                  <tr><td>PCR</td>       <td>{summaryRow?.pcr != null ? Number(summaryRow.pcr).toFixed(3) : '--'}</td></tr>
-                  <tr><td>CE Total</td>  <td>{formatNumber(summaryRow?.ce)}</td></tr>
-                  <tr><td>PE Total</td>  <td>{formatNumber(summaryRow?.pe)}</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  /* ── Normal view (oi / oi_chng / vol) ── */
+  /* ── normal OI / VOL / OI_CHNG view ── */
   return (
-    <div className="space-y-5">
-      <div className="grid grid-cols-1 xl:grid-cols-4 md:grid-cols-2 gap-4">
-        <MetricCard title="Underlying" value={formatCurrency(snapshotData?.underlying, 2)} accent="#FFD700" />
-        <MetricCard title="Max Pain"   value={formatCurrency(snapshotData?.max_pain, 2)}   accent="#FF69B4" />
-        <MetricCard
-          title="PCR"
-          value={snapshotData?.pcr != null ? Number(snapshotData.pcr).toFixed(3) : '--'}
-          accent="#FFA726"
-        />
-        <MetricCard
-          title="CE | PE Total"
-          value={`${formatNumber(totals.ceTotal)} | ${formatNumber(totals.peTotal)}`}
-          accent="#00B0F0"
-        />
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <MetricStrip items={[
+        { title: 'Underlying',    value: formatCurrency(snapshotData?.underlying, 2),                                    accent: T.blue  },
+        { title: 'Max Pain',      value: formatCurrency(snapshotData?.max_pain, 2),                                      accent: T.purple   },
+        { title: 'PCR',           value: snapshotData?.pcr != null ? Number(snapshotData.pcr).toFixed(3) : '--',         accent: snapshotData?.pcr >= 1 ? T.green : T.red },
+        { title: 'CE | PE Total', value: `${formatNumber(totals.ceTotal)} | ${formatNumber(totals.peTotal)}`,            accent: T.textHi },
+      ]} />
 
-      <div className="flex items-center gap-2">
-        {['chart', 'table'].map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setInnerTab(tab)}
-            className={`px-4 py-2 rounded-xl border text-sm transition capitalize ${
-              innerTab === tab
-                ? 'border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0]'
-                : 'border-white/10 bg-[#151922] text-white/65'
-            }`}
-          >
-            {tab === 'chart' ? 'Chart' : 'Values Table'}
-          </button>
+      <div style={{ display: 'flex', gap: 4 }}>
+        {[['chart', 'Chart'], ['table', 'Values']].map(([tab, lbl]) => (
+          <TerminalBtn key={tab} active={innerTab === tab} onClick={() => setInnerTab(tab)}>{lbl}</TerminalBtn>
         ))}
       </div>
 
@@ -357,34 +794,118 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
       <DateSlider dates={filteredDates} selectedDate={selectedDate} onChange={setSelectedDate} />
 
       {innerTab === 'table' && (
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table>
-              <thead><tr><th>Strike</th><th>CE</th><th>PE</th></tr></thead>
-              <tbody>
-                {tableRows.map((row) => {
-                  const isATM = Number(row.strike) === Number(atmStrike);
-                  return (
-                    <tr key={row.strike} className={isATM ? 'bg-[#FFD700]/12' : ''}>
-                      <td className={isATM ? 'text-[#FFD700] font-semibold' : ''}>{formatNumber(row.strike)}</td>
-                      <td>{formatNumber(row.ce)}</td>
-                      <td>{formatNumber(row.pe)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+        <div style={panelStyle}>
+          <TerminalTable>
+            <thead>
+              <TerminalTr header>
+                <TerminalTh>Strike</TerminalTh>
+                <TerminalTh>CE</TerminalTh>
+                <TerminalTh>PE</TerminalTh>
+              </TerminalTr>
+            </thead>
+            <tbody>
+              {tableRows.map((row) => {
+                const isATM = Number(row.strike) === Number(atmStrike);
+                return (
+                  <TerminalTr key={row.strike} atm={isATM}>
+                    <TerminalTd accent={isATM ? T.amber : undefined} bold={isATM}>{formatNumber(row.strike)}</TerminalTd>
+                    <TerminalTd>{formatNumber(row.ce)}</TerminalTd>
+                    <TerminalTd>{formatNumber(row.pe)}</TerminalTd>
+                  </TerminalTr>
+                );
+              })}
+            </tbody>
+          </TerminalTable>
         </div>
       )}
     </div>
   );
 }
 
-/* ─────────────────────────────────────────────────────────────────
-   MAIN PAGE
-───────────────────────────────────────────────────────────────── */
+/* ─── shared panel header helper ────────────────────────────── */
+function PanelHeader({ title, meta, onExport }) {
+  return (
+    <div style={{
+      padding: '10px 16px',
+      borderBottom: `1px solid ${T.border}`,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: T.textHi, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          {title}
+        </span>
+        {meta && <span style={monoSm}>{meta}</span>}
+      </div>
+      {onExport && (
+        <TerminalBtn onClick={onExport}>↓ CSV</TerminalBtn>
+      )}
+    </div>
+  );
+}
 
+function downloadCsv(csv, filename) {
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })),
+    download: filename,
+  });
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+/* ─── terminal table helpers ─────────────────────────────────── */
+function TerminalTable({ children }) {
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, letterSpacing: '0.03em' }}>
+      {children}
+    </table>
+  );
+}
+function TerminalTr({ children, header, atm }) {
+  return (
+    <tr style={{
+      borderBottom: `1px solid ${T.border}`,
+      background: atm
+        ? 'rgba(240,165,0,0.07)'
+        : header
+        ? 'rgba(255,255,255,0.025)'
+        : 'transparent',
+      transition: 'background 0.1s',
+    }}>
+      {children}
+    </tr>
+  );
+}
+function TerminalTh({ children }) {
+  return (
+    <th style={{
+      padding: '7px 14px',
+      textAlign: 'left',
+      fontSize: 9,
+      fontWeight: 700,
+      letterSpacing: '0.14em',
+      textTransform: 'uppercase',
+      color: T.textLo,
+    }}>
+      {children}
+    </th>
+  );
+}
+function TerminalTd({ children, accent, bold }) {
+  return (
+    <td style={{
+      padding: '6px 14px',
+      color: accent || T.textMid,
+      fontWeight: bold ? 600 : 400,
+    }}>
+      {children}
+    </td>
+  );
+}
+
+/* ─── MAIN PAGE ──────────────────────────────────────────────── */
 export default function Options({ assetType = 'stock_options' }) {
   const [tickerList, setTickerList]             = useState([]);
   const [selectedTicker, setSelectedTicker]     = useState('');
@@ -398,7 +919,6 @@ export default function Options({ assetType = 'stock_options' }) {
   const [snapshotRows, setSnapshotRows]         = useState([]);
   const [loadingSnapshot, setLoadingSnapshot]   = useState(false);
   const [error, setError]                       = useState('');
-
   const [chartSelectedExpiries, setChartSelectedExpiries] = useState([]);
 
   const validChartExpiries = useMemo(() => {
@@ -407,66 +927,48 @@ export default function Options({ assetType = 'stock_options' }) {
     const completed  = expiries.filter((e) => new Date(e) < today);
     const inProgress = expiries.find((e) => new Date(e) >= today);
     return inProgress ? [inProgress, ...completed] : completed;
-  }, [expiries]);  
+  }, [expiries]);
 
   useEffect(() => {
     if (!validChartExpiries.length) return;
-    setChartSelectedExpiries((prev) =>
-      prev.length > 0 ? prev : validChartExpiries.slice(0, 5)
-    );
+    setChartSelectedExpiries((prev) => prev.length > 0 ? prev : validChartExpiries.slice(0, 5));
   }, [validChartExpiries]);
 
-  const isDailySnapshot = selectedMetric === 'daily_expiry_snapshot';
-
+  const isDailySnapshot  = selectedMetric === 'daily_expiry_snapshot';
   const isTickerAnalysis = selectedMetric === 'ticker_analysis';
-
-  const isOICharts = selectedMetric === 'oi_charts';
+  const isOICharts       = selectedMetric === 'oi_charts';
 
   const displayTickerList = useMemo(() =>
     isOICharts ? [...tickerList, OPTIONS_COMBINED_TICKER] : tickerList,
   [tickerList, isOICharts]);
 
-  // Reset when assetType changes
+  /* reset on assetType change */
   useEffect(() => {
-    setTickerList([]);
-    setSelectedTicker('');
-    setExpiries([]);
-    setSelectedExpiries([]);
-    setActiveExpiry('');
-    setSelectedMetric('oi');
-    setStartDate('');
-    setEndDate('');
-    setError('');
-    setLoading(true);
+    setTickerList([]); setSelectedTicker(''); setExpiries([]); setSelectedExpiries([]);
+    setActiveExpiry(''); setSelectedMetric('oi'); setStartDate(''); setEndDate('');
+    setError(''); setLoading(true);
   }, [assetType]);
 
-  /* ── Fetch tickers ── */
+  /* fetch tickers */
   useEffect(() => {
     let mounted = true;
     setLoading(true);
-
     getTickers(assetType)
       .then((res) => {
         if (!mounted) return;
         const tickers = res?.tickers || [];
-        setTickerList(tickers); // store base list without combined
+        setTickerList(tickers);
         if (tickers.length > 0) setSelectedTicker(tickers[0]);
       })
-      .catch((err) => {
-        console.error(err);
-        if (!mounted) return;
-        setTickerList([]);
-      })
+      .catch((err) => { console.error(err); if (!mounted) return; setTickerList([]); })
       .finally(() => { if (mounted) setLoading(false); });
-
     return () => { mounted = false; };
   }, [assetType]);
-  
-  /* ── Fetch expiries ── */
+
+  /* fetch expiries */
   useEffect(() => {
     if (!selectedTicker || selectedTicker === OPTIONS_COMBINED_TICKER) return;
     let mounted = true;
-
     getExpiries(assetType, selectedTicker)
       .then((res) => {
         if (!mounted) return;
@@ -477,162 +979,220 @@ export default function Options({ assetType = 'stock_options' }) {
         if (defaults.length > 0) setActiveExpiry(defaults[0]);
       })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load expiries'); });
-
     return () => { mounted = false; };
   }, [assetType, selectedTicker]);
 
   useEffect(() => {
-    if (!isOICharts && selectedTicker === OPTIONS_COMBINED_TICKER) {
+    if (!isOICharts && selectedTicker === OPTIONS_COMBINED_TICKER)
       setSelectedTicker(tickerList[0] || '');
-    }
   }, [isOICharts, selectedTicker, tickerList]);
 
-  /* ── Fetch daily expiry snapshot ── */
+  /* daily expiry snapshot fetch */
   useEffect(() => {
     if (!isDailySnapshot || !selectedExpiries.length || (!startDate && !endDate)) return;
     let mounted = true;
     setLoadingSnapshot(true);
-
     getDailyExpirySnapshot(assetType, selectedExpiries[0], endDate || startDate)
       .then((res) => { if (mounted) setSnapshotRows(res?.rows || []); })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load daily snapshot'); })
       .finally(() => { if (mounted) setLoadingSnapshot(false); });
-
     return () => { mounted = false; };
   }, [assetType, isDailySnapshot, selectedExpiries, startDate, endDate]);
 
-  /* ── Keep activeExpiry valid ── */
   useEffect(() => {
-    if (!selectedExpiries.includes(activeExpiry)) {
-      setActiveExpiry(selectedExpiries[0] || '');
-    }
+    if (!selectedExpiries.includes(activeExpiry)) setActiveExpiry(selectedExpiries[0] || '');
   }, [selectedExpiries, activeExpiry]);
 
-  /* ── Force single expiry in snapshot mode ── */
   useEffect(() => {
     if (!isDailySnapshot || selectedExpiries.length <= 1) return;
     setSelectedExpiries([selectedExpiries[0]]);
     setActiveExpiry(selectedExpiries[0]);
-  }, [isDailySnapshot, selectedExpiries]);
+  }, [isDailySnapshot]);
 
   if (loading) return (
-    <div className="h-[calc(100vh-64px)] flex items-center justify-center">
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.bg }}>
       <LoadingSpinner size="lg" />
     </div>
   );
 
-  if (error) {
-    console.error(error);
-  }
+  if (error) console.error(error);
 
-  const label = assetType === 'index_options' ? 'Index Options' : 'Stock Options';
+  const pageLabel = assetType === 'index_options' ? 'Index Options' : 'Stock Options';
 
   return (
-    <div className="flex min-h-screen">
-      <Sidebar
+    <div style={{ background: T.bg, minHeight: '100vh', display: 'flex', flexDirection: 'column', fontFamily: "'IBM Plex Mono', 'Fira Code', 'Consolas', monospace" }}>
+
+      {/* ── control bar ── */}
+      <ControlBar
         tickerList={displayTickerList}
         selectedTicker={selectedTicker}
         onTickerChange={setSelectedTicker}
-        expiries={isOICharts ? validChartExpiries : expiries}
-        selectedExpiries={isOICharts ? chartSelectedExpiries : selectedExpiries}
-        onExpiriesChange={isOICharts
-          ? (arr) => {
-              const ordered = validChartExpiries.filter((e) => arr.includes(e));
-              setChartSelectedExpiries(ordered.slice(0, 5));
-            }
-          : setSelectedExpiries
-        }
+        expiries={expiries}
+        selectedExpiries={selectedExpiries}
+        onExpiriesChange={setSelectedExpiries}
         selectedMetric={selectedMetric}
         onMetricChange={setSelectedMetric}
         startDate={startDate}
         endDate={endDate}
         onStartDateChange={setStartDate}
         onEndDateChange={setEndDate}
+        isOICharts={isOICharts}
+        validChartExpiries={validChartExpiries}
+        chartSelectedExpiries={chartSelectedExpiries}
+        onChartExpiriesChange={setChartSelectedExpiries}
       />
 
-      <main className="flex-1 p-6 overflow-x-hidden">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-white">{selectedTicker}</h1>
-          <p className="mt-1 text-sm text-white/45">NSE {label} Analytics</p>
+      {/* ── page header ── */}
+      <div style={{
+        padding: '8px 20px',
+        borderBottom: `1px solid ${T.border}`,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
+        background: T.surface,
+      }}>
+        <span style={{
+          fontSize: 16,
+          fontWeight: 700,
+          color: T.textHi,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+        }}>
+          {selectedTicker || '—'}
+        </span>
+        <span style={{
+          fontSize: 10,
+          letterSpacing: '0.14em',
+          color: T.textLo,
+          textTransform: 'uppercase',
+          borderLeft: `1px solid ${T.border}`,
+          paddingLeft: 16,
+        }}>
+          NSE · {pageLabel}
+        </span>
+
+        {/* live indicator dot */}
+        <div style={{
+          marginLeft: 'auto',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}>
+          <span style={{
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: T.green,
+            boxShadow: `0 0 6px ${T.green}`,
+            display: 'inline-block',
+          }} />
+          <span style={{ fontSize: 9, letterSpacing: '0.12em', color: T.textLo, textTransform: 'uppercase' }}>NSE</span>
         </div>
+      </div>
+
+      {/* ── main content ── */}
+      <main style={{ flex: 1, padding: '16px 20px', overflowX: 'hidden' }}>
 
         {selectedExpiries.length === 0 && !isOICharts && (
-          <div className="card p-8"><p className="text-white/60">Select at least one expiry</p></div>
-        )}
-
-        {isDailySnapshot && (
-          <div className="space-y-5">
-            <div className="card p-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-white">Daily Expiry Snapshot</h2>
-                  <p className="mt-1 text-sm text-white/45">
-                    Expiry: {selectedExpiries[0] || '--'} · Date: {startDate || '--'}
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    if (!snapshotRows.length) return;
-                    const headers = ['Ticker','Underlying','Max Pain','PCR','CE','PE'];
-                    const csv = [
-                      headers.join(','),
-                      ...snapshotRows.map((r) => [r.ticker, r.underlying, r.max_pain, r.pcr, r.ce, r.pe].join(',')),
-                    ].join('\n');
-                    const a = Object.assign(document.createElement('a'), {
-                      href: URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })),
-                      download: `${selectedExpiries[0]}_${startDate}_daily_expiry_snapshot.csv`,
-                    });
-                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                  }}
-                  className="px-4 py-2 rounded-xl border border-[#00B0F0]/25 bg-[#00B0F0]/10 text-[#00B0F0] text-sm transition hover:bg-[#00B0F0]/20"
-                >
-                  Download CSV
-                </button>
-              </div>
-            </div>
-
-            {loadingSnapshot ? (
-              <div className="card min-h-[300px] flex items-center justify-center"><LoadingSpinner /></div>
-            ) : (
-              <div className="card overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table>
-                    <thead>
-                      <tr><th>Ticker</th><th>Underlying</th><th>Max Pain</th><th>PCR</th><th>CE</th><th>PE</th></tr>
-                    </thead>
-                    <tbody>
-                      {snapshotRows.map((row) => (
-                        <tr key={row.ticker}>
-                          <td className="font-semibold text-[#00B0F0]">{row.ticker}</td>
-                          <td>{formatCurrency(row.underlying, 2)}</td>
-                          <td className="text-[#FF69B4]">{formatCurrency(row.max_pain, 2)}</td>
-                          <td className={row.pcr >= 1 ? 'text-[#26a69a]' : 'text-[#ef5350]'}>
-                            {row.pcr != null ? Number(row.pcr).toFixed(3) : '--'}
-                          </td>
-                          <td>{formatNumber(row.ce)}</td>
-                          <td>{formatNumber(row.pe)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+          <div style={{
+            ...panelStyle,
+            padding: '32px 24px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            borderLeft: `3px solid ${T.amberDim}`,
+          }}>
+            <span style={{ fontSize: 18, opacity: 0.4 }}>◈</span>
+            <span style={{ ...monoSm, color: T.textLo, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+              Select at least one expiry to continue
+            </span>
           </div>
         )}
 
+        {/* ── daily snapshot market-wide table ── */}
+        {isDailySnapshot && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={panelStyle}>
+              <PanelHeader
+                title="Daily Expiry Snapshot"
+                meta={`${selectedExpiries[0] || '--'} · ${startDate || '--'}`}
+                onExport={() => {
+                  if (!snapshotRows.length) return;
+                  const headers = ['Ticker', 'Underlying', 'Max Pain', 'PCR', 'CE', 'PE'];
+                  const csv = [
+                    headers.join(','),
+                    ...snapshotRows.map((r) => [r.ticker, r.underlying, r.max_pain, r.pcr, r.ce, r.pe].join(',')),
+                  ].join('\n');
+                  downloadCsv(csv, `${selectedExpiries[0]}_${startDate}_daily_expiry_snapshot.csv`);
+                }}
+              />
+              {loadingSnapshot ? (
+                <div style={{ minHeight: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <LoadingSpinner />
+                </div>
+              ) : (
+                <TerminalTable>
+                  <thead>
+                    <TerminalTr header>
+                      <TerminalTh>Ticker</TerminalTh>
+                      <TerminalTh>Underlying</TerminalTh>
+                      <TerminalTh>Max Pain</TerminalTh>
+                      <TerminalTh>PCR</TerminalTh>
+                      <TerminalTh>CE</TerminalTh>
+                      <TerminalTh>PE</TerminalTh>
+                    </TerminalTr>
+                  </thead>
+                  <tbody>
+                    {snapshotRows.map((row) => (
+                      <TerminalTr key={row.ticker}>
+                        <TerminalTd accent={T.amber} bold>{row.ticker}</TerminalTd>
+                        <TerminalTd accent={T.textHi}>{formatCurrency(row.underlying, 2)}</TerminalTd>
+                        <TerminalTd accent={T.pink}>{formatCurrency(row.max_pain, 2)}</TerminalTd>
+                        <TerminalTd accent={row.pcr >= 1 ? T.green : T.red}>
+                          {row.pcr != null ? Number(row.pcr).toFixed(3) : '--'}
+                        </TerminalTd>
+                        <TerminalTd>{formatNumber(row.ce)}</TerminalTd>
+                        <TerminalTd>{formatNumber(row.pe)}</TerminalTd>
+                      </TerminalTr>
+                    ))}
+                  </tbody>
+                </TerminalTable>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── normal / ts / oi views with expiry tabs ── */}
         {!isDailySnapshot && !isTickerAnalysis && !isOICharts && selectedExpiries.length > 0 && (
           <>
-            <div className="flex items-center gap-2 mb-5 overflow-x-auto pb-1">
+            {/* expiry tabs */}
+            <div style={{
+              display: 'flex',
+              gap: 0,
+              marginBottom: 14,
+              borderBottom: `1px solid ${T.border}`,
+              overflowX: 'auto',
+            }}>
               {selectedExpiries.map((expiry) => (
                 <button
                   key={expiry}
                   onClick={() => setActiveExpiry(expiry)}
-                  className={`px-5 py-3 rounded-xl border whitespace-nowrap text-sm transition ${
-                    activeExpiry === expiry
-                      ? 'border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0]'
-                      : 'border-white/10 bg-[#151922] text-white/65 hover:bg-white/5'
-                  }`}
+                  style={{
+                    padding: '8px 18px',
+                    fontSize: 10,
+                    letterSpacing: '0.09em',
+                    fontWeight: activeExpiry === expiry ? 700 : 400,
+                    color: activeExpiry === expiry ? T.amber : T.textMid,
+                    background: activeExpiry === expiry ? T.amberDim : 'transparent',
+                    border: 'none',
+                    borderBottom: activeExpiry === expiry ? `2px solid ${T.amber}` : '2px solid transparent',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    textTransform: 'uppercase',
+                    transition: 'color 0.15s, background 0.15s',
+                    marginBottom: -1,
+                    borderRadius: 0,
+                  }}
                 >
                   {expiry}
                 </button>
@@ -652,6 +1212,7 @@ export default function Options({ assetType = 'stock_options' }) {
             )}
           </>
         )}
+
         {isTickerAnalysis && selectedExpiries[0] && (
           <TickerAnalysisTable
             assetType={assetType}
@@ -660,6 +1221,7 @@ export default function Options({ assetType = 'stock_options' }) {
             allExpiries={expiries}
           />
         )}
+
         {isOICharts && (
           <OptionsOIChart
             assetType={assetType}

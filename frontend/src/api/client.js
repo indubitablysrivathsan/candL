@@ -681,18 +681,6 @@ export const volatility = {
 };
 
 /* =========================================
-   RESEARCH
-   GET /api/v1/research/fii-vs-nifty
-========================================= */
-
-export const research = {
-  fiiVsNifty: (startDate, endDate) => {
-    const p = new URLSearchParams({ start_date: startDate, end_date: endDate });
-    return request(`/research/fii-vs-nifty?${p}`);
-  },
-};
-
-/* =========================================
    HELPERS
 ========================================= */
 

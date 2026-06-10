@@ -1,82 +1,428 @@
 // frontend/src/pages/Stocks.jsx
+// Bloomberg Terminal / Institutional Trading Workstation aesthetic
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  LineChart, Line, BarChart, ComposedChart, Bar, XAxis, YAxis,
+  LineChart, Line, BarChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Cell,
 } from 'recharts';
 
-import MetricCard    from '../components/shared/MetricCard';
+import MetricCard     from '../components/shared/MetricCard';
 import LoadingSpinner from '../components/shared/LoadingSpinner';
+import CandlestickChart from '../components/charts/CandlestickChart';
 import { stocks, formatCurrency, formatNumber } from '../api/client';
 
 /* ─────────────────────────────────────────────────────────────────
-   CONSTANTS
+   DESIGN TOKENS — institutional terminal palette
 ───────────────────────────────────────────────────────────────── */
 
-const CHART_COLORS = {
-  accent:  '#00B0F0',
-  green:   '#26a69a',
-  red:     '#ef5350',
-  amber:   '#FFA726',
-  purple:  '#B39DDB',
-  gold:    '#FFD700',
-  muted:   'rgba(255,255,255,0.25)',
+const T = {
+  bg:         '#06080c',
+  surface:    '#0b0f16',
+  surfaceHi:  '#111720',
+  border:     'rgba(255,255,255,0.07)',
+  borderHi:   'rgba(255,255,255,0.14)',
+  amber:      '#F0A500',
+  amberDim:   'rgba(240,165,0,0.12)',
+  green:      '#00C896',
+  red:        '#E05252',
+  pink:       '#D66E9A',
+  blue:       '#4A9EFF',
+  purple:     '#A855F7',
+  textHi:     'rgba(255,255,255,0.90)',
+  textMid:    'rgba(255,255,255,0.50)',
+  textLo:     'rgba(255,255,255,0.25)',
+  textGhost:  'rgba(255,255,255,0.12)',
+  // aliases so existing references still resolve
+  get elevated() { return this.surfaceHi; },
+  get borderStr() { return this.borderHi; },
+  get text()      { return this.textHi; },
+  get label()     { return this.textMid; },
+  get muted()     { return this.textLo; },
 };
+
+/* ─────────────────────────────────────────────────────────────────
+   GLOBAL STYLES (injected once)
+───────────────────────────────────────────────────────────────── */
+
+const GLOBAL_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&display=swap');
+
+  .trm-root * {
+    box-sizing: border-box;
+    font-family: 'IBM Plex Mono', 'Fira Code', Consolas, monospace;
+  }
+  .trm-root {
+    background: ${T.bg};
+    color: ${T.textHi};
+    min-height: 100vh;
+  }
+
+  /* ── Tab buttons ──────────────────────────── */
+  .trm-tab {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 14px;
+    font-size: 10px;
+    font-family: inherit;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+    border-bottom: none;
+    background: transparent;
+    color: ${T.textMid};
+    cursor: pointer;
+    transition: color 120ms, border-color 120ms, background 120ms;
+    border-radius: 0;
+    user-select: none;
+  }
+  .trm-tab:hover { color: ${T.textHi}; background: rgba(255,255,255,0.03); }
+  .trm-tab.active {
+    color: ${T.amber};
+    border-color: ${T.borderHi};
+    background: ${T.surfaceHi};
+    border-bottom: 1px solid ${T.surfaceHi};
+    margin-bottom: -1px;
+  }
+
+  /* ── Toolbar toggle buttons ───────────────── */
+  .trm-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    font-size: 10px;
+    font-family: inherit;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    border: 1px solid ${T.border};
+    background: transparent;
+    color: ${T.textMid};
+    cursor: pointer;
+    transition: all 120ms;
+    border-radius: 0;
+  }
+  .trm-btn:hover { border-color: ${T.borderHi}; color: ${T.textHi}; }
+  .trm-btn.active {
+    border-color: ${T.amber};
+    color: ${T.amber};
+    background: ${T.amberDim};
+  }
+  .trm-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  /* ── Action button ────────────────────────── */
+  .trm-action {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 18px;
+    font-size: 10px;
+    font-family: inherit;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border: 1px solid ${T.amber};
+    background: ${T.amberDim};
+    color: ${T.amber};
+    cursor: pointer;
+    transition: background 120ms;
+    border-radius: 0;
+  }
+  .trm-action:hover { background: rgba(240,165,0,0.20); }
+  .trm-action:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  /* ── Panel / surface ──────────────────────── */
+  .trm-panel {
+    background: ${T.surface};
+    border: 1px solid ${T.border};
+  }
+  .trm-panel-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px;
+    border-bottom: 1px solid ${T.border};
+    background: ${T.surfaceHi};
+  }
+  .trm-panel-hdr-lbl {
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: ${T.textMid};
+  }
+
+  /* ── Metric strip ─────────────────────────── */
+  .trm-metric-strip {
+    display: flex;
+    border: 1px solid ${T.border};
+    background: ${T.surface};
+  }
+  .trm-metric {
+    flex: 1;
+    padding: 10px 14px;
+    border-right: 1px solid ${T.border};
+    min-width: 0;
+  }
+  .trm-metric:last-child { border-right: none; }
+  .trm-metric-lbl {
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: ${T.textMid};
+    margin-bottom: 4px;
+    white-space: nowrap;
+  }
+  .trm-metric-val {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ── Table ────────────────────────────────── */
+  .trm-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+  }
+  .trm-table th {
+    padding: 7px 10px;
+    background: ${T.surfaceHi};
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: ${T.textMid};
+    border-bottom: 1px solid ${T.borderHi};
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .trm-table th:hover { color: ${T.textHi}; }
+  .trm-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid ${T.border};
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .trm-table tr:hover td { background: rgba(255,255,255,0.025); }
+  .trm-table tr.highlighted td { background: rgba(240,165,0,0.05); }
+
+  /* ── Tab row ──────────────────────────────── */
+  .trm-tab-row {
+    display: flex;
+    border-bottom: 1px solid ${T.borderHi};
+    background: ${T.surface};
+    overflow-x: auto;
+  }
+
+  /* ── Scrollbar ────────────────────────────── */
+  .trm-root ::-webkit-scrollbar { width: 4px; height: 4px; }
+  .trm-root ::-webkit-scrollbar-track { background: transparent; }
+  .trm-root ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); }
+
+  /* ── Delivery row bar ─────────────────────── */
+  .del-row {
+    position: relative;
+    overflow: hidden;
+    background: ${T.surface};
+    border-bottom: 1px solid ${T.border};
+    display: flex;
+    align-items: center;
+  }
+  .del-row-bar {
+    position: absolute;
+    inset-y: 0;
+    left: 0;
+    opacity: 0.07;
+    pointer-events: none;
+  }
+  .del-row-inner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 7px 14px;
+  }
+
+  /* ── Empty / no data states ───────────────── */
+  .trm-empty {
+    padding: 40px 14px;
+    font-size: 10px;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: ${T.textMid};
+    text-align: center;
+  }
+
+  /* ── Loading overlay ──────────────────────── */
+  .trm-loading {
+    min-height: 260px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  /* ── Input focus states ───────────────────── */
+  .trm-root input[type="date"]:focus,
+  .trm-root input[type="text"]:focus,
+  .trm-root select:focus {
+    border-color: ${T.amber} !important;
+    outline: none;
+  }
+`;
+
+function StyleInjector() {
+  useEffect(() => {
+    const id = 'trm-styles';
+    if (document.getElementById(id)) return;
+    const el = document.createElement('style');
+    el.id = id;
+    el.textContent = GLOBAL_CSS;
+    document.head.appendChild(el);
+  }, []);
+  return null;
+}
 
 /* ─────────────────────────────────────────────────────────────────
    HELPERS
 ───────────────────────────────────────────────────────────────── */
 
 const fmt = (n, dec = 2) =>
-  n == null ? '—' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: dec });
+  n == null ? '—' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: dec, minimumFractionDigits: dec });
+
+const fmtInt = (n) =>
+  n == null ? '—' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
 const pctColor = (v) =>
-  v > 0 ? CHART_COLORS.green : v < 0 ? CHART_COLORS.red : CHART_COLORS.muted;
+  v > 0 ? T.green : v < 0 ? T.red : T.textLo;
 
-/* ─────────────────────────────────────────────────────────────────
-   CHART TOOLTIP
-───────────────────────────────────────────────────────────────── */
+/* ── Shared control-bar layout helpers (matches options page) ── */
+const rowStyle = {
+  display: 'flex',
+  alignItems: 'flex-end',
+  gap: 0,
+  borderBottom: `1px solid ${T.border}`,
+  flexWrap: 'wrap',
+};
 
-function ChartTooltip({ active, payload, label, valueFormatter }) {
-  if (!active || !payload?.length) return null;
+const cellStyle = (extra = {}) => ({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  padding: '8px 14px',
+  borderRight: `1px solid ${T.border}`,
+  ...extra,
+});
+
+const sectionLabel = (extra = {}) => ({
+  fontSize: 9,
+  letterSpacing: '0.14em',
+  textTransform: 'uppercase',
+  color: T.textMid,
+  marginBottom: 2,
+  ...extra,
+});
+
+const selectStyle = {
+  background: T.bg,
+  border: `1px solid ${T.border}`,
+  color: T.textHi,
+  fontSize: 12,
+  fontFamily: 'inherit',
+  padding: '4px 28px 4px 10px',
+  outline: 'none',
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  height: 30,
+  borderRadius: 0,
+  cursor: 'pointer',
+  appearance: 'none',
+  WebkitAppearance: 'none',
+  boxSizing: 'border-box',
+  minWidth: 160,
+};
+
+const dateInputStyle = {
+  background: T.bg,
+  border: `1px solid ${T.border}`,
+  color: T.textHi,
+  fontSize: 11,
+  fontFamily: 'inherit',
+  padding: '5px 8px',
+  outline: 'none',
+  letterSpacing: '0.03em',
+  colorScheme: 'dark',
+  width: 130,
+  height: 30,
+  borderRadius: 0,
+  boxSizing: 'border-box',
+};
+
+const filterInputStyle = {
+  background: T.bg,
+  border: `1px solid ${T.border}`,
+  color: T.textHi,
+  fontSize: 11,
+  fontFamily: 'inherit',
+  padding: '5px 10px',
+  outline: 'none',
+  letterSpacing: '0.04em',
+  height: 30,
+  borderRadius: 0,
+  boxSizing: 'border-box',
+  width: 180,
+};
+
+/* Chevron-select wrapper */
+function TermSelect({ value, onChange, children, style = {} }) {
   return (
-    <div className="bg-[#11151d] border border-white/10 rounded-xl px-4 py-3 shadow-2xl min-w-[160px]">
-      <p className="text-xs text-white/50 mb-2">{label}</p>
-      <div className="space-y-1.5">
-        {payload.map((p, i) => (
-          <div key={i} className="flex items-center justify-between gap-4 text-sm">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
-              <span style={{ color: p.color }}>{p.name}</span>
-            </div>
-            <span className="text-white font-medium tabular-nums">
-              {valueFormatter ? valueFormatter(p.value, p.name) : fmt(p.value)}
-            </span>
-          </div>
-        ))}
-      </div>
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <select value={value} onChange={onChange} style={{ ...selectStyle, ...style }}>
+        {children}
+      </select>
+      <span style={{ position: 'absolute', right: 9, top: '50%', transform: 'translateY(-50%)', fontSize: 10, color: T.textLo, pointerEvents: 'none' }}>▾</span>
     </div>
   );
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   TAB BAR
+   CHART TOOLTIP — terminal style
 ───────────────────────────────────────────────────────────────── */
 
-function TabBar({ tabs, activeTab, onChange }) {
+function ChartTooltip({ active, payload, label, valueFormatter }) {
+  if (!active || !payload?.length) return null;
   return (
-    <div className="flex items-center gap-2 mb-5 overflow-x-auto pb-1">
+    <div style={{
+      background: T.surfaceHi,
+      border: `1px solid ${T.borderHi}`,
+      padding: '8px 12px',
+      fontSize: 10,
+      letterSpacing: '0.08em',
+      minWidth: 160,
+    }}>
+      <div style={{ color: T.textMid, marginBottom: 6, textTransform: 'uppercase', fontSize: 9 }}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 3 }}>
+          <span style={{ color: p.color, textTransform: 'uppercase', fontSize: 9, letterSpacing: '0.10em' }}>{p.name}</span>
+          <span style={{ color: T.textHi, fontWeight: 500 }}>
+            {valueFormatter ? valueFormatter(p.value, p.name) : fmt(p.value)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   TAB ROW
+───────────────────────────────────────────────────────────────── */
+
+function TabRow({ tabs, active, onChange }) {
+  return (
+    <div className="trm-tab-row">
       {tabs.map(({ key, label }) => (
-        <button
-          key={key}
-          onClick={() => onChange(key)}
-          className={`px-4 py-2 rounded-xl border text-sm transition whitespace-nowrap ${
-            activeTab === key
-              ? 'border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0]'
-              : 'border-white/10 bg-[#151922] text-white/65 hover:bg-white/5'
-          }`}
-        >
+        <button key={key} className={`trm-tab${active === key ? ' active' : ''}`} onClick={() => onChange(key)}>
           {label}
         </button>
       ))}
@@ -85,30 +431,47 @@ function TabBar({ tabs, activeTab, onChange }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   SECTION CARD
+   METRIC STRIP
 ───────────────────────────────────────────────────────────────── */
 
-function SectionCard({ title, subtitle, children, action }) {
+function MetricStrip({ items }) {
   return (
-    <div className="card overflow-hidden">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
-        <div>
-          <h3 className="text-sm font-semibold text-white">{title}</h3>
-          {subtitle && <p className="mt-0.5 text-xs text-white/45">{subtitle}</p>}
-        </div>
-        {action}
-      </div>
-      <div className="p-5">{children}</div>
+    <div style={{
+      display: 'flex',
+      width: '100%',
+      border: `1px solid ${T.border}`,
+      borderTop: 'none',
+      overflow: 'hidden',
+    }}>
+      {items.map(({ title, value, subtitle, accent = T.amber }) => (
+        <MetricCard
+          key={title}
+          title={title}
+          value={value}
+          subtitle={subtitle}
+          accent={accent}
+        />
+      ))}
     </div>
   );
 }
+
+/* ─────────────────────────────────────────────────────────────────
+   COMMON CHART AXES PROPS
+───────────────────────────────────────────────────────────────── */
+
+const axisStyle = {
+  tick: { fill: T.textMid, fontSize: 9, fontFamily: 'IBM Plex Mono, monospace' },
+  axisLine: { stroke: T.border },
+  tickLine: false,
+};
 
 /* ─────────────────────────────────────────────────────────────────
    OHLCV + DELIVERY VIEW
 ───────────────────────────────────────────────────────────────── */
 
 function OHLCView({ tickers, dates }) {
-  const [ticker,    setTicker]    = useState('');
+  const [ticker,    setTicker]    = useState(tickers[0] ?? '');
   const [startDate, setStartDate] = useState(dates.at(-60) ?? '');
   const [endDate,   setEndDate]   = useState(dates.at(-1)  ?? '');
   const [data,      setData]      = useState([]);
@@ -117,7 +480,6 @@ function OHLCView({ tickers, dates }) {
   const [chartTab,  setChartTab]  = useState('price');
   const [showCandles, setShowCandles] = useState(true);
   const [showAvg,     setShowAvg]     = useState(false);
-  const scaleRef = useRef(null);
 
   const load = useCallback(async () => {
     if (!ticker || !startDate || !endDate) return;
@@ -135,299 +497,203 @@ function OHLCView({ tickers, dates }) {
 
   const latest = rollData.at(-1);
 
-  const metricCards = latest ? [
-    { title: 'Close',       value: formatCurrency(latest.close, 2),                            accent: CHART_COLORS.gold   },
-    { title: 'Day Change',  value: `${latest.daily_return > 0 ? '+' : ''}${fmt(latest.daily_return)}%`,
-      accent: latest.daily_return >= 0 ? CHART_COLORS.green : CHART_COLORS.red },
-    { title: 'Volume',      value: fmt(latest.volume, 0),                                       accent: CHART_COLORS.accent },
-    { title: 'Delivery %',  value: latest.delivery_pct != null ? `${fmt(latest.delivery_pct)}%` : '—',
-      accent: latest.delivery_pct > 60 ? CHART_COLORS.green : latest.delivery_pct > 40 ? CHART_COLORS.amber : CHART_COLORS.muted },
-    { title: 'Turnover',    value: latest.turnover != null ? `₹${fmt(latest.turnover, 0)} Cr` : '—', accent: CHART_COLORS.purple },
-    { title: 'Rel. Volume', value: fmt(latest.rel_volume),                                      accent: CHART_COLORS.amber  },
+  const metrics = latest ? [
+    { title: 'Last Traded Price',  value: formatCurrency(latest.close, 2),
+      accent: T.amber },
+    { title: 'Day Change %',       value: `${latest.daily_return > 0 ? '+' : ''}${fmt(latest.daily_return)}%`,
+      accent: latest.daily_return >= 0 ? T.green : T.red },
+    { title: 'Volume',             value: fmtInt(latest.volume),
+      accent: T.blue },
+    { title: 'Delivery %',         value: latest.delivery_pct != null ? `${fmt(latest.delivery_pct)}%` : '—',
+      accent: latest.delivery_pct > 60 ? T.green : latest.delivery_pct > 40 ? T.amber : T.textLo },
+    { title: 'Turnover (Cr)',      value: latest.turnover != null ? `₹${fmt(latest.turnover, 0)}` : '—',
+      accent: T.textHi },
+    { title: 'Relative Volume',    value: fmt(latest.rel_volume),
+      accent: latest.rel_volume > 2 ? T.amber : T.textHi },
   ] : [];
 
   const chartTabs = [
     { key: 'price',    label: 'Price' },
-    { key: 'delivery', label: 'Delivery' },
+    { key: 'delivery', label: 'Delivery %' },
     { key: 'volume',   label: 'Volume' },
   ];
 
   return (
-    <div className="space-y-5">
-      {/* Controls */}
-      <div className="card p-5">
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-white/50 uppercase tracking-wider">Ticker</label>
-            <select
-              value={ticker}
-              onChange={(e) => setTicker(e.target.value)}
-              className="w-44"
-            >
-              <option value="">— Select —</option>
-              {tickers.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {/* Control bar */}
+      <div style={{ background: T.surface, border: `1px solid ${T.border}` }}>
+        <div style={rowStyle}>
+          {/* Ticker */}
+          <div style={cellStyle({ minWidth: 200 })}>
+            <span style={sectionLabel()}>Ticker</span>
+            <TermSelect value={ticker || tickers[0]} onChange={(e) => setTicker(e.target.value)} style={{ minWidth: 180 }}>
+              {tickers.map((t) => <option key={t} value={t} style={{ background: T.surface }}>{t}</option>)}
+            </TermSelect>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-white/50 uppercase tracking-wider">From</label>
-            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          {/* Date range */}
+          <div style={cellStyle({})}>
+            <span style={sectionLabel()}>Date Range</span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={dateInputStyle} />
+              <span style={{ color: T.textLo, fontSize: 10 }}>→</span>
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={dateInputStyle} />
+            </div>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-white/50 uppercase tracking-wider">To</label>
-            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          {/* Load + status */}
+          <div style={{ ...cellStyle({ borderRight: 'none', marginLeft: 'auto' }), flexDirection: 'row', alignItems: 'flex-end', gap: 12 }}>
+            <button className="trm-action" onClick={load} disabled={!ticker || loading}>
+              {loading ? 'Loading…' : 'Load'}
+            </button>
+            {data.length > 0 && (
+              <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.10em', textTransform: 'uppercase', paddingBottom: 6 }}>
+                {data.length} sessions
+              </span>
+            )}
           </div>
-          <button
-            onClick={load}
-            disabled={!ticker || loading}
-            className="px-5 py-2 rounded-xl border border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0] text-sm transition hover:bg-[#00B0F0]/20 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {loading ? 'Loading…' : 'Load'}
-          </button>
         </div>
       </div>
 
-      {/* Metric Cards */}
-      {metricCards.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
-          {metricCards.map((c) => (
-            <MetricCard key={c.title} title={c.title} value={c.value} accent={c.accent} />
-          ))}
-        </div>
-      )}
+      {/* Metric strip */}
+      {metrics.length > 0 && <MetricStrip items={metrics} />}
 
-      {/* Charts */}
+      {/* Chart panel */}
       {loading && (
-        <div className="card min-h-[300px] flex items-center justify-center">
-          <LoadingSpinner />
-        </div>
+        <div className="trm-panel trm-loading"><LoadingSpinner /></div>
       )}
 
       {!loading && data.length > 0 && (
-        <SectionCard
-          title={`${ticker} — ${chartTab === 'price' ? 'Price & Avg' : chartTab === 'delivery' ? 'Delivery %' : 'Volume'}`}
-          subtitle={`${startDate} → ${endDate} · ${data.length} trading days`}
-        >
-          <TabBar tabs={chartTabs} activeTab={chartTab} onChange={setChartTab} />
+        <div style={{ border: `1px solid ${T.border}`, borderTop: 'none' }}>
+          {/* Black header bar: ticker context left, tabs centre, toggles right */}
+          <div style={{
+            background: T.bg,
+            borderBottom: `1px solid ${T.borderHi}`,
+            display: 'flex',
+            alignItems: 'stretch',
+            justifyContent: 'space-between',
+          }}>
+            {/* Ticker + exchange badge */}
+            <div style={{ display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10, borderRight: `1px solid ${T.border}` }}>
+              <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: T.textHi }}>{ticker}</span>
+              <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.12em', textTransform: 'uppercase' }}>NSE · EQ</span>
+            </div>
 
-          {/* Price — Candlestick */}
-          {chartTab === 'price' && (() => {
-            const green = '#26a69a';
-            const red   = '#ef5350';
+            {/* Chart tabs — centre */}
+            <div style={{ display: 'flex', flex: 1 }}>
+              {chartTabs.map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setChartTab(key)}
+                  style={{
+                    padding: '9px 20px',
+                    fontSize: 10,
+                    fontFamily: 'inherit',
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    background: chartTab === key ? T.surfaceHi : 'transparent',
+                    color: chartTab === key ? T.amber : T.textMid,
+                    border: 'none',
+                    borderRight: `1px solid ${T.border}`,
+                    borderBottom: chartTab === key ? `2px solid ${T.amber}` : '2px solid transparent',
+                    cursor: 'pointer',
+                    transition: 'all 120ms',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+              <div style={{ flex: 1 }} /> {/* spacer */}
+            </div>
 
-            // Collect pixel positions from both bars to build the scale
-            const pixelMap = {};  // { index -> { closeY, lowY } }
+            {/* Price chart toggles — right */}
+            {chartTab === 'price' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 14px', borderLeft: `1px solid ${T.border}` }}>
+                <button className={`trm-btn${showCandles ? ' active' : ''}`} onClick={() => setShowCandles(v => !v)}>OHLC</button>
+                <button className={`trm-btn${showAvg ? ' active' : ''}`} onClick={() => setShowAvg(v => !v)}>Avg Price</button>
+              </div>
+            )}
+          </div>
 
-            const CloseShape = (props) => {
-              const { x, y, width, height, index, payload } = props;
-              if (!pixelMap[index]) pixelMap[index] = {};
-              pixelMap[index].closeY  = y;
-              pixelMap[index].closeVal = payload?.close;
-              pixelMap[index].x = x;
-              pixelMap[index].width = width;
-              return null; // rendered by CandleShape after LowShape fires
-            };
+          {/* Chart body */}
+          <div style={{ background: T.surface, padding: '14px 14px 10px' }}>
+            {chartTab === 'price' && (
+              <CandlestickChart
+                data={data}
+                showCandles={showCandles}
+                showAvg={showAvg}
+                formatCurrency={formatCurrency}
+              />
+            )}
 
-            const LowShape = (props) => {
-              const { x, y, width, height, index, payload } = props;
-              if (!pixelMap[index]) pixelMap[index] = {};
-              pixelMap[index].lowY   = y;
-              pixelMap[index].lowVal = payload?.low;
-
-              // Both anchors available — render the candle now
-              const pm = pixelMap[index];
-              if (pm.closeY == null || pm.lowY == null || pm.closeVal == null || pm.lowVal == null) return null;
-
-              const { open, high, low, close, prev_close } = payload;
-              if ([open, high, low, close].some(v => v == null || isNaN(v))) return null;
-
-              // Derive linear scale from two anchors:
-              // close -> pm.closeY,  low -> pm.lowY
-              const pxPerUnit = (pm.lowY - pm.closeY) / (low - close);
-              const scaleY = (val) => pm.closeY + (val - close) * pxPerUnit;
-
-              const isBullish = prev_close != null ? close > prev_close : close >= open;
-              const isHollow  = close >= open;
-              const color     = isBullish ? green : red;
-              const cx        = pm.x + pm.width / 2;
-
-              const yOpen      = scaleY(open);
-              const yClose     = scaleY(close);
-              const yHigh      = scaleY(high);
-              const yLow       = scaleY(low);
-              const bodyTop    = Math.min(yOpen, yClose);
-              const bodyHeight = Math.max(Math.abs(yClose - yOpen), 1);
-              const bodyWidth  = Math.max(pm.width * 0.6, 3);
-              const bodyX      = cx - bodyWidth / 2;
-
-              return (
-                <g>
-                  <line x1={cx} y1={yHigh} x2={cx} y2={yLow} stroke={color} strokeWidth={1} />
-                  <rect
-                    x={bodyX} y={bodyTop}
-                    width={bodyWidth} height={bodyHeight}
-                    fill={isHollow ? 'transparent' : color}
-                    stroke={color} strokeWidth={1.5} rx={1}
-                  />
-                </g>
-              );
-            };
-
-            const PriceTooltip = ({ active, payload, label }) => {
-              if (!active || !payload?.length) return null;
-              const row = payload[0]?.payload;
-              if (!row) return null;
-              const fields = [
-                showCandles && row.open     != null && { label: 'Open',  value: formatCurrency(row.open,     2), color: 'rgba(255,255,255,0.7)' },
-                showCandles && row.high     != null && { label: 'High',  value: formatCurrency(row.high,     2), color: green },
-                showCandles && row.low      != null && { label: 'Low',   value: formatCurrency(row.low,      2), color: red   },
-                showCandles && row.close    != null && { label: 'Close', value: formatCurrency(row.close,    2), color: 'rgba(255,255,255,0.7)' },
-                showAvg && row.avg_price   != null && { label: 'Avg',   value: formatCurrency(row.avg_price, 2), color: CHART_COLORS.amber },
-              ].filter(Boolean);
-              return (
-                <div className="bg-[#11151d] border border-white/10 rounded-xl px-4 py-3 shadow-2xl min-w-[160px]">
-                  <p className="text-xs text-white/50 mb-2">{label}</p>
-                  <div className="space-y-1.5">
-                    {fields.map(({ label, value, color }) => (
-                      <div key={label} className="flex items-center justify-between gap-4 text-sm">
-                        <span style={{ color }}>{label}</span>
-                        <span className="text-white font-medium tabular-nums">{value}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            };
-
-            const btnClass = (active) =>
-              `px-3 py-1 rounded-lg border text-xs transition ${
-                active
-                  ? 'border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0]'
-                  : 'border-white/10 bg-[#151922] text-white/45 hover:bg-white/5'
-              }`;
-
-            return (
-              <>
-                <ResponsiveContainer width="100%" height={600}>
-                  <ComposedChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                    <XAxis dataKey="trade_date"
-                      tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                      tickFormatter={(d) => d.slice(5)}
-                      interval="preserveStartEnd" tickLine={false}
-                      axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                    <YAxis
-                      domain={['auto', 'auto']}
-                      tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                      tickFormatter={(v) => `₹${fmt(v, 0)}`}
-                      width={72} tickLine={false}
-                      axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                    <Tooltip content={<PriceTooltip />} />
-                    {showAvg && (
-                      <Line dataKey="avg_price" name="Avg"
-                        stroke={CHART_COLORS.amber} dot={false}
-                        strokeWidth={1.5} strokeDasharray="4 3" />
-                    )}
-                    {/* Two hidden bars to capture pixel positions for scale derivation */}
-                    <Bar dataKey="close" shape={<CloseShape />} isAnimationActive={false} legendType="none" tooltipType="none" />
-                    <Bar dataKey="low"   shape={<LowShape />}   isAnimationActive={false} legendType="none" tooltipType="none" />
-                  </ComposedChart>
+            {chartTab === 'delivery' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                    <CartesianGrid strokeDasharray="2 4" stroke={T.border} />
+                    <XAxis dataKey="trade_date" {...axisStyle} tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" />
+                    <YAxis {...axisStyle} tickFormatter={(v) => `${v}%`} width={40} />
+                    <Tooltip content={<ChartTooltip valueFormatter={(v) => `${fmt(v)}%`} />} />
+                    <Bar dataKey="delivery_pct" name="Del %" maxBarSize={12}>
+                      {data.map((row, i) => (
+                        <Cell key={i} fill={row.delivery_pct > 60 ? T.green : row.delivery_pct > 40 ? T.amber : T.textLo} />
+                      ))}
+                    </Bar>
+                  </BarChart>
                 </ResponsiveContainer>
-                <div className="flex items-center gap-2 mt-3">
-                  <button className={btnClass(showCandles)} onClick={() => setShowCandles(v => !v)}>Candles</button>
-                  <button className={btnClass(showAvg)}     onClick={() => setShowAvg(v => !v)}>Avg Price</button>
+                <div style={{ fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.textMid, paddingLeft: 4 }}>
+                  MA5 / MA20 — Delivery % Moving Averages
                 </div>
-              </>
-            );
-          })()}
+                <ResponsiveContainer width="100%" height={130}>
+                  <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                    <CartesianGrid strokeDasharray="2 4" stroke={T.border} />
+                    <XAxis dataKey="trade_date" {...axisStyle} tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" />
+                    <YAxis {...axisStyle} tickFormatter={(v) => `${v}%`} width={40} />
+                    <Tooltip content={<ChartTooltip valueFormatter={(v) => `${fmt(v)}%`} />} />
+                    <Line dataKey="delivery_pct_ma5"  name="MA5"  stroke={T.blue}  dot={false} strokeWidth={1.5} />
+                    <Line dataKey="delivery_pct_ma20" name="MA20" stroke={T.amber} dot={false} strokeWidth={1.5} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
 
-          {/* Delivery */}
-          {chartTab === 'delivery' && (
-            <div className="space-y-4">
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                  <XAxis dataKey="trade_date" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                    tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" tickLine={false}
-                    axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                  <YAxis tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                    tickFormatter={(v) => `${v}%`} width={44} tickLine={false}
-                    axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                  <Tooltip content={<ChartTooltip valueFormatter={(v) => `${fmt(v)}%`} />} />
-                  <Bar dataKey="delivery_pct" name="Delivery %" radius={[2, 2, 0, 0]}>
-                    {data.map((row, i) => (
-                      <Cell key={i}
-                        fill={row.delivery_pct > 60 ? CHART_COLORS.green : row.delivery_pct > 40 ? CHART_COLORS.amber : CHART_COLORS.muted}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-              <ResponsiveContainer width="100%" height={140}>
-                <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                  <XAxis dataKey="trade_date" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                    tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" tickLine={false}
-                    axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                  <YAxis tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={44} tickLine={false}
-                    axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                  <Tooltip content={<ChartTooltip valueFormatter={(v) => `${fmt(v)}%`} />} />
-                  <Line dataKey="delivery_pct_ma5"  name="MA5"  stroke={CHART_COLORS.accent} dot={false} strokeWidth={1.5} />
-                  <Line dataKey="delivery_pct_ma20" name="MA20" stroke={CHART_COLORS.amber}  dot={false} strokeWidth={1.5} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Volume */}
-          {chartTab === 'volume' && (
-            <div className="space-y-4">
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                  <XAxis dataKey="trade_date" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                    tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" tickLine={false}
-                    axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                  <YAxis tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                    tickFormatter={(v) => `${(v / 1e6).toFixed(1)}M`} width={52} tickLine={false}
-                    axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                  <Tooltip content={<ChartTooltip valueFormatter={(v) => fmt(v, 0)} />} />
-                  <Bar dataKey="volume" name="Volume" radius={[2, 2, 0, 0]}>
-                    {data.map((row, i) => (
-                      <Cell key={i}
-                        fill={row.rel_volume > 2 ? CHART_COLORS.amber : row.rel_volume > 1.5 ? CHART_COLORS.accent : CHART_COLORS.muted}
-                      />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-              <ResponsiveContainer width="100%" height={120}>
-                <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-                  <XAxis dataKey="trade_date" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }}
-                    tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" tickLine={false}
-                    axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                  <YAxis tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={44} tickLine={false}
-                    axisLine={{ stroke: 'rgba(255,255,255,0.08)' }} />
-                  <ReferenceLine y={1} stroke="rgba(255,255,255,0.2)" strokeDasharray="4 2" />
-                  <Tooltip content={<ChartTooltip valueFormatter={(v) => fmt(v)} />} />
-                  <Line dataKey="rel_volume" name="Rel. Volume" stroke={CHART_COLORS.purple} dot={false} strokeWidth={1.5} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </SectionCard>
+            {chartTab === 'volume' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                    <CartesianGrid strokeDasharray="2 4" stroke={T.border} />
+                    <XAxis dataKey="trade_date" {...axisStyle} tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" />
+                    <YAxis {...axisStyle} tickFormatter={(v) => `${(v / 1e6).toFixed(1)}M`} width={48} />
+                    <Tooltip content={<ChartTooltip valueFormatter={(v) => fmtInt(v)} />} />
+                    <Bar dataKey="volume" name="Volume" maxBarSize={10}>
+                      {data.map((row, i) => (
+                        <Cell key={i} fill={row.rel_volume > 2 ? T.amber : row.rel_volume > 1.5 ? T.blue : T.textLo} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+                <div style={{ fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.textMid, paddingLeft: 4 }}>
+                  Relative Volume — vs 20-day average
+                </div>
+                <ResponsiveContainer width="100%" height={110}>
+                  <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                    <CartesianGrid strokeDasharray="2 4" stroke={T.border} />
+                    <XAxis dataKey="trade_date" {...axisStyle} tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" />
+                    <YAxis {...axisStyle} width={40} />
+                    <ReferenceLine y={1} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 3" />
+                    <Tooltip content={<ChartTooltip valueFormatter={(v) => fmt(v)} />} />
+                    <Line dataKey="rel_volume" name="Rel Vol" stroke={T.pink} dot={false} strokeWidth={1.5} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {!loading && data.length === 0 && ticker && (
-        <div className="card p-8">
-          <p className="text-white/50 text-sm">No data available for the selected range.</p>
-        </div>
+        <div className="trm-panel trm-empty">No data for selected range</div>
       )}
-
       {!ticker && (
-        <div className="card p-8">
-          <p className="text-white/50 text-sm">Select a ticker above to load chart data.</p>
-        </div>
+        <div className="trm-panel trm-empty">Select ticker to load chart data</div>
       )}
     </div>
   );
@@ -449,7 +715,7 @@ function ScreenerView({ dates }) {
     if (!tradeDate) return;
     setLoading(true);
     try {
-      const d = await stocks.snapshot(tradeDate, 300);
+      const d = await stocks.snapshot(tradeDate, 500);
       setData(d);
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -474,77 +740,78 @@ function ScreenerView({ dates }) {
   [data, filter, sortKey, sortDir]);
 
   const cols = [
-    { key: 'ticker',      label: 'Ticker',        align: 'left',  render: (v) => <span className="font-semibold text-[#00B0F0]">{v}</span> },
-    { key: 'close',       label: 'Close',          align: 'right', render: (v) => formatCurrency(v, 2) },
-    { key: 'pct_change',  label: 'Chg %',          align: 'right', render: (v) => (
-      <span style={{ color: pctColor(v) }}>{v > 0 ? '+' : ''}{fmt(v)}%</span>
-    )},
-    { key: 'volume',      label: 'Volume',         align: 'right', render: (v) => fmt(v, 0) },
-    { key: 'turnover',    label: 'Turnover (Cr)',  align: 'right', render: (v) => fmt(v, 1) },
-    { key: 'delivery_pct',label: 'Del %',          align: 'right', render: (v) => (
-      v != null
-        ? <span style={{ color: v > 60 ? CHART_COLORS.green : v > 40 ? CHART_COLORS.amber : 'rgba(255,255,255,0.7)' }}>{fmt(v)}%</span>
-        : '—'
-    )},
-    { key: 'trade_count', label: 'Trades',         align: 'right', render: (v) => fmt(v, 0) },
+    { key: 'ticker',       label: 'Ticker',     align: 'left',
+      render: (v) => <span style={{ color: T.amber, fontWeight: 600 }}>{v}</span> },
+    { key: 'close',        label: 'LTP',        align: 'right',
+      render: (v) => <span style={{ color: T.textHi }}>{formatCurrency(v, 2)}</span> },
+    { key: 'pct_change',   label: 'Chg %',      align: 'right',
+      render: (v) => <span style={{ color: pctColor(v) }}>{v > 0 ? '+' : ''}{fmt(v)}%</span> },
+    { key: 'volume',       label: 'Volume',     align: 'right',
+      render: (v) => fmtInt(v) },
+    { key: 'turnover',     label: 'TO (Cr)',    align: 'right',
+      render: (v) => fmt(v, 1) },
+    { key: 'delivery_pct', label: 'Del %',      align: 'right',
+      render: (v) => v != null
+        ? <span style={{ color: v > 60 ? T.green : v > 40 ? T.amber : T.textHi }}>{fmt(v)}%</span>
+        : '—' },
+    { key: 'trade_count',  label: 'Trades',     align: 'right',
+      render: (v) => fmtInt(v) },
   ];
 
   return (
-    <div className="space-y-5">
-      {/* Controls */}
-      <div className="card p-5">
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-white/50 uppercase tracking-wider">Date</label>
-            <select value={tradeDate} onChange={(e) => setTradeDate(e.target.value)}>
-              {[...dates].reverse().map((d) => <option key={d} value={d}>{d}</option>)}
-            </select>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}` }}>
+        <div style={rowStyle}>
+          {/* Date */}
+          <div style={cellStyle({ minWidth: 180 })}>
+            <span style={sectionLabel()}>Date</span>
+            <input type="date" value={tradeDate} onChange={(e) => setTradeDate(e.target.value)} style={dateInputStyle} />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-white/50 uppercase tracking-wider">Filter</label>
+          {/* Filter */}
+          <div style={cellStyle({})}>
+            <span style={sectionLabel()}>Filter Ticker</span>
             <input
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              placeholder="Search ticker…"
+              placeholder="Search…"
+              style={filterInputStyle}
             />
           </div>
-          <span className="text-xs text-white/40 self-end pb-2">{displayed.length} rows</span>
+          {/* Row count */}
+          <div style={{ ...cellStyle({ borderRight: 'none', marginLeft: 'auto' }), justifyContent: 'flex-end' }}>
+            <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.12em', textTransform: 'uppercase', paddingBottom: 7 }}>
+              {displayed.length} instruments
+            </span>
+          </div>
         </div>
       </div>
 
       {loading ? (
-        <div className="card min-h-[300px] flex items-center justify-center"><LoadingSpinner /></div>
+        <div className="trm-panel trm-loading"><LoadingSpinner /></div>
       ) : (
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table>
-              <thead>
-                <tr>
-                  {cols.map(({ key, label, align }) => (
-                    <th
-                      key={key}
-                      onClick={() => handleSort(key)}
-                      className="cursor-pointer select-none hover:text-white transition"
-                      style={{ textAlign: align }}
-                    >
-                      {label}{sortKey === key ? (sortDir === -1 ? ' ↓' : ' ↑') : ''}
-                    </th>
+        <div className="trm-panel" style={{ overflowX: 'auto' }}>
+          <table className="trm-table">
+            <thead>
+              <tr>
+                {cols.map(({ key, label, align }) => (
+                  <th key={key} onClick={() => handleSort(key)} style={{ textAlign: align }}>
+                    {label}{sortKey === key ? (sortDir === -1 ? ' ↓' : ' ↑') : ''}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {displayed.map((row, i) => (
+                <tr key={row.ticker + i} className={row.delivery_pct > 70 ? 'highlighted' : ''}>
+                  {cols.map(({ key, align, render }) => (
+                    <td key={key} style={{ textAlign: align }}>
+                      {render(row[key])}
+                    </td>
                   ))}
                 </tr>
-              </thead>
-              <tbody>
-                {displayed.map((row, i) => (
-                  <tr key={row.ticker + i}>
-                    {cols.map(({ key, align }) => (
-                      <td key={key} style={{ textAlign: align }}>
-                        {cols.find((c) => c.key === key)?.render(row[key])}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -573,51 +840,69 @@ function DeliveryView({ dates }) {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div className="space-y-5">
-      <div className="card p-5">
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-white/50 uppercase tracking-wider">Date</label>
-            <select value={tradeDate} onChange={(e) => setTradeDate(e.target.value)}>
-              {[...dates].reverse().map((d) => <option key={d} value={d}>{d}</option>)}
-            </select>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}` }}>
+        <div style={rowStyle}>
+          {/* Date */}
+          <div style={cellStyle({ minWidth: 180 })}>
+            <span style={sectionLabel()}>Date</span>
+            <input type="date" value={tradeDate} onChange={(e) => setTradeDate(e.target.value)} style={dateInputStyle} />
           </div>
-          <p className="text-xs text-white/40 self-end pb-2">
-            Top 50 by delivery % — high delivery signals institutional conviction
-          </p>
+          {/* Context label */}
+          <div style={{ ...cellStyle({ borderRight: 'none', flex: 1 }), justifyContent: 'flex-end' }}>
+            <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.10em', textTransform: 'uppercase', paddingBottom: 7 }}>
+              Top 50 by delivery % · Institutional conviction signal
+            </span>
+          </div>
         </div>
       </div>
 
       {loading ? (
-        <div className="card min-h-[300px] flex items-center justify-center"><LoadingSpinner /></div>
+        <div className="trm-panel trm-loading"><LoadingSpinner /></div>
       ) : (
-        <div className="space-y-2">
-          {data.map((row, i) => {
-            const barPct = Math.max(row.delivery_pct ?? 0, 2);
-            const barColor =
-              row.delivery_pct > 70 ? CHART_COLORS.green
-              : row.delivery_pct > 50 ? CHART_COLORS.amber
-              : CHART_COLORS.accent;
+        <div className="trm-panel" style={{ overflow: 'hidden' }}>
+          {/* Header row */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: '32px 120px 1fr 80px 110px 80px',
+            padding: '6px 14px',
+            background: T.surfaceHi,
+            borderBottom: `1px solid ${T.borderHi}`,
+            fontSize: 9,
+            letterSpacing: '0.12em',
+            textTransform: 'uppercase',
+            color: T.textMid,
+          }}>
+            <span>#</span>
+            <span>Ticker</span>
+            <span>Name</span>
+            <span style={{ textAlign: 'right' }}>Chg %</span>
+            <span style={{ textAlign: 'right' }}>LTP</span>
+            <span style={{ textAlign: 'right' }}>Del %</span>
+          </div>
 
+          {data.map((row, i) => {
+            const barPct = Math.min(Math.max(row.delivery_pct ?? 0, 2), 100);
+            const barColor = row.delivery_pct > 70 ? T.green : row.delivery_pct > 50 ? T.amber : T.blue;
             return (
-              <div key={row.ticker} className="card relative overflow-hidden p-0">
-                {/* background delivery bar */}
-                <div
-                  className="absolute inset-y-0 left-0 opacity-10 pointer-events-none"
-                  style={{ width: `${Math.min(barPct, 100)}%`, backgroundColor: barColor }}
-                />
-                <div className="relative flex items-center gap-3 px-4 py-3">
-                  <span className="w-7 text-xs text-white/30 tabular-nums text-center">{i + 1}</span>
-                  <span className="w-28 font-semibold text-sm text-white shrink-0">{row.ticker}</span>
-                  <span className="flex-1 text-xs text-white/40 truncate hidden md:block">{row.instrument_name}</span>
-                  <span className="text-sm tabular-nums" style={{ color: pctColor(row.pct_change) }}>
+              <div key={row.ticker} className="del-row">
+                <div className="del-row-bar" style={{ width: `${barPct}%`, backgroundColor: barColor }} />
+                <div className="del-row-inner" style={{
+                  display: 'grid',
+                  gridTemplateColumns: '32px 120px 1fr 80px 110px 80px',
+                }}>
+                  <span style={{ fontSize: 9, color: T.textMid, fontVariantNumeric: 'tabular-nums' }}>{i + 1}</span>
+                  <span style={{ fontSize: 11, color: T.amber, fontWeight: 600 }}>{row.ticker}</span>
+                  <span style={{ fontSize: 9, color: T.textMid, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {row.instrument_name}
+                  </span>
+                  <span style={{ fontSize: 11, color: pctColor(row.pct_change), textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                     {row.pct_change > 0 ? '+' : ''}{fmt(row.pct_change)}%
                   </span>
-                  <span className="text-sm text-white tabular-nums w-24 text-right">{formatCurrency(row.close, 2)}</span>
-                  <span
-                    className="text-base font-bold tabular-nums w-16 text-right"
-                    style={{ color: barColor }}
-                  >
+                  <span style={{ fontSize: 11, color: T.textHi, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {formatCurrency(row.close, 2)}
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: barColor, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                     {fmt(row.delivery_pct)}%
                   </span>
                 </div>
@@ -652,7 +937,8 @@ export default function Stocks() {
   }, []);
 
   if (loading) return (
-    <div className="h-[calc(100vh-64px)] flex items-center justify-center">
+    <div className="trm-root" style={{ height: 'calc(100vh - 64px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <StyleInjector />
       <LoadingSpinner size="lg" />
     </div>
   );
@@ -664,19 +950,40 @@ export default function Stocks() {
   ];
 
   return (
-    <div className="p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">EQ Stocks</h1>
-        <p className="mt-1 text-sm text-white/45">
-          {tickers.length} active tickers · {dates.length} trading days
-        </p>
+    <div className="trm-root" style={{ padding: '0' }}>
+      <StyleInjector />
+
+      {/* Page header strip */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '10px 18px',
+        background: T.surfaceHi,
+        borderBottom: `1px solid ${T.borderHi}`,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 16 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: T.textHi }}>
+            EQ Stocks
+          </span>
+          <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.10em', textTransform: 'uppercase' }}>
+            {tickers.length} tickers · {dates.length} sessions · NSE Cash Market
+          </span>
+        </div>
+        <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.10em', textTransform: 'uppercase' }}>
+          {dates.at(-1)}
+        </span>
       </div>
 
-      <TabBar tabs={views} activeTab={view} onChange={setView} />
+      {/* View tab row */}
+      <TabRow tabs={views} active={view} onChange={setView} />
 
-      {view === 'ohlc'     && <OHLCView     tickers={tickers} dates={dates} />}
-      {view === 'screener' && <ScreenerView dates={dates} />}
-      {view === 'delivery' && <DeliveryView dates={dates} />}
+      {/* Content */}
+      <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {view === 'ohlc'     && <OHLCView     tickers={tickers} dates={dates} />}
+        {view === 'screener' && <ScreenerView dates={dates} />}
+        {view === 'delivery' && <DeliveryView dates={dates} />}
+      </div>
     </div>
   );
 }

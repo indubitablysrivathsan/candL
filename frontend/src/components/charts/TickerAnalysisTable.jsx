@@ -4,8 +4,34 @@ import { useEffect, useMemo, useState, Fragment } from 'react';
 import { getTickerAnalysis } from '../../api/client';
 import LoadingSpinner from '../../components/shared/LoadingSpinner';
 
-/* ── tiny helpers ──────────────────────────────────────────────── */
+/* ─── design tokens ──────────────────────────────────────────── */
+const T = {
+  bg:        '#06080c',
+  surface:   '#0b0f16',
+  surfaceAlt:'rgba(255,255,255,0.018)',
+  border:    'rgba(255,255,255,0.07)',
+  borderHi:  'rgba(255,255,255,0.14)',
+  amber:     '#F0A500',
+  amberDim:  'rgba(240,165,0,0.12)',
+  green:     '#26a69a',
+  red:       '#ef5350',
+  orange:    '#FFA726',
+  blue:      '#00B0F0',
+  magenta:   '#E040FB',
+  gold:      '#FFD700',
+  pink:      '#D66E9A',
+  textHi:    'rgba(255,255,255,0.90)',
+  textMid:   'rgba(255,255,255,0.50)',
+  textLo:    'rgba(255,255,255,0.25)',
+  textGhost: 'rgba(255,255,255,0.12)',
+};
 
+const monoFont = "'IBM Plex Mono', 'Fira Code', 'Consolas', monospace";
+
+/* per-expiry column accent colours */
+const EXP_COLORS = [T.blue, T.magenta, T.orange];
+
+/* ─── tiny helpers ───────────────────────────────────────────── */
 function fmt(val, digits = 0) {
   if (val == null || isNaN(val)) return '—';
   return Number(val).toLocaleString('en-IN', {
@@ -30,58 +56,61 @@ function fmtCurrency(val) {
   return `₹${Number(val).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/* colour helpers */
 function pcrColor(pcr) {
-  if (pcr == null) return 'text-white/60';
-  if (pcr > 1.2)  return 'text-[#26a69a]';   // bullish (high put OI relative to calls)
-  if (pcr < 0.8)  return 'text-[#ef5350]';   // bearish
-  return 'text-[#FFA726]';                    // neutral
+  if (pcr == null) return T.textMid;
+  if (pcr > 1.2)   return T.green;
+  if (pcr < 0.8)   return T.red;
+  return T.orange;
 }
 
 function driftColor(drift) {
-  if (drift == null) return 'text-white/60';
-  if (drift >  0.01) return 'text-[#ef5350]';  // max pain above underlying → bearish pull
-  if (drift < -0.01) return 'text-[#26a69a]';  // max pain below → bullish pull
-  return 'text-white/60';
+  if (drift == null) return T.textMid;
+  if (drift >  0.01) return T.red;
+  if (drift < -0.01) return T.green;
+  return T.textMid;
 }
 
-function shareBar(share, color) {
-  if (share == null) return null;
+function ShareBar({ share, color }) {
+  if (share == null) return <span style={{ color: T.textGhost }}>—</span>;
   const w = Math.round(share * 100);
   return (
-    <div className="flex items-center gap-2">
-      <div className="w-16 h-1.5 rounded-full bg-white/10 overflow-hidden">
-        <div className="h-full rounded-full" style={{ width: `${w}%`, backgroundColor: color }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{
+        width: 52,
+        height: 4,
+        background: 'rgba(255,255,255,0.08)',
+        flexShrink: 0,
+        position: 'relative',
+      }}>
+        <div style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          height: '100%',
+          width: `${w}%`,
+          background: color,
+        }} />
       </div>
-      <span className="text-xs text-white/70">{w}%</span>
+      <span style={{ fontSize: 10, color: T.textMid, fontVariantNumeric: 'tabular-nums' }}>{w}%</span>
     </div>
   );
 }
 
-/* ── CSV export ────────────────────────────────────────────────── */
+/* ─── CSV export ─────────────────────────────────────────────── */
 function buildCSV(rows, expiries) {
   const expLabels = ['Current Month', 'Next Month', 'Far Month'];
-
-  // header row 1 — group labels
   const h1 = ['Trade Date', 'Underlying', ...expiries.flatMap((_, i) => [
     expLabels[i] || expiries[i], '', '', '', '', '', ''
   ]), 'Combined OI', '', ''];
-
-  // header row 2 — column labels
   const h2 = ['', '', ...expiries.flatMap(() => [
     'PE', 'CE', 'PCR', 'Max Pain', 'MaxPain Drift %', 'Share COI PE %', 'Share COI CE %'
   ]), 'PE', 'CE', 'PCR'];
-
   const dataRows = rows.map((r) => {
-    const cols = [
-      r.trade_date,
-      r.underlying ?? '',
-    ];
+    const cols = [r.trade_date, r.underlying ?? ''];
     r.expiry_data.forEach((ed) => {
       if (!ed) { cols.push('', '', '', '', '', '', ''); return; }
       cols.push(
-        ed.pe ?? '',
-        ed.ce ?? '',
+        ed.pe ?? '', ed.ce ?? '',
         ed.pcr != null ? Number(ed.pcr).toFixed(3) : '',
         ed.max_pain ?? '',
         ed.maxpain_drift != null ? (ed.maxpain_drift * 100).toFixed(2) : '',
@@ -89,10 +118,12 @@ function buildCSV(rows, expiries) {
         ed.share_ce != null ? (ed.share_ce * 100).toFixed(2) : '',
       );
     });
-    cols.push(r.combined_pe ?? '', r.combined_ce ?? '', r.combined_pcr != null ? Number(r.combined_pcr).toFixed(3) : '');
+    cols.push(
+      r.combined_pe ?? '', r.combined_ce ?? '',
+      r.combined_pcr != null ? Number(r.combined_pcr).toFixed(3) : '',
+    );
     return cols;
   });
-
   const escape = (v) => {
     const s = String(v);
     return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
@@ -100,11 +131,37 @@ function buildCSV(rows, expiries) {
   return [h1, h2, ...dataRows].map((row) => row.map(escape).join(',')).join('\n');
 }
 
-/* ── main component ────────────────────────────────────────────── */
+/* ─── table cell style helpers ───────────────────────────────── */
+const th = (extra = {}) => ({
+  padding: '7px 12px',
+  fontSize: 9,
+  fontWeight: 700,
+  letterSpacing: '0.12em',
+  textTransform: 'uppercase',
+  color: T.textLo,
+  textAlign: 'right',
+  whiteSpace: 'nowrap',
+  background: T.surface,
+  ...extra,
+});
 
+const td = (extra = {}) => ({
+  padding: '6px 12px',
+  fontSize: 11,
+  letterSpacing: '0.03em',
+  color: T.textMid,
+  textAlign: 'right',
+  whiteSpace: 'nowrap',
+  fontVariantNumeric: 'tabular-nums',
+  borderBottom: `1px solid ${T.border}`,
+  ...extra,
+});
+
+const borderL = { borderLeft: `1px solid ${T.border}` };
+
+/* ─── main component ─────────────────────────────────────────── */
 export default function TickerAnalysisTable({ assetType, ticker, selectedExpiry, allExpiries }) {
-  // derive current + next 2 from the full sorted list
-const expiries = useMemo(() => {
+  const expiries = useMemo(() => {
     const sorted = [...allExpiries].sort();
     const idx = sorted.indexOf(selectedExpiry);
     if (idx === -1) return [selectedExpiry];
@@ -114,49 +171,45 @@ const expiries = useMemo(() => {
   const { derivedStart, derivedEnd } = useMemo(() => {
     const sorted = [...allExpiries].sort();
     const idx = sorted.indexOf(selectedExpiry);
-    // start = day after previous expiry, or '' if it's the first
     let derivedStart = '';
     if (idx > 0) {
       const prev = new Date(sorted[idx - 1]);
       prev.setDate(prev.getDate() + 1);
       derivedStart = prev.toISOString().slice(0, 10);
     }
-    const derivedEnd = selectedExpiry; // up to and including expiry day
-    return { derivedStart, derivedEnd };
+    return { derivedStart, derivedEnd: selectedExpiry };
   }, [allExpiries, selectedExpiry]);
 
-  const [rows, setRows]     = useState([]);
+  const [rows, setRows]       = useState([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError]   = useState('');
-  const [sortDir, setSortDir] = useState('desc'); // desc = newest first
+  const [error, setError]     = useState('');
+  const [sortDir, setSortDir] = useState('desc');
 
   useEffect(() => {
     if (!ticker || !expiries?.length) return;
     let mounted = true;
-    setRows([]);        // clear stale data immediately
+    setRows([]);
     setLoading(true);
     setError('');
-
     getTickerAnalysis(assetType, ticker, expiries, derivedStart, derivedEnd)
       .then((data) => { if (mounted) setRows(data); })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load analysis'); })
       .finally(() => { if (mounted) setLoading(false); });
-
     return () => { mounted = false; };
   }, [assetType, ticker, selectedExpiry, derivedStart, derivedEnd]);
 
-  const sortedRows = useMemo(() => {
-    return [...rows].sort((a, b) =>
+  const sortedRows = useMemo(() =>
+    [...rows].sort((a, b) =>
       sortDir === 'desc'
         ? b.trade_date.localeCompare(a.trade_date)
         : a.trade_date.localeCompare(b.trade_date)
-    );
-  }, [rows, sortDir]);
+    ),
+  [rows, sortDir]);
 
   const expLabels = ['Current Month', 'Next Month', 'Far Month'];
 
   function downloadCSV() {
-    const csv = buildCSV(sortedRows, expiries);
+    const csv  = buildCSV(sortedRows, expiries);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const a = Object.assign(document.createElement('a'), {
       href: URL.createObjectURL(blob),
@@ -165,148 +218,209 @@ const expiries = useMemo(() => {
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
   }
 
+  /* ── loading / error / empty ── */
   if (loading) return (
-    <div className="card min-h-[300px] flex items-center justify-center"><LoadingSpinner /></div>
+    <div style={{ ...panelStyle, minHeight: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <LoadingSpinner />
+    </div>
   );
 
   if (error) return (
-    <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4">
-      <p className="text-red-400 text-sm">{error}</p>
+    <div style={{ ...panelStyle, padding: 16, borderLeft: `3px solid ${T.red}` }}>
+      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.14em', color: T.red, marginBottom: 6, textTransform: 'uppercase' }}>Error</div>
+      <div style={{ fontSize: 11, color: T.textMid }}>{error}</div>
     </div>
   );
 
   if (!rows.length) return (
-    <div className="card p-8"><p className="text-white/50 text-sm">No data for selected range.</p></div>
+    <div style={{ ...panelStyle, padding: 32 }}>
+      <span style={{ fontSize: 11, color: T.textLo, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+        No data for selected range
+      </span>
+    </div>
   );
 
   return (
-    <div className="space-y-4">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontFamily: monoFont }}>
 
       {/* ── toolbar ── */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <h2 className="text-base font-semibold text-white">{ticker} — Multi-Expiry OI Analysis</h2>
-          <span className="text-xs text-white/40 bg-white/5 border border-white/10 rounded-lg px-2 py-1">
-            {rows.length} trading days
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 12,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: T.textHi, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+            {ticker}
+          </span>
+          <span style={{ fontSize: 10, color: T.textLo, letterSpacing: '0.10em', textTransform: 'uppercase' }}>
+            Multi-Expiry OI Analysis
+          </span>
+          <span style={{
+            fontSize: 9,
+            color: T.textLo,
+            letterSpacing: '0.10em',
+            textTransform: 'uppercase',
+            border: `1px solid ${T.border}`,
+            padding: '2px 8px',
+          }}>
+            {rows.length} days
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          {/* sort toggle */}
+
+        <div style={{ display: 'flex', gap: 6 }}>
           <button
             onClick={() => setSortDir(d => d === 'desc' ? 'asc' : 'desc')}
-            className="px-3 py-2 rounded-xl border border-white/10 bg-[#151922] text-white/65 text-xs hover:bg-white/5 transition"
+            style={{
+              padding: '4px 11px',
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: '0.10em',
+              textTransform: 'uppercase',
+              border: `1px solid ${T.border}`,
+              background: 'transparent',
+              color: T.textMid,
+              cursor: 'pointer',
+              fontFamily: monoFont,
+              borderRadius: 0,
+            }}
           >
-            Date {sortDir === 'desc' ? '↓ Newest' : '↑ Oldest'}
+            Date {sortDir === 'desc' ? '↓' : '↑'} {sortDir === 'desc' ? 'Newest' : 'Oldest'}
           </button>
           <button
             onClick={downloadCSV}
-            className="px-4 py-2 rounded-xl border border-[#00B0F0]/25 bg-[#00B0F0]/10 text-[#00B0F0] text-sm transition hover:bg-[#00B0F0]/20"
+            style={{
+              padding: '4px 11px',
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: '0.10em',
+              textTransform: 'uppercase',
+              border: `1px solid ${T.amber}`,
+              background: T.amberDim,
+              color: T.amber,
+              cursor: 'pointer',
+              fontFamily: monoFont,
+              borderRadius: 0,
+            }}
           >
-            ↓ Download CSV
+            ↓ CSV
           </button>
         </div>
       </div>
 
-      {/* ── legend ── */}
-      <div className="flex items-center gap-4 flex-wrap text-xs text-white/50">
-        <span>PCR colour:</span>
-        <span className="text-[#26a69a]">● &gt;1.2 Bullish</span>
-        <span className="text-[#FFA726]">● 0.8–1.2 Neutral</span>
-        <span className="text-[#ef5350]">● &lt;0.8 Bearish</span>
-        <span className="ml-4">MaxPain Drift:</span>
-        <span className="text-[#ef5350]">● above underlying</span>
-        <span className="text-[#26a69a]">● below underlying</span>
+      {/* ── PCR legend ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.textLo }}>PCR</span>
+        {[
+          ['>1.2', T.green,  'Bullish'],
+          ['0.8–1.2', T.orange, 'Neutral'],
+          ['<0.8', T.red,   'Bearish'],
+        ].map(([range, color, label]) => (
+          <div key={range} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 7, height: 7, background: color }} />
+            <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              {range} {label}
+            </span>
+          </div>
+        ))}
+        <span style={{ fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.textLo, marginLeft: 8 }}>Max Pain Drift</span>
+        <span style={{ fontSize: 9, color: T.red,   letterSpacing: '0.08em', textTransform: 'uppercase' }}>↑ above underlying</span>
+        <span style={{ fontSize: 9, color: T.green, letterSpacing: '0.08em', textTransform: 'uppercase' }}>↓ below underlying</span>
       </div>
 
       {/* ── table ── */}
-      <div className="card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+      <div style={{ ...panelStyle, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, fontFamily: monoFont }}>
             <thead>
               {/* group header */}
-              <tr className="border-b border-white/10">
-                <th className="px-3 py-2 text-left text-white/50 font-medium sticky left-0 bg-[#1a1d26]">Date</th>
-                <th className="px-3 py-2 text-right text-white/50 font-medium">Underlying</th>
+              <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                <th style={{ ...th({ textAlign: 'left' }), position: 'sticky', left: 0 }}>Date</th>
+                <th style={th()}>Underlying</th>
                 {expiries.map((exp, i) => (
                   <th
                     key={exp}
                     colSpan={7}
-                    className="px-3 py-2 text-center font-semibold border-l border-white/10"
-                    style={{ color: ['#00B0F0','#FF00FF','#FFA726'][i] }}
+                    style={{
+                      ...th({ textAlign: 'center', color: EXP_COLORS[i] }),
+                      ...borderL,
+                    }}
                   >
                     {expLabels[i] || exp} · {exp}
                   </th>
                 ))}
-                <th colSpan={3} className="px-3 py-2 text-center text-white/70 font-semibold border-l border-white/10">
+                <th colSpan={3} style={{ ...th({ textAlign: 'center', color: T.textHi }), ...borderL }}>
                   Combined OI
                 </th>
               </tr>
               {/* column header */}
-              <tr className="border-b border-white/10 bg-white/3">
-                <th className="px-3 py-2 sticky left-0 bg-[#1a1d26]" />
-                <th className="px-3 py-2" />
+              <tr style={{ borderBottom: `1px solid ${T.border}`, background: 'rgba(255,255,255,0.02)' }}>
+                <th style={{ ...th({ textAlign: 'left' }), position: 'sticky', left: 0 }} />
+                <th style={th()} />
                 {expiries.map((exp) => (
                   <Fragment key={exp}>
-                    <th key={`${exp}-pe`}    className="px-3 py-2 text-right text-white/40 border-l border-white/10">PE OI</th>
-                    <th key={`${exp}-ce`}    className="px-3 py-2 text-right text-white/40">CE OI</th>
-                    <th key={`${exp}-pcr`}   className="px-3 py-2 text-right text-white/40">PCR</th>
-                    <th key={`${exp}-mp`}    className="px-3 py-2 text-right text-white/40">Max Pain</th>
-                    <th key={`${exp}-drift`} className="px-3 py-2 text-right text-white/40">MP Drift</th>
-                    <th key={`${exp}-spe`}   className="px-3 py-2 text-right text-white/40">COI%PE</th>
-                    <th key={`${exp}-sce`}   className="px-3 py-2 text-right text-white/40">COI%CE</th>
+                    <th style={{ ...th(), ...borderL }}>PE OI</th>
+                    <th style={th()}>CE OI</th>
+                    <th style={th()}>PCR</th>
+                    <th style={th()}>Max Pain</th>
+                    <th style={th()}>MP Drift</th>
+                    <th style={th()}>COI%PE</th>
+                    <th style={th()}>COI%CE</th>
                   </Fragment>
                 ))}
-                <th className="px-3 py-2 text-right text-white/40 border-l border-white/10">PE</th>
-                <th className="px-3 py-2 text-right text-white/40">CE</th>
-                <th className="px-3 py-2 text-right text-white/40">PCR</th>
+                <th style={{ ...th(), ...borderL }}>PE</th>
+                <th style={th()}>CE</th>
+                <th style={th()}>PCR</th>
               </tr>
             </thead>
             <tbody>
-              {sortedRows.map((row, ri) => {
-                const isEven = ri % 2 === 0;
-                return (
-                  <tr
-                    key={row.trade_date}
-                    className={`border-b border-white/5 transition hover:bg-white/4 ${isEven ? '' : 'bg-white/2'}`}
-                  >
-                    {/* date */}
-                    <td className="px-3 py-2 font-medium text-white/80 sticky left-0 bg-[#1a1d26] whitespace-nowrap">
-                      {row.trade_date}
-                    </td>
-                    {/* underlying */}
-                    <td className="px-3 py-2 text-right text-[#FFD700] font-medium whitespace-nowrap">
-                      {fmtCurrency(row.underlying)}
-                    </td>
+              {sortedRows.map((row, ri) => (
+                <tr
+                  key={row.trade_date}
+                  style={{ background: ri % 2 === 1 ? T.surfaceAlt : 'transparent' }}
+                >
+                  {/* date */}
+                  <td style={{
+                    ...td({ textAlign: 'left', color: T.textHi, fontWeight: 600, position: 'sticky', left: 0, background: T.surface }),
+                  }}>
+                    {row.trade_date}
+                  </td>
 
-                    {/* per-expiry columns */}
-                    {row.expiry_data.map((ed, ei) => {
-                      if (!ed) return (
-                        <>
-                          {[...Array(7)].map((_, k) => (
-                            <td key={k} className={`px-3 py-2 text-center text-white/20 ${k === 0 ? 'border-l border-white/10' : ''}`}>—</td>
-                          ))}
-                        </>
-                      );
-                      return (
-                        <Fragment key={`empty-${ei}`}>
-                          <td key="pe"    className="px-3 py-2 text-right text-[#FF00FF] border-l border-white/10 tabular-nums">{fmt(ed.pe)}</td>
-                          <td key="ce"    className="px-3 py-2 text-right text-[#00B0F0] tabular-nums">{fmt(ed.ce)}</td>
-                          <td key="pcr"   className={`px-3 py-2 text-right font-semibold tabular-nums ${pcrColor(ed.pcr)}`}>{fmtPCR(ed.pcr)}</td>
-                          <td key="mp"    className="px-3 py-2 text-right text-[#FF69B4] tabular-nums">{fmtCurrency(ed.max_pain)}</td>
-                          <td key="drift" className={`px-3 py-2 text-right font-medium tabular-nums ${driftColor(ed.maxpain_drift)}`}>{fmtPct(ed.maxpain_drift)}</td>
-                          <td key="spe"   className="px-3 py-2">{shareBar(ed.share_pe, '#FF00FF')}</td>
-                          <td key="sce"   className="px-3 py-2">{shareBar(ed.share_ce, '#00B0F0')}</td>
-                        </Fragment>
-                      );
-                    })}
+                  {/* underlying */}
+                  <td style={td({ color: T.gold })}>
+                    {fmtCurrency(row.underlying)}
+                  </td>
 
-                    {/* combined */}
-                    <td className="px-3 py-2 text-right text-[#FF00FF] border-l border-white/10 tabular-nums">{fmt(row.combined_pe)}</td>
-                    <td className="px-3 py-2 text-right text-[#00B0F0] tabular-nums">{fmt(row.combined_ce)}</td>
-                    <td className={`px-3 py-2 text-right font-semibold tabular-nums ${pcrColor(row.combined_pcr)}`}>{fmtPCR(row.combined_pcr)}</td>
-                  </tr>
-                );
-              })}
+                  {/* per-expiry columns */}
+                  {row.expiry_data.map((ed, ei) => {
+                    if (!ed) return (
+                      <Fragment key={`empty-${ei}`}>
+                        {[...Array(7)].map((_, k) => (
+                          <td key={k} style={{ ...td(), ...(k === 0 ? borderL : {}), color: T.textGhost, textAlign: 'center' }}>—</td>
+                        ))}
+                      </Fragment>
+                    );
+                    return (
+                      <Fragment key={`ed-${ei}`}>
+                        <td style={{ ...td({ color: T.magenta }), ...borderL }}>{fmt(ed.pe)}</td>
+                        <td style={td({ color: T.blue })}>{fmt(ed.ce)}</td>
+                        <td style={td({ color: pcrColor(ed.pcr), fontWeight: 600 })}>{fmtPCR(ed.pcr)}</td>
+                        <td style={td({ color: T.pink })}>{fmtCurrency(ed.max_pain)}</td>
+                        <td style={td({ color: driftColor(ed.maxpain_drift), fontWeight: 500 })}>{fmtPct(ed.maxpain_drift)}</td>
+                        <td style={td({ textAlign: 'left' })}><ShareBar share={ed.share_pe} color={T.magenta} /></td>
+                        <td style={td({ textAlign: 'left' })}><ShareBar share={ed.share_ce} color={T.blue} /></td>
+                      </Fragment>
+                    );
+                  })}
+
+                  {/* combined */}
+                  <td style={{ ...td({ color: T.magenta }), ...borderL }}>{fmt(row.combined_pe)}</td>
+                  <td style={td({ color: T.blue })}>{fmt(row.combined_ce)}</td>
+                  <td style={td({ color: pcrColor(row.combined_pcr), fontWeight: 600 })}>{fmtPCR(row.combined_pcr)}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -314,3 +428,8 @@ const expiries = useMemo(() => {
     </div>
   );
 }
+
+const panelStyle = {
+  background: '#0b0f16',
+  border: '1px solid rgba(255,255,255,0.07)',
+};

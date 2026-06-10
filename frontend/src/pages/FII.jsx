@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, ReferenceLine,
@@ -7,108 +7,80 @@ import LoadingSpinner from "../components/shared/LoadingSpinner";
 import DateSlider     from "../components/shared/DateSlider";
 import { fii, participant } from "../api/client";
 
+// ─── Design Tokens ────────────────────────────────────────────────────────────
+const T = {
+  bg:        '#06080c',
+  surface:   '#0b0f16',
+  surfaceHi: '#111720',
+  border:    'rgba(255,255,255,0.07)',
+  borderHi:  'rgba(255,255,255,0.14)',
+  amber:     '#F0A500',
+  amberDim:  'rgba(240,165,0,0.12)',
+  green:     '#00C896',
+  greenDim:  'rgba(0,200,150,0.15)',
+  red:       '#E05252',
+  redDim:    'rgba(224,82,82,0.15)',
+  blue:      '#4A9EFF',
+  purple:    '#B39DDB',
+  textHi:    'rgba(255,255,255,0.90)',
+  textMid:   'rgba(255,255,255,0.50)',
+  textLo:    'rgba(255,255,255,0.25)',
+  textGhost: 'rgba(255,255,255,0.12)',
+};
+
+// participant accent colours — matches screenshot
+const P_COLOR = { FII: '#4A9EFF', DII: '#F0A500', Client: '#00C896', Pro: '#B39DDB' };
+const PARTICIPANTS = ['FII', 'DII', 'Client', 'Pro'];
+
 // ─── Formatters ───────────────────────────────────────────────────────────────
-const fmt    = (n, dec = 0) => n == null ? "—" : Number(n).toLocaleString("en-IN", { maximumFractionDigits: dec });
-const fmtK   = (v) => { if (v == null) return "—"; const a = Math.abs(v); if (a >= 1e5) return `${(v / 1e5).toFixed(2)}L`; if (a >= 1e3) return `${(v / 1e3).toFixed(1)}K`; return fmt(v); };
-const fmtCr  = (v) => v == null ? "—" : `₹${fmt(v, 1)} Cr`;
-const netCol = (v) => v == null ? "rgba(255,255,255,0.25)" : v >= 0 ? "#26a69a" : "#ef5350";
-const pre    = (v) => v == null ? "" : v >= 0 ? "+" : "";
+const fmt    = (n, dec = 0) => n == null ? '—' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: dec });
+const fmtK   = (v) => { if (v == null) return '—'; const a = Math.abs(v); if (a >= 1e5) return `${(v/1e5).toFixed(2)}L`; if (a >= 1e3) return `${(v/1e3).toFixed(1)}K`; return fmt(v); };
+const fmtCr  = (v) => v == null ? '—' : `₹${fmt(v,1)} Cr`;
+const sign   = (v) => v == null ? '' : v >= 0 ? '+' : '';
+const netCol = (v) => v == null ? T.textLo : v >= 0 ? T.green : T.red;
+const netBg  = (v) => v == null ? 'transparent' : v >= 0 ? T.greenDim : T.redDim;
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
-const todayStr = () => new Date().toISOString().slice(0, 10);
-const subtractDays = (dateStr, n) => {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-};
+const subtractDays = (dateStr, n) => { const d = new Date(dateStr); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); };
 
 // ─── CSV ──────────────────────────────────────────────────────────────────────
 function downloadCSV(rows, filename, cols) {
   if (!rows?.length) return;
   const blob = new Blob(
-    [cols.map(c => c.label).join(",") + "\n" +
-     rows.map(r => cols.map(c => r[c.key] ?? "").join(",")).join("\n")],
-    { type: "text/csv" }
+    [cols.map(c=>c.label).join(',') + '\n' + rows.map(r=>cols.map(c=>r[c.key]??'').join(',')).join('\n')],
+    { type: 'text/csv' }
   );
-  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: filename });
-  a.click();
+  Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: filename }).click();
 }
 
-// ─── Shared UI ────────────────────────────────────────────────────────────────
-function TabBar({ tabs, active, onChange }) {
+// ─── Shared style helpers ─────────────────────────────────────────────────────
+const mono = { fontFamily: "'IBM Plex Mono','Fira Code','Consolas',monospace" };
+const label11 = { fontSize: 9, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: T.textLo };
+const val14   = { fontSize: 13, fontWeight: 700, letterSpacing: '0.04em', fontFamily: mono.fontFamily };
+
+function TerminalBtn({ active, children, onClick, disabled, color, small }) {
+  const accent = color || T.amber;
   return (
-    <div className="flex items-center gap-2 mb-5 overflow-x-auto pb-1">
-      {tabs.map(t => (
-        <button key={t.key} onClick={() => onChange(t.key)}
-          className={`px-4 py-2 rounded-xl border text-sm transition whitespace-nowrap
-            ${active === t.key
-              ? "border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0]"
-              : "border-white/10 bg-[#151922] text-white/65 hover:bg-white/5"}`}>
-          {t.label}
-        </button>
-      ))}
-    </div>
+    <button onClick={onClick} disabled={disabled} style={{
+      padding: small ? '3px 8px' : '4px 11px',
+      fontSize: small ? 9 : 10, fontWeight: 600, letterSpacing: '0.10em', textTransform: 'uppercase',
+      border: `1px solid ${active ? accent : T.border}`,
+      background: active ? `${accent}20` : 'transparent',
+      color: active ? accent : T.textMid,
+      cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.4 : 1,
+      transition: 'all 0.15s', whiteSpace: 'nowrap', borderRadius: 0, ...mono,
+    }}>{children}</button>
   );
 }
 
-function SectionCard({ title, subtitle, action, children }) {
+function SectionHeader({ label, subtitle, right }) {
   return (
-    <div className="card overflow-hidden">
-      <div className="flex items-start justify-between gap-4 px-5 pt-5 pb-4 border-b border-white/8">
-        <div>
-          <h3 className="text-sm font-semibold text-white">{title}</h3>
-          {subtitle && <p className="text-xs text-white/45 mt-0.5">{subtitle}</p>}
-        </div>
-        {action && <div className="flex-shrink-0 flex items-center gap-2">{action}</div>}
+    <div style={{ padding: '8px 14px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: T.surfaceHi }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+        <span style={{ ...label11, color: T.amber }}>{label}</span>
+        {subtitle && <span style={{ fontSize: 10, color: T.textLo, letterSpacing: '0.04em' }}>{subtitle}</span>}
       </div>
-      <div className="p-5">{children}</div>
-    </div>
-  );
-}
-
-function CSVButton({ onClick }) {
-  return (
-    <button onClick={onClick}
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-white/10
-                 bg-[#151922] text-xs text-white/65 hover:bg-white/5 hover:text-white/90 transition-colors">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-        <polyline points="7 10 12 15 17 10"/>
-        <line x1="12" y1="15" x2="12" y2="3"/>
-      </svg>
-      CSV
-    </button>
-  );
-}
-
-function ToggleGroup({ options, value, onChange }) {
-  return (
-    <div className="flex gap-1">
-      {options.map(o => (
-        <button key={o.value} onClick={() => onChange(o.value)}
-          className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors
-            ${value === o.value
-              ? "border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0]"
-              : "border-white/10 bg-[#151922] text-white/65 hover:bg-white/5"}`}>
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function RangePicker({ value, onChange }) {
-  return (
-    <div className="flex gap-1">
-      {[{ l: "1M", d: 30 }, { l: "3M", d: 90 }, { l: "6M", d: 180 }, { l: "1Y", d: 365 }].map(o => (
-        <button key={o.d} onClick={() => onChange(o.d)}
-          className={`px-2.5 py-1 rounded-md border text-xs transition-colors
-            ${value === o.d
-              ? "border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0]"
-              : "border-white/10 bg-[#151922] text-white/60 hover:bg-white/5"}`}>
-          {o.l}
-        </button>
-      ))}
+      {right && <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>{right}</div>}
     </div>
   );
 }
@@ -117,17 +89,12 @@ function RangePicker({ value, onChange }) {
 function ChartTooltip({ active, payload, label, valueFmt }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-[#151922] border border-white/10 rounded-xl px-4 py-3 shadow-2xl text-xs min-w-[160px]">
-      <p className="text-white/50 mb-2 font-medium">{label}</p>
+    <div style={{ background: T.surfaceHi, border: `1px solid ${T.borderHi}`, padding: '10px 14px', fontSize: 11, ...mono }}>
+      <div style={{ color: T.textLo, marginBottom: 6 }}>{label}</div>
       {payload.map((p, i) => (
-        <div key={i} className="flex items-center justify-between gap-4 mb-1">
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full" style={{ background: p.color }} />
-            <span className="text-white/55">{p.name}</span>
-          </div>
-          <span className="font-semibold tabular-nums" style={{ color: p.color }}>
-            {valueFmt ? valueFmt(p.value) : fmtK(p.value)}
-          </span>
+        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 20, marginBottom: 3 }}>
+          <span style={{ color: T.textMid }}>{p.name}</span>
+          <span style={{ color: p.color, fontWeight: 700 }}>{valueFmt ? valueFmt(p.value) : fmtK(p.value)}</span>
         </div>
       ))}
     </div>
@@ -135,281 +102,780 @@ function ChartTooltip({ active, payload, label, valueFmt }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TAB 1 — OVERVIEW
-// Uses fii.stats for latest date — aggregate into 4 groups
+// OVERVIEW TAB
 // ─────────────────────────────────────────────────────────────────────────────
-const GROUPS = [
-  { label: "Index Futures", accent: "#00B0F0", instruments: ["INDEX FUTURES", "NIFTY FUTURES", "BANKNIFTY FUTURES"] },
-  { label: "Index Options", accent: "#B39DDB", instruments: ["INDEX OPTIONS", "NIFTY OPTIONS", "BANKNIFTY OPTIONS"] },
-  { label: "Stock Futures", accent: "#FFA726", instruments: ["STOCK FUTURES"] },
-  { label: "Stock Options", accent: "#26a69a", instruments: ["STOCK OPTIONS"] },
+const OVERVIEW_GROUPS = [
+  { label: 'Index Futures',  instruments: ['INDEX FUTURES','NIFTY FUTURES','BANKNIFTY FUTURES'] },
+  { label: 'Index Options',  instruments: ['INDEX OPTIONS','NIFTY OPTIONS','BANKNIFTY OPTIONS']  },
+  { label: 'Stock Futures',  instruments: ['STOCK FUTURES']  },
+  { label: 'Stock Options',  instruments: ['STOCK OPTIONS']  },
 ];
 
 function OverviewTab({ latestDate }) {
-  const [rows,    setRows]    = useState([]);
+  const [rows, setRows]       = useState([]);
   const [loading, setLoading] = useState(true);
+  const [asset, setAsset]     = useState('INDEX');
 
   useEffect(() => {
     if (!latestDate) return;
     setLoading(true);
     fii.stats(latestDate, latestDate)
-      .then(setRows)
-      .catch(() => setRows([]))
-      .finally(() => setLoading(false));
+      .then(setRows).catch(()=>setRows([])).finally(()=>setLoading(false));
   }, [latestDate]);
 
-  if (loading) return <div className="h-48 flex items-center justify-center"><LoadingSpinner /></div>;
+  if (loading) return <div style={{ minHeight: 200, display:'flex', alignItems:'center', justifyContent:'center' }}><LoadingSpinner /></div>;
 
   const aggregate = (instruments) =>
-    rows
-      .filter(r => instruments.includes(r.instrument))
-      .reduce((acc, r) => ({
-        net_contracts:  (acc.net_contracts  ?? 0) + (r.net_contracts  ?? 0),
-        net_amount_cr:  (acc.net_amount_cr  ?? 0) + (r.net_amount_cr  ?? 0),
-        buy_contracts:  (acc.buy_contracts  ?? 0) + (r.buy_contracts  ?? 0),
-        sell_contracts: (acc.sell_contracts ?? 0) + (r.sell_contracts ?? 0),
-        oi_contracts:   (acc.oi_contracts   ?? 0) + (r.oi_contracts   ?? 0),
-        oi_amount_cr:   (acc.oi_amount_cr   ?? 0) + (r.oi_amount_cr   ?? 0),
-      }), {});
+    rows.filter(r=>instruments.includes(r.instrument))
+        .reduce((acc,r) => ({
+          net_contracts:  (acc.net_contracts ??0) + (r.net_contracts ??0),
+          net_amount_cr:  (acc.net_amount_cr ??0) + (r.net_amount_cr ??0),
+          buy_contracts:  (acc.buy_contracts ??0) + (r.buy_contracts ??0),
+          sell_contracts: (acc.sell_contracts??0) + (r.sell_contracts??0),
+          oi_contracts:   (acc.oi_contracts  ??0) + (r.oi_contracts  ??0),
+          oi_amount_cr:   (acc.oi_amount_cr  ??0) + (r.oi_amount_cr  ??0),
+        }), {});
 
   return (
-    <div className="space-y-5">
+    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
       {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {GROUPS.map(({ label, accent, instruments }) => {
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', border:`1px solid ${T.border}` }}>
+        {OVERVIEW_GROUPS.map(({label, instruments},i) => {
           const d = aggregate(instruments);
-          const hasData = d.net_contracts != null && rows.length > 0;
           return (
-            <div key={label} className="card p-4 border border-white/8 rounded-xl">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: accent }} />
-                <span className="text-xs text-white/50 font-medium">{label}</span>
+            <div key={label} style={{ padding:'14px 16px', borderRight: i<3?`1px solid ${T.border}`:'none', background: T.surface }}>
+              <div style={{ ...label11, marginBottom:10 }}>{label}</div>
+              <div style={{ fontSize:22, fontWeight:700, color: netCol(d.net_contracts), ...mono }}>
+                {sign(d.net_contracts)}{fmtK(d.net_contracts)}
               </div>
-              {!hasData ? (
-                <p className="text-sm text-white/25">No data</p>
-              ) : (
-                <>
-                  {/* Net Lots — the primary number */}
-                  <p className="text-2xl font-bold tabular-nums leading-none"
-                     style={{ color: netCol(d.net_contracts) }}>
-                    {pre(d.net_contracts)}{fmtK(d.net_contracts)}
-                  </p>
-                  <p className="text-[10px] text-white/30 mt-1 uppercase tracking-wider">Net Lots</p>
-
-                  {/* Net Value */}
-                  <p className="text-sm font-semibold mt-3 tabular-nums"
-                     style={{ color: netCol(d.net_amount_cr) }}>
-                    {pre(d.net_amount_cr)}{fmtCr(d.net_amount_cr)}
-                  </p>
-                  <p className="text-[10px] text-white/30 mt-0.5 uppercase tracking-wider">Net Value</p>
-
-                  {/* B / S / OI row */}
-                  <div className="mt-3 pt-3 border-t border-white/8 grid grid-cols-3 gap-1 text-xs">
-                    <div>
-                      <p className="text-[10px] text-white/25 uppercase tracking-wider mb-0.5">Bought</p>
-                      <p className="text-white/60 tabular-nums">{fmtK(d.buy_contracts)}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-white/25 uppercase tracking-wider mb-0.5">Sold</p>
-                      <p className="text-white/60 tabular-nums">{fmtK(d.sell_contracts)}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-white/25 uppercase tracking-wider mb-0.5">OI</p>
-                      <p className="text-white/60 tabular-nums">{fmtK(d.oi_contracts)}</p>
-                    </div>
+              <div style={{ ...label11, marginTop:2, marginBottom:10 }}>Net Lots</div>
+              <div style={{ fontSize:13, fontWeight:600, color: netCol(d.net_amount_cr), ...mono }}>
+                {sign(d.net_amount_cr)}{fmtCr(d.net_amount_cr)}
+              </div>
+              <div style={{ ...label11, marginTop:2, marginBottom:10 }}>Net Value</div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', paddingTop:10, borderTop:`1px solid ${T.border}`, gap:4 }}>
+                {[['Bought', d.buy_contracts],['Sold', d.sell_contracts],['OI', d.oi_contracts]].map(([lbl,val])=>(
+                  <div key={lbl}>
+                    <div style={label11}>{lbl}</div>
+                    <div style={{ fontSize:11, color: T.textMid, ...mono, marginTop:2 }}>{fmtK(val)}</div>
                   </div>
-                </>
-              )}
+                ))}
+              </div>
             </div>
           );
         })}
       </div>
 
-      {/* All instruments table for latest date */}
-      <SectionCard
-        title="All Instruments"
-        subtitle={`Full FII activity snapshot · ${latestDate}`}
-        action={
-          <CSVButton onClick={() => downloadCSV(rows, `fii_overview_${latestDate}.csv`, [
-            { key: "instrument", label: "Instrument" },
-            { key: "buy_contracts", label: "Bought (Lots)" },
-            { key: "buy_amount_cr", label: "Buy Value (₹ Cr)" },
-            { key: "sell_contracts", label: "Sold (Lots)" },
-            { key: "sell_amount_cr", label: "Sell Value (₹ Cr)" },
-            { key: "oi_contracts", label: "Open Interest (Lots)" },
-            { key: "oi_amount_cr", label: "OI Value (₹ Cr)" },
-            { key: "net_contracts", label: "Net Lots" },
-            { key: "net_amount_cr", label: "Net Value (₹ Cr)" },
-          ])} />
-        }
-      >
+      {/* All instruments table */}
+      <div style={{ background: T.surface, border:`1px solid ${T.border}` }}>
+        <SectionHeader
+          label="All Instruments"
+          subtitle={`Full FII activity snapshot · ${latestDate}`}
+          right={<TerminalBtn onClick={()=>downloadCSV(rows,`fii_overview_${latestDate}.csv`,[
+            {key:'instrument',label:'Instrument'},{key:'buy_contracts',label:'Bought (Lots)'},
+            {key:'buy_amount_cr',label:'Buy Value (₹ Cr)'},{key:'sell_contracts',label:'Sold (Lots)'},
+            {key:'sell_amount_cr',label:'Sell Value (₹ Cr)'},{key:'oi_contracts',label:'OI (Lots)'},
+            {key:'oi_amount_cr',label:'OI Value (₹ Cr)'},{key:'net_contracts',label:'Net Lots'},
+            {key:'net_amount_cr',label:'Net Value (₹ Cr)'},
+          ])}>↓ Export CSV</TerminalBtn>}
+        />
         <InstrumentTable rows={rows} />
-      </SectionCard>
+      </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TAB 2 — INDEX FLOW
+// NET OI TAB  (participant positioning — mirrors screenshot layout)
 // ─────────────────────────────────────────────────────────────────────────────
-function IndexFlowTab({ latestDate }) {
-  const [raw,      setRaw]      = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [days,     setDays]     = useState(90);
-  const [metric,   setMetric]   = useState("lots");   // lots | value
-  const [instr,    setInstr]    = useState("INDEX FUTURES");
+function NetOITab({ latestDate }) {
+  const [raw, setRaw]         = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [days, setDays]       = useState(90);
+  const [asset, setAsset]     = useState('INDEX');
+  const [visible, setVisible] = useState(['FII','DII','Client','Pro']);
+
+  useEffect(() => {
+    if (!latestDate) return;
+    setLoading(true);
+    const start = subtractDays(latestDate, days);
+    participant.netOI(start, latestDate, asset)
+      .then(setRaw).catch(()=>setRaw([])).finally(()=>setLoading(false));
+  }, [latestDate, days, asset]);
+
+  const chartData = useMemo(() => {
+    const map = {};
+    raw.forEach(r => {
+      if (r.option_side !== 'NA') return; // futures only for net OI line
+      const d = r.trade_date;
+      if (!map[d]) map[d] = { date: d.slice(5) };
+      map[d][r.participant_type] = r.net_contracts;
+    });
+    return Object.values(map).sort((a,b)=>a.date.localeCompare(b.date));
+  }, [raw]);
+
+  const toggle = k => setVisible(p=>p.includes(k)?p.filter(x=>x!==k):[...p,k]);
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+      <div style={{ background: T.surface, border:`1px solid ${T.border}` }}>
+        <SectionHeader
+          label="Net OI — Futures Positioning"
+          subtitle="Net long − short contracts by participant"
+          right={
+            <div style={{ display:'flex', gap:6 }}>
+              {[30,90,180,365].map(d=>(
+                <TerminalBtn key={d} active={days===d} color={T.blue} onClick={()=>setDays(d)} small>
+                  {d===30?'1M':d===90?'3M':d===180?'6M':'1Y'}
+                </TerminalBtn>
+              ))}
+              <div style={{ width:1, background: T.border, margin:'0 4px' }} />
+              {['INDEX','STOCK'].map(a=>(
+                <TerminalBtn key={a} active={asset===a} color={T.amber} onClick={()=>setAsset(a)} small>{a}</TerminalBtn>
+              ))}
+            </div>
+          }
+        />
+        <div style={{ padding:16 }}>
+          <div style={{ display:'flex', gap:6, marginBottom:14 }}>
+            {PARTICIPANTS.map(p=>(
+              <button key={p} onClick={()=>toggle(p)} style={{
+                display:'flex', alignItems:'center', gap:6, padding:'4px 10px',
+                border:`1px solid ${visible.includes(p)?P_COLOR[p]:T.border}`,
+                background: visible.includes(p)?`${P_COLOR[p]}15`:'transparent',
+                color: visible.includes(p)?P_COLOR[p]:T.textLo,
+                fontSize:10, cursor:'pointer', borderRadius:0, ...mono,
+                letterSpacing:'0.08em', textTransform:'uppercase',
+              }}>
+                <span style={{ width:6,height:6,borderRadius:'50%',background:P_COLOR[p],opacity:visible.includes(p)?1:0.3 }} />
+                {p}
+              </button>
+            ))}
+          </div>
+          {loading ? <div style={{ height:260,display:'flex',alignItems:'center',justifyContent:'center' }}><LoadingSpinner /></div> : (
+            <ResponsiveContainer width="100%" height={280}>
+              <ComposedChart data={chartData} margin={{top:4,right:4,left:0,bottom:0}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="date" tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
+                  interval={Math.max(1,Math.floor(chartData.length/9))} />
+                <YAxis tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
+                  tickFormatter={fmtK} width={60} />
+                <Tooltip content={<ChartTooltip valueFmt={v=>`${fmtK(v)} lots`} />} />
+                <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 2" />
+                <Legend wrapperStyle={{fontSize:10,color:T.textLo,paddingTop:8,...mono}} iconType="circle" iconSize={7} />
+                {PARTICIPANTS.map(p=>visible.includes(p)&&(
+                  <Line key={p} type="monotone" dataKey={p} name={p}
+                    stroke={P_COLOR[p]} dot={false} strokeWidth={1.5} connectNulls />
+                ))}
+              </ComposedChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NET VOLUME TAB
+// ─────────────────────────────────────────────────────────────────────────────
+function NetVolumeTab({ latestDate }) {
+  const [raw, setRaw]         = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [days, setDays]       = useState(90);
+  const [asset, setAsset]     = useState('INDEX');
+  const [metric, setMetric]   = useState('lots');
 
   useEffect(() => {
     if (!latestDate) return;
     setLoading(true);
     const start = subtractDays(latestDate, days);
     fii.indexFlow(start, latestDate)
-      .then(setRaw)
-      .catch(() => setRaw([]))
-      .finally(() => setLoading(false));
+      .then(setRaw).catch(()=>setRaw([])).finally(()=>setLoading(false));
   }, [latestDate, days]);
 
-  const instruments = ["INDEX FUTURES", "NIFTY FUTURES", "BANKNIFTY FUTURES"];
-
-  const chartData = useMemo(() => {
-    const filtered = raw.filter(r => r.instrument === instr);
-    return filtered.map(r => ({
-      date:  r.trade_date.slice(5),
-      value: metric === "lots" ? r.net_contracts : r.net_amount_cr,
-    }));
-  }, [raw, instr, metric]);
+  const chartData = useMemo(()=>{
+    const filtered = raw.filter(r=>r.instrument==='INDEX FUTURES');
+    return filtered.map(r=>({ date:r.trade_date.slice(5), value: metric==='lots'?r.net_contracts:r.net_amount_cr }));
+  },[raw,metric]);
 
   return (
-    <SectionCard
-      title="Index Flow"
-      subtitle="FII net position in index futures — a leading signal for Nifty direction"
-      action={
-        <div className="flex items-center gap-2 flex-wrap">
-          <RangePicker value={days} onChange={setDays} />
-          <ToggleGroup
-            options={[{ label: "Net Lots", value: "lots" }, { label: "Net Value", value: "value" }]}
-            value={metric} onChange={setMetric}
-          />
-        </div>
-      }
-    >
-      {/* Instrument tabs */}
-      <div className="flex gap-1 mb-5 flex-wrap">
-        {instruments.map(ins => (
-          <button key={ins} onClick={() => setInstr(ins)}
-            className={`px-3 py-1.5 rounded-lg border text-xs transition-colors
-              ${instr === ins
-                ? "border-[#00B0F0]/30 bg-[#00B0F0]/10 text-[#00B0F0]"
-                : "border-white/10 bg-[#151922] text-white/55 hover:bg-white/5"}`}>
-            {ins}
-          </button>
-        ))}
-      </div>
-
-      {loading ? (
-        <div className="h-72 flex items-center justify-center"><LoadingSpinner /></div>
-      ) : (
-        <>
-          {/* Summary stats above chart */}
-          {chartData.length > 0 && (() => {
-            const vals  = chartData.map(d => d.value).filter(v => v != null);
-            const last  = vals[vals.length - 1];
-            const sum20 = vals.slice(-20).reduce((a, b) => a + b, 0);
-            const positives = vals.filter(v => v > 0).length;
-            return (
-              <div className="grid grid-cols-3 gap-3 mb-5">
-                {[
-                  { label: "Latest",        val: metric === "lots" ? `${pre(last)}${fmtK(last)} lots` : `${pre(last)}${fmtCr(last)}`, color: netCol(last) },
-                  { label: "20-day sum",    val: metric === "lots" ? `${pre(sum20)}${fmtK(sum20)} lots` : `${pre(sum20)}${fmtCr(sum20)}`, color: netCol(sum20) },
-                  { label: "Bull days",     val: `${positives} / ${vals.length}`, color: "#00B0F0" },
-                ].map(s => (
-                  <div key={s.label} className="bg-white/[0.03] rounded-xl p-3">
-                    <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">{s.label}</p>
-                    <p className="text-sm font-bold tabular-nums" style={{ color: s.color }}>{s.val}</p>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
-
-          <ResponsiveContainer width="100%" height={300}>
-            <ComposedChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+    <div style={{ background: T.surface, border:`1px solid ${T.border}` }}>
+      <SectionHeader
+        label="Net Volume — Index Flow"
+        subtitle="FII net trading activity in index futures"
+        right={
+          <div style={{ display:'flex', gap:6 }}>
+            {[30,90,180,365].map(d=>(
+              <TerminalBtn key={d} active={days===d} color={T.blue} onClick={()=>setDays(d)} small>
+                {d===30?'1M':d===90?'3M':d===180?'6M':'1Y'}
+              </TerminalBtn>
+            ))}
+            <div style={{ width:1, background:T.border, margin:'0 4px' }} />
+            {[{label:'Net Lots',value:'lots'},{label:'Net Value',value:'value'}].map(o=>(
+              <TerminalBtn key={o.value} active={metric===o.value} color={T.amber} onClick={()=>setMetric(o.value)} small>{o.label}</TerminalBtn>
+            ))}
+          </div>
+        }
+      />
+      <div style={{ padding:16 }}>
+        {loading ? <div style={{ height:280,display:'flex',alignItems:'center',justifyContent:'center' }}><LoadingSpinner /></div> : (
+          <ResponsiveContainer width="100%" height={280}>
+            <ComposedChart data={chartData} margin={{top:4,right:4,left:0,bottom:0}}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "rgba(255,255,255,0.3)" }}
-                tickLine={false} axisLine={false}
-                interval={Math.max(1, Math.floor(chartData.length / 9))} />
-              <YAxis tick={{ fontSize: 10, fill: "rgba(255,255,255,0.3)" }}
-                tickLine={false} axisLine={false}
-                tickFormatter={metric === "value" ? v => `₹${fmtK(v)}` : fmtK}
-                width={68} />
-              <Tooltip content={
-                <ChartTooltip valueFmt={metric === "value" ? fmtCr : v => `${fmtK(v)} lots`} />
-              } />
+              <XAxis dataKey="date" tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
+                interval={Math.max(1,Math.floor(chartData.length/9))} />
+              <YAxis tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
+                tickFormatter={metric==='value'?v=>`₹${fmtK(v)}`:fmtK} width={68} />
+              <Tooltip content={<ChartTooltip valueFmt={metric==='value'?fmtCr:v=>`${fmtK(v)} lots`} />} />
               <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 2" />
-              <Bar dataKey="value" name={metric === "lots" ? "Net Lots" : "Net Value"}
-                radius={[2, 2, 0, 0]}
-                fill="#00B0F0"
-                /* colour each bar by sign */
-                label={false}
-              >
-                {chartData.map((d, i) => (
-                  <rect key={i} fill={d.value >= 0 ? "#26a69a" : "#ef5350"} />
-                ))}
-              </Bar>
+              <Bar dataKey="value" name={metric==='lots'?'Net Lots':'Net Value'} radius={[2,2,0,0]}
+                fill={T.blue}
+              />
             </ComposedChart>
           </ResponsiveContainer>
-        </>
-      )}
-    </SectionCard>
+        )}
+      </div>
+    </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TAB 3 — DAILY BREAKDOWN
+// OPTIONS TAB  (CE/PE OI positioning by participant)
 // ─────────────────────────────────────────────────────────────────────────────
-function DailyBreakdownTab({ dates }) {
-  const [selectedDate, setSelectedDate] = useState(dates?.[dates.length - 1] ?? null);
-  const [rows,         setRows]         = useState([]);
-  const [loading,      setLoading]      = useState(false);
+function OptionsTab({ latestDate }) {
+  const [raw, setRaw]         = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [days, setDays]       = useState(90);
+  const [asset, setAsset]     = useState('INDEX');
+  const [side, setSide]       = useState('CE');
 
-  useEffect(() => {
-    if (!selectedDate) return;
+  useEffect(()=>{
+    if (!latestDate) return;
+    setLoading(true);
+    const start = subtractDays(latestDate, days);
+    participant.netOI(start, latestDate, asset)
+      .then(setRaw).catch(()=>setRaw([])).finally(()=>setLoading(false));
+  },[latestDate,days,asset]);
+
+  const chartData = useMemo(()=>{
+    const filtered = raw.filter(r=>r.option_side===side);
+    const map={};
+    filtered.forEach(r=>{
+      const d=r.trade_date;
+      if(!map[d])map[d]={date:d.slice(5)};
+      map[d][r.participant_type]=r.net_contracts;
+    });
+    return Object.values(map).sort((a,b)=>a.date.localeCompare(b.date));
+  },[raw,side]);
+
+  return (
+    <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
+      <SectionHeader
+        label="Options OI Positioning"
+        subtitle="Net long − short contracts by participant across calls and puts"
+        right={
+          <div style={{ display:'flex', gap:6 }}>
+            {[30,90,180,365].map(d=>(
+              <TerminalBtn key={d} active={days===d} color={T.blue} onClick={()=>setDays(d)} small>
+                {d===30?'1M':d===90?'3M':d===180?'6M':'1Y'}
+              </TerminalBtn>
+            ))}
+            <div style={{ width:1,background:T.border,margin:'0 4px' }} />
+            {['INDEX','STOCK'].map(a=>(
+              <TerminalBtn key={a} active={asset===a} color={T.amber} onClick={()=>setAsset(a)} small>{a}</TerminalBtn>
+            ))}
+            <div style={{ width:1,background:T.border,margin:'0 4px' }} />
+            {['CE','PE'].map(s=>(
+              <TerminalBtn key={s} active={side===s} color={s==='CE'?T.green:T.red} onClick={()=>setSide(s)} small>{s}</TerminalBtn>
+            ))}
+          </div>
+        }
+      />
+      <div style={{ padding:16 }}>
+        {loading ? <div style={{ height:280,display:'flex',alignItems:'center',justifyContent:'center' }}><LoadingSpinner /></div> : (
+          <ResponsiveContainer width="100%" height={280}>
+            <ComposedChart data={chartData} margin={{top:4,right:4,left:0,bottom:0}}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+              <XAxis dataKey="date" tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
+                interval={Math.max(1,Math.floor(chartData.length/9))} />
+              <YAxis tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
+                tickFormatter={fmtK} width={60} />
+              <Tooltip content={<ChartTooltip valueFmt={v=>`${fmtK(v)} lots`} />} />
+              <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 2" />
+              <Legend wrapperStyle={{fontSize:10,color:T.textLo,paddingTop:8,...mono}} iconType="circle" iconSize={7} />
+              {PARTICIPANTS.map(p=>(
+                <Line key={p} type="monotone" dataKey={p} name={p}
+                  stroke={P_COLOR[p]} dot={false} strokeWidth={1.5} connectNulls />
+              ))}
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DAILY TABLE TAB
+// ─────────────────────────────────────────────────────────────────────────────
+function DailyTableTab({ dates }) {
+  const [selectedDate, setSelectedDate] = useState(dates?.[dates.length-1]??null);
+  const [rows, setRows]                 = useState([]);
+  const [loading, setLoading]           = useState(false);
+
+  useEffect(()=>{
+    if(!selectedDate)return;
     setLoading(true);
     fii.summary(selectedDate)
-      .then(setRows)
-      .catch(() => setRows([]))
-      .finally(() => setLoading(false));
-  }, [selectedDate]);
+      .then(setRows).catch(()=>setRows([])).finally(()=>setLoading(false));
+  },[selectedDate]);
 
-  const CSV_COLS = [
-    { key: "instrument",    label: "Instrument"         },
-    { key: "buy_contracts", label: "Bought (Lots)"      },
-    { key: "buy_amount_cr", label: "Buy Value (₹ Cr)"   },
-    { key: "sell_contracts",label: "Sold (Lots)"        },
-    { key: "sell_amount_cr",label: "Sell Value (₹ Cr)"  },
-    { key: "oi_contracts",  label: "Open Interest (Lots)"},
-    { key: "oi_amount_cr",  label: "OI Value (₹ Cr)"    },
-    { key: "net_contracts", label: "Net Lots"            },
-    { key: "net_amount_cr", label: "Net Value (₹ Cr)"   },
+  const CSV_COLS=[
+    {key:'instrument',label:'Instrument'},{key:'buy_contracts',label:'Bought (Lots)'},
+    {key:'buy_amount_cr',label:'Buy Value (₹ Cr)'},{key:'sell_contracts',label:'Sold (Lots)'},
+    {key:'sell_amount_cr',label:'Sell Value (₹ Cr)'},{key:'oi_contracts',label:'OI (Lots)'},
+    {key:'oi_amount_cr',label:'OI Value (₹ Cr)'},{key:'net_contracts',label:'Net Lots'},
+    {key:'net_amount_cr',label:'Net Value (₹ Cr)'},
   ];
 
   return (
-    <div className="space-y-4">
-      {dates?.length > 0 && (
-        <DateSlider dates={dates} selectedDate={selectedDate} onChange={setSelectedDate} />
-      )}
+    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+      {dates?.length>0 && <DateSlider dates={dates} selectedDate={selectedDate} onChange={setSelectedDate} />}
+      <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
+        <SectionHeader
+          label="Instrument Breakdown"
+          subtitle={`NSE FII Statistics — all F&O instruments · ${selectedDate??''}`}
+          right={<TerminalBtn onClick={()=>downloadCSV(rows,`fii_breakdown_${selectedDate}.csv`,CSV_COLS)}>↓ Export CSV</TerminalBtn>}
+        />
+        {loading
+          ? <div style={{ minHeight:160,display:'flex',alignItems:'center',justifyContent:'center' }}><LoadingSpinner /></div>
+          : <InstrumentTable rows={rows} />
+        }
+      </div>
+    </div>
+  );
+}
 
-      <SectionCard
-        title="Instrument Breakdown"
-        subtitle={`NSE FII Statistics — all F&O instruments · ${selectedDate ?? ""}`}
-        action={<CSVButton onClick={() => downloadCSV(rows, `fii_breakdown_${selectedDate}.csv`, CSV_COLS)} />}
-      >
-        {loading ? (
-          <div className="h-40 flex items-center justify-center"><LoadingSpinner /></div>
-        ) : (
-          <InstrumentTable rows={rows} />
-        )}
-      </SectionCard>
+// ─────────────────────────────────────────────────────────────────────────────
+// ANALYSIS TAB  — mirrors screenshot 2 layout exactly
+// Three stacked panels: Flow Classification | OI Snapshot | Net Volume
+// ─────────────────────────────────────────────────────────────────────────────
+const FLOW_TYPES = {
+  FRESH_LONG:   { label:'Fresh Long',   bg:'rgba(0,200,150,0.15)',  color:T.green, border:`1px solid ${T.green}` },
+  SHORT_COVER:  { label:'Short Cover',  bg:'rgba(74,158,255,0.15)', color:T.blue,  border:`1px solid ${T.blue}`  },
+  FRESH_SHORT:  { label:'Fresh Short',  bg:'rgba(224,82,82,0.15)',  color:T.red,   border:`1px solid ${T.red}`   },
+  LONG_UNWIND:  { label:'Long Unwind',  bg:'rgba(224,82,82,0.1)',   color:T.red,   border:`1px solid ${T.red}30` },
+};
+
+function flowType(net_oi, delta_net) {
+  if (delta_net == null || net_oi == null) return null;
+  if (delta_net > 0 && net_oi > 0)  return 'FRESH_LONG';
+  if (delta_net > 0 && net_oi <= 0) return 'SHORT_COVER';
+  if (delta_net < 0 && net_oi < 0)  return 'FRESH_SHORT';
+  if (delta_net < 0 && net_oi >= 0) return 'LONG_UNWIND';
+  return null;
+}
+
+function FlowBadge({ type }) {
+  if (!type) return <span style={{ color:T.textGhost, fontSize:10 }}>—</span>;
+  const s = FLOW_TYPES[type];
+  return (
+    <span style={{ padding:'2px 8px', fontSize:9, fontWeight:700, letterSpacing:'0.12em',
+      textTransform:'uppercase', background:s.bg, color:s.color, border:s.border, ...mono }}>
+      {s.label}
+    </span>
+  );
+}
+
+function AnalysisTab({ dates }) {
+  const [selectedDate, setSelectedDate] = useState(dates?.[dates.length-1]??null);
+  const [raw, setRaw]                   = useState([]);
+  const [loading, setLoading]           = useState(false);
+  const [asset, setAsset]               = useState('INDEX');
+  const [segment, setSegment]           = useState('FUTURES');
+
+  useEffect(()=>{
+    if(!selectedDate)return;
+    setLoading(true);
+    // Fetch OI for latest + prev day for delta
+    const prev = subtractDays(selectedDate, 5); // grab enough history for delta
+    participant.netOI(prev, selectedDate, asset)
+      .then(setRaw).catch(()=>setRaw([])).finally(()=>setLoading(false));
+  },[selectedDate, asset]);
+
+  // Build per-participant stats for selected date
+  const stats = useMemo(()=>{
+    const today = raw.filter(r=>r.trade_date===selectedDate);
+    const prevDates = [...new Set(raw.map(r=>r.trade_date))].filter(d=>d<selectedDate).sort();
+    const prevDate  = prevDates[prevDates.length-1];
+    const prev      = prevDate ? raw.filter(r=>r.trade_date===prevDate) : [];
+
+    return PARTICIPANTS.map(p=>{
+      const fut  = today.find(r=>r.participant_type===p && r.option_side==='NA');
+      const ce   = today.find(r=>r.participant_type===p && r.option_side==='CE');
+      const pe   = today.find(r=>r.participant_type===p && r.option_side==='PE');
+      const pfut = prev.find(r=>r.participant_type===p && r.option_side==='NA');
+
+      const net_oi   = fut?.net_contracts??null;
+      const prev_net = pfut?.net_contracts??null;
+      const delta    = (net_oi!=null&&prev_net!=null) ? net_oi-prev_net : null;
+      const type     = flowType(net_oi, delta);
+
+      return {
+        participant: p,
+        fut_long:  fut?.long_contracts??null,
+        fut_short: fut?.short_contracts??null,
+        net_oi,
+        delta_net: delta,
+        flow_type: type,
+        net_vol:   fut?.net_volume??null,
+        ce_long:   ce?.long_contracts??null,
+        ce_short:  ce?.short_contracts??null,
+        ce_net:    ce?.net_contracts??null,
+        pe_long:   pe?.long_contracts??null,
+        pe_short:  pe?.short_contracts??null,
+        pe_net:    pe?.net_contracts??null,
+        total_long:  (fut?.long_contracts??0)+(ce?.long_contracts??0)+(pe?.long_contracts??0),
+        total_short: (fut?.short_contracts??0)+(ce?.short_contracts??0)+(pe?.short_contracts??0),
+        total_net:   (net_oi??0)+(ce?.net_contracts??0)+(pe?.net_contracts??0),
+        ce_net_vol:  ce?.net_volume??null,
+        pe_net_vol:  pe?.net_volume??null,
+        fut_net_vol: fut?.net_volume??null,
+      };
+    });
+  },[raw, selectedDate]);
+
+  const thStyle = { padding:'6px 12px', ...label11, textAlign:'right', whiteSpace:'nowrap' };
+  const thL     = { ...thStyle, textAlign:'left' };
+  const td      = (v,col) => ({ padding:'7px 12px', fontSize:11, textAlign:'right', color:col||T.textMid, ...mono, fontWeight: col?600:400 });
+  const tdL     = (col) => ({ ...td(null,col), textAlign:'left' });
+
+  const THRESHOLD = 150000;
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+
+      {/* Controls row */}
+      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+        {dates?.length>0 && <DateSlider dates={dates} selectedDate={selectedDate} onChange={setSelectedDate} />}
+      </div>
+
+      {/* PANEL 1 — Participant Flow Analysis */}
+      <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
+        <SectionHeader
+          label="Participant Flow Analysis"
+          subtitle="Daily flow classification — mirrors NSE IDX/STK Analysis format"
+          right={
+            <div style={{ display:'flex', gap:6 }}>
+              {['INDEX','STOCK'].map(a=>(
+                <TerminalBtn key={a} active={asset===a} color={T.amber} onClick={()=>setAsset(a)} small>{a}</TerminalBtn>
+              ))}
+              {['FUTURES','CALLS','PUTS'].map(s=>(
+                <TerminalBtn key={s} active={segment===s} color={T.blue} onClick={()=>setSegment(s)} small>{s}</TerminalBtn>
+              ))}
+              <TerminalBtn onClick={()=>{}} small>↓ Export CSV</TerminalBtn>
+            </div>
+          }
+        />
+        {loading
+          ? <div style={{ minHeight:140,display:'flex',alignItems:'center',justifyContent:'center' }}><LoadingSpinner /></div>
+          : (
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', ...mono, fontSize:11 }}>
+                <thead>
+                  <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+                    <th style={thL}>Participant</th>
+                    <th style={thStyle}>Long</th>
+                    <th style={thStyle}>Short</th>
+                    <th style={thStyle}>Net OI</th>
+                    <th style={thStyle}>Δ Net</th>
+                    <th style={{ ...thStyle, textAlign:'center' }}>Flow Type</th>
+                    <th style={thStyle}>Net Vol</th>
+                    <th style={thStyle}>Total Long</th>
+                    <th style={thStyle}>Total Short</th>
+                    <th style={thStyle}>Total Net</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stats.map(s=>(
+                    <tr key={s.participant} style={{ borderBottom:`1px solid ${T.border}` }}>
+                      <td style={{ ...tdL(P_COLOR[s.participant]), fontWeight:700 }}>{s.participant}</td>
+                      <td style={td(s.fut_long)}>{fmtK(s.fut_long)}</td>
+                      <td style={td(s.fut_short)}>{fmtK(s.fut_short)}</td>
+                      <td style={td(null, netCol(s.net_oi))}>{sign(s.net_oi)}{fmtK(s.net_oi)}</td>
+                      <td style={td(null, netCol(s.delta_net))}>{sign(s.delta_net)}{fmtK(s.delta_net)}</td>
+                      <td style={{ ...td(), textAlign:'center' }}><FlowBadge type={s.flow_type} /></td>
+                      <td style={td(null, netCol(s.net_vol))}>{sign(s.net_vol)}{fmtK(s.net_vol)}</td>
+                      <td style={td(s.total_long)}>{fmtK(s.total_long)}</td>
+                      <td style={td(s.total_short)}>{fmtK(s.total_short)}</td>
+                      <td style={td(null, netCol(s.total_net))}>{sign(s.total_net)}{fmtK(s.total_net)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        }
+      </div>
+
+      {/* PANEL 2 — OI Snapshot all segments */}
+      <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
+        <SectionHeader label="Open Interest Snapshot — All Segments" />
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', ...mono, fontSize:11 }}>
+            <thead>
+              <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+                <th style={thL}>Participant</th>
+                <th style={{ ...thStyle, color:T.blue }} colSpan={3}>— Futures —</th>
+                <th style={{ ...thStyle, color:T.green }} colSpan={3}>— Calls —</th>
+                <th style={{ ...thStyle, color:T.red }} colSpan={3}>— Puts —</th>
+                <th style={thStyle} colSpan={2}>Total</th>
+              </tr>
+              <tr style={{ borderBottom:`1px solid ${T.border}`, background:T.surfaceHi }}>
+                <th style={thL} />
+                <th style={{ ...thStyle, color:T.textLo }}>Long</th>
+                <th style={{ ...thStyle, color:T.textLo }}>Short</th>
+                <th style={{ ...thStyle, color:T.textLo }}>Net</th>
+                <th style={{ ...thStyle, color:T.textLo }}>Long</th>
+                <th style={{ ...thStyle, color:T.textLo }}>Short</th>
+                <th style={{ ...thStyle, color:T.textLo }}>Net</th>
+                <th style={{ ...thStyle, color:T.textLo }}>Long</th>
+                <th style={{ ...thStyle, color:T.textLo }}>Short</th>
+                <th style={{ ...thStyle, color:T.textLo }}>Net</th>
+                <th style={{ ...thStyle, color:T.textLo }}>Long</th>
+                <th style={{ ...thStyle, color:T.textLo }}>Short</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.map(s=>(
+                <tr key={s.participant} style={{ borderBottom:`1px solid ${T.border}` }}>
+                  <td style={{ ...tdL(P_COLOR[s.participant]), fontWeight:700 }}>{s.participant}</td>
+                  <td style={td(s.fut_long)}>{fmtK(s.fut_long)}</td>
+                  <td style={td(s.fut_short)}>{fmtK(s.fut_short)}</td>
+                  <td style={td(null,netCol(s.net_oi))}>{sign(s.net_oi)}{fmtK(s.net_oi)}</td>
+                  <td style={td(s.ce_long)}>{fmtK(s.ce_long)}</td>
+                  <td style={td(s.ce_short)}>{fmtK(s.ce_short)}</td>
+                  <td style={td(null,netCol(s.ce_net))}>{sign(s.ce_net)}{fmtK(s.ce_net)}</td>
+                  <td style={td(s.pe_long)}>{fmtK(s.pe_long)}</td>
+                  <td style={td(s.pe_short)}>{fmtK(s.pe_short)}</td>
+                  <td style={td(null,netCol(s.pe_net))}>{sign(s.pe_net)}{fmtK(s.pe_net)}</td>
+                  <td style={td(s.total_long)}>{fmtK(s.total_long)}</td>
+                  <td style={td(s.total_short)}>{fmtK(s.total_short)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* PANEL 3 — Net Volume */}
+      <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
+        <SectionHeader label="Net Volume — Current Session Trading Activity" />
+        <div style={{ overflowX:'auto' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', ...mono, fontSize:11 }}>
+            <thead>
+              <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+                <th style={thL}>Participant</th>
+                <th style={thStyle}>Fut Net Vol</th>
+                <th style={thStyle}>CE Net Vol</th>
+                <th style={thStyle}>PE Net Vol</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.map(s=>(
+                <tr key={s.participant} style={{ borderBottom:`1px solid ${T.border}` }}>
+                  <td style={{ ...tdL(P_COLOR[s.participant]), fontWeight:700 }}>{s.participant}</td>
+                  <td style={td(null,netCol(s.fut_net_vol))}>{sign(s.fut_net_vol)}{fmtK(s.fut_net_vol)}</td>
+                  <td style={td(null,netCol(s.ce_net_vol))}>{sign(s.ce_net_vol)}{fmtK(s.ce_net_vol)}</td>
+                  <td style={td(null,netCol(s.pe_net_vol))}>{sign(s.pe_net_vol)}{fmtK(s.pe_net_vol)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {/* Legend */}
+        <div style={{ padding:'10px 14px', borderTop:`1px solid ${T.border}`, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          {Object.entries(FLOW_TYPES).map(([k,s])=>(
+            <span key={k} style={{ padding:'2px 8px', fontSize:9, fontWeight:700, letterSpacing:'0.12em',
+              textTransform:'uppercase', background:s.bg, color:s.color, border:s.border, ...mono }}>
+              {s.label}
+            </span>
+          ))}
+          <span style={{ fontSize:9, color:T.textLo, ...mono, letterSpacing:'0.08em' }}>
+            Threshold {(THRESHOLD/1000).toFixed(0)}K contracts
+          </span>
+        </div>
+      </div>
+
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATS EXPLORER TAB
+// ─────────────────────────────────────────────────────────────────────────────
+const FEATURED = [
+  'INDEX FUTURES','NIFTY FUTURES','BANKNIFTY FUTURES',
+  'INDEX OPTIONS','NIFTY OPTIONS','BANKNIFTY OPTIONS',
+  'STOCK FUTURES','STOCK OPTIONS',
+];
+const PALETTE = ['#4A9EFF','#00C896','#F0A500','#B39DDB','#E05252','#64B5F6','#A5D6A7','#FFCC80'];
+const EXPLORER_CSV = [
+  {key:'trade_date',label:'Date'},{key:'instrument',label:'Instrument'},
+  {key:'buy_contracts',label:'Bought (Lots)'},{key:'buy_amount_cr',label:'Buy Value (₹ Cr)'},
+  {key:'sell_contracts',label:'Sold (Lots)'},{key:'sell_amount_cr',label:'Sell Value (₹ Cr)'},
+  {key:'oi_contracts',label:'OI (Lots)'},{key:'oi_amount_cr',label:'OI Value (₹ Cr)'},
+  {key:'net_contracts',label:'Net Lots'},{key:'net_amount_cr',label:'Net Value (₹ Cr)'},
+];
+
+function StatsExplorerTab({ allInstruments, latestDate }) {
+  const [rows, setRows]           = useState([]);
+  const [chartData, setChartData] = useState([]);
+  const [loading, setLoading]     = useState(false);
+  const [days, setDays]           = useState(30);
+  const [selInstrs, setSelInstrs] = useState(['INDEX FUTURES','NIFTY FUTURES','BANKNIFTY FUTURES']);
+  const [metric, setMetric]       = useState('lots');
+
+  const instrList = useMemo(()=>{
+    const rest=(allInstruments??[]).filter(i=>!FEATURED.includes(i));
+    return [...FEATURED,...rest];
+  },[allInstruments]);
+
+  const fetchData = useCallback(()=>{
+    if(!selInstrs.length||!latestDate)return;
+    setLoading(true);
+    const start=subtractDays(latestDate,days);
+    fii.stats(start,latestDate,selInstrs).then(data=>{
+      setRows(data);
+      const map={};
+      data.forEach(r=>{
+        const d=r.trade_date;
+        if(!map[d])map[d]={date:d.slice(5)};
+        const k=r.instrument.replace(/ /g,'_').toLowerCase();
+        map[d][`${k}_lots`]=r.net_contracts;
+        map[d][`${k}_value`]=r.net_amount_cr;
+      });
+      setChartData(Object.values(map).sort((a,b)=>a.date.localeCompare(b.date)));
+    }).catch(()=>{setRows([]);setChartData([]);}).finally(()=>setLoading(false));
+  },[selInstrs,days,latestDate]);
+
+  useEffect(()=>{fetchData();},[fetchData]);
+
+  const toggle=ins=>setSelInstrs(p=>p.includes(ins)?p.filter(i=>i!==ins):[...p,ins]);
+
+  const thStyle={padding:'6px 12px',...label11,textAlign:'right',whiteSpace:'nowrap'};
+  const thL={...thStyle,textAlign:'left'};
+
+  return (
+    <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
+      <SectionHeader
+        label="Stats Explorer"
+        subtitle="Compare multiple instruments over a custom date range"
+        right={
+          <div style={{ display:'flex', gap:6 }}>
+            {[30,90,180,365].map(d=>(
+              <TerminalBtn key={d} active={days===d} color={T.blue} onClick={()=>setDays(d)} small>
+                {d===30?'1M':d===90?'3M':d===180?'6M':'1Y'}
+              </TerminalBtn>
+            ))}
+            <div style={{ width:1,background:T.border,margin:'0 4px' }} />
+            {[{label:'Net Lots',value:'lots'},{label:'Net Value',value:'value'}].map(o=>(
+              <TerminalBtn key={o.value} active={metric===o.value} color={T.amber} onClick={()=>setMetric(o.value)} small>{o.label}</TerminalBtn>
+            ))}
+            <TerminalBtn onClick={()=>downloadCSV(rows,'fii_stats_explorer.csv',EXPLORER_CSV)} small>↓ CSV</TerminalBtn>
+          </div>
+        }
+      />
+      <div style={{ padding:16 }}>
+        {/* Instrument toggles */}
+        <div style={{ marginBottom:14 }}>
+          <div style={{ ...label11, marginBottom:8 }}>Select Instruments</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+            {instrList.map((ins,idx)=>{
+              const active=selInstrs.includes(ins);
+              const color=PALETTE[FEATURED.indexOf(ins)%PALETTE.length]??T.blue;
+              return (
+                <button key={ins} onClick={()=>toggle(ins)} style={{
+                  padding:'3px 10px', fontSize:10, letterSpacing:'0.08em', textTransform:'uppercase',
+                  border:`1px solid ${active?color:T.border}`, background:active?`${color}15`:'transparent',
+                  color:active?color:T.textLo, cursor:'pointer', borderRadius:0, ...mono,
+                  display:'flex', alignItems:'center', gap:5,
+                }}>
+                  {active&&<span style={{ width:5,height:5,borderRadius:'50%',background:color }} />}
+                  {ins}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {loading
+          ? <div style={{ height:220,display:'flex',alignItems:'center',justifyContent:'center' }}><LoadingSpinner /></div>
+          : (
+            <>
+              {chartData.length>0&&(
+                <div style={{ marginBottom:16 }}>
+                  <ResponsiveContainer width="100%" height={240}>
+                    <ComposedChart data={chartData} margin={{top:4,right:4,left:0,bottom:0}}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                      <XAxis dataKey="date" tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
+                        interval={Math.max(1,Math.floor(chartData.length/9))} />
+                      <YAxis tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
+                        tickFormatter={metric==='value'?v=>`₹${fmtK(v)}`:fmtK} width={68} />
+                      <Tooltip content={<ChartTooltip valueFmt={metric==='value'?fmtCr:v=>`${fmtK(v)} lots`} />} />
+                      <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 2" />
+                      <Legend wrapperStyle={{fontSize:10,color:T.textLo,paddingTop:8,...mono}} iconType="circle" iconSize={7} />
+                      {selInstrs.map((ins,idx)=>{
+                        const k=ins.replace(/ /g,'_').toLowerCase();
+                        return <Line key={ins} type="monotone" dataKey={`${k}_${metric}`} name={ins}
+                          stroke={PALETTE[idx%PALETTE.length]} dot={false} strokeWidth={1.5} connectNulls />;
+                      })}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              <div style={{ overflowX:'auto' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', ...mono, fontSize:11 }}>
+                  <thead>
+                    <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+                      {['Date','Instrument','Bought (Lots)','Buy Value','Sold (Lots)','Sell Value','OI (Lots)','OI Value','Net Lots','Net Value'].map((h,i)=>(
+                        <th key={h} style={{ ...i<2?thL:thStyle }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.slice(0,200).map((r,i)=>(
+                      <tr key={i} style={{ borderBottom:`1px solid ${T.border}` }}>
+                        <td style={{ padding:'6px 12px',color:T.textLo,fontSize:11,...mono }}>{r.trade_date}</td>
+                        <td style={{ padding:'6px 12px',color:T.textHi,fontSize:11,...mono,fontWeight:600 }}>{r.instrument}</td>
+                        <td style={{ padding:'6px 12px',textAlign:'right',color:T.textMid,fontSize:11,...mono }}>{fmt(r.buy_contracts)}</td>
+                        <td style={{ padding:'6px 12px',textAlign:'right',color:T.textMid,fontSize:11,...mono }}>{fmtCr(r.buy_amount_cr)}</td>
+                        <td style={{ padding:'6px 12px',textAlign:'right',color:T.textMid,fontSize:11,...mono }}>{fmt(r.sell_contracts)}</td>
+                        <td style={{ padding:'6px 12px',textAlign:'right',color:T.textMid,fontSize:11,...mono }}>{fmtCr(r.sell_amount_cr)}</td>
+                        <td style={{ padding:'6px 12px',textAlign:'right',color:T.textMid,fontSize:11,...mono }}>{fmt(r.oi_contracts)}</td>
+                        <td style={{ padding:'6px 12px',textAlign:'right',color:T.textMid,fontSize:11,...mono }}>{fmtCr(r.oi_amount_cr)}</td>
+                        <td style={{ padding:'6px 12px',textAlign:'right',color:netCol(r.net_contracts),fontSize:11,...mono,fontWeight:700 }}>{sign(r.net_contracts)}{fmt(r.net_contracts)}</td>
+                        <td style={{ padding:'6px 12px',textAlign:'right',color:netCol(r.net_amount_cr),fontSize:11,...mono,fontWeight:700 }}>{sign(r.net_amount_cr)}{fmtCr(r.net_amount_cr)}</td>
+                      </tr>
+                    ))}
+                    {rows.length>200&&(
+                      <tr><td colSpan={10} style={{ padding:'10px',textAlign:'center',color:T.textLo,fontSize:10,...mono }}>
+                        Showing 200 of {rows.length} rows — download CSV for full data
+                      </td></tr>
+                    )}
+                    {!rows.length&&(
+                      <tr><td colSpan={10} style={{ padding:'24px',textAlign:'center',color:T.textLo,fontSize:10,...mono,letterSpacing:'0.1em',textTransform:'uppercase' }}>
+                        Select instruments above to explore
+                      </td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )
+        }
+      </div>
     </div>
   );
 }
@@ -417,39 +883,33 @@ function DailyBreakdownTab({ dates }) {
 // ─── Shared instrument table ──────────────────────────────────────────────────
 function InstrumentTable({ rows }) {
   if (!rows?.length) return (
-    <p className="text-sm text-white/25 py-6 text-center">No data</p>
+    <div style={{ padding:'24px 14px', textAlign:'center', color:T.textLo, fontSize:10, ...mono, letterSpacing:'0.1em', textTransform:'uppercase' }}>
+      No data
+    </div>
   );
-
+  const thStyle={padding:'6px 12px',fontSize:9,fontWeight:700,letterSpacing:'0.14em',textTransform:'uppercase',color:T.textLo,whiteSpace:'nowrap'};
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs border-collapse">
+    <div style={{ overflowX:'auto' }}>
+      <table style={{ width:'100%', borderCollapse:'collapse', ...mono, fontSize:11 }}>
         <thead>
-          <tr className="border-b border-white/8">
-            {["Instrument", "Bought (Lots)", "Buy Value", "Sold (Lots)", "Sell Value",
-              "OI (Lots)", "OI Value", "Net Lots", "Net Value"].map((h, i) => (
-              <th key={h} className={`py-2.5 px-3 text-white/30 font-medium whitespace-nowrap
-                ${i === 0 ? "text-left" : "text-right"}`}>{h}</th>
+          <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+            {['Instrument','Bought (Lots)','Buy Value','Sold (Lots)','Sell Value','OI (Lots)','OI Value','Net Lots','Net Value'].map((h,i)=>(
+              <th key={h} style={{ ...thStyle, textAlign:i===0?'left':'right' }}>{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
-              <td className="py-2 px-3 text-white/80 font-medium whitespace-nowrap">{r.instrument}</td>
-              <td className="py-2 px-3 text-right text-white/60 tabular-nums">{fmt(r.buy_contracts)}</td>
-              <td className="py-2 px-3 text-right text-white/50 tabular-nums">{fmtCr(r.buy_amount_cr)}</td>
-              <td className="py-2 px-3 text-right text-white/60 tabular-nums">{fmt(r.sell_contracts)}</td>
-              <td className="py-2 px-3 text-right text-white/50 tabular-nums">{fmtCr(r.sell_amount_cr)}</td>
-              <td className="py-2 px-3 text-right text-white/60 tabular-nums">{fmt(r.oi_contracts)}</td>
-              <td className="py-2 px-3 text-right text-white/50 tabular-nums">{fmtCr(r.oi_amount_cr)}</td>
-              <td className="py-2 px-3 text-right tabular-nums font-semibold"
-                  style={{ color: netCol(r.net_contracts) }}>
-                {pre(r.net_contracts)}{fmt(r.net_contracts)}
-              </td>
-              <td className="py-2 px-3 text-right tabular-nums font-semibold"
-                  style={{ color: netCol(r.net_amount_cr) }}>
-                {pre(r.net_amount_cr)}{fmtCr(r.net_amount_cr)}
-              </td>
+          {rows.map((r,i)=>(
+            <tr key={i} style={{ borderBottom:`1px solid ${T.border}` }}>
+              <td style={{ padding:'7px 12px',color:T.textHi,fontWeight:600,whiteSpace:'nowrap' }}>{r.instrument}</td>
+              <td style={{ padding:'7px 12px',textAlign:'right',color:T.textMid }}>{fmt(r.buy_contracts)}</td>
+              <td style={{ padding:'7px 12px',textAlign:'right',color:T.textMid }}>{fmtCr(r.buy_amount_cr)}</td>
+              <td style={{ padding:'7px 12px',textAlign:'right',color:T.textMid }}>{fmt(r.sell_contracts)}</td>
+              <td style={{ padding:'7px 12px',textAlign:'right',color:T.textMid }}>{fmtCr(r.sell_amount_cr)}</td>
+              <td style={{ padding:'7px 12px',textAlign:'right',color:T.textMid }}>{fmt(r.oi_contracts)}</td>
+              <td style={{ padding:'7px 12px',textAlign:'right',color:T.textMid }}>{fmtCr(r.oi_amount_cr)}</td>
+              <td style={{ padding:'7px 12px',textAlign:'right',color:netCol(r.net_contracts),fontWeight:700 }}>{sign(r.net_contracts)}{fmt(r.net_contracts)}</td>
+              <td style={{ padding:'7px 12px',textAlign:'right',color:netCol(r.net_amount_cr),fontWeight:700 }}>{sign(r.net_amount_cr)}{fmtCr(r.net_amount_cr)}</td>
             </tr>
           ))}
         </tbody>
@@ -459,356 +919,116 @@ function InstrumentTable({ rows }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TAB 4 — OI POSITIONING
-// participant.netOI → filter to FII → CE / PE / Futures lines
-// ─────────────────────────────────────────────────────────────────────────────
-const OI_SERIES = [
-  { key: "futures", label: "Futures",    color: "#00B0F0", side: "NA" },
-  { key: "ce",      label: "Call (CE)",  color: "#26a69a", side: "CE" },
-  { key: "pe",      label: "Put (PE)",   color: "#ef5350", side: "PE" },
-];
-
-function OIPositioningTab({ latestDate }) {
-  const [raw,       setRaw]       = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [days,      setDays]      = useState(90);
-  const [asset,     setAsset]     = useState("INDEX");
-  const [visible,   setVisible]   = useState(["futures", "ce", "pe"]);
-
-  useEffect(() => {
-    if (!latestDate) return;
-    setLoading(true);
-    const start = subtractDays(latestDate, days);
-    participant.netOI(start, latestDate, asset)
-      .then(setRaw)
-      .catch(() => setRaw([]))
-      .finally(() => setLoading(false));
-  }, [latestDate, days, asset]);
-
-  // Pivot: date → { futures, ce, pe }  — FII only
-  const chartData = useMemo(() => {
-    const fiiRows = raw.filter(r => r.participant_type === "FII");
-    const map = {};
-    fiiRows.forEach(r => {
-      const d = r.trade_date;
-      if (!map[d]) map[d] = { date: d.slice(5) };
-      const series = OI_SERIES.find(s => s.side === r.option_side);
-      if (series) map[d][series.key] = r.net_contracts;
-    });
-    return Object.values(map).sort((a, b) => a.date.localeCompare(b.date));
-  }, [raw]);
-
-  const toggleSeries = key =>
-    setVisible(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
-
-  return (
-    <SectionCard
-      title="FII Open Interest Positioning"
-      subtitle="Net long − short lots held by FIIs across futures and options"
-      action={
-        <div className="flex items-center gap-2 flex-wrap">
-          <RangePicker value={days} onChange={setDays} />
-          <ToggleGroup
-            options={[{ label: "Index", value: "INDEX" }, { label: "Stock", value: "STOCK" }]}
-            value={asset} onChange={setAsset}
-          />
-        </div>
-      }
-    >
-      {/* Series toggles */}
-      <div className="flex gap-2 mb-5 flex-wrap">
-        {OI_SERIES.map(s => (
-          <button key={s.key} onClick={() => toggleSeries(s.key)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors
-              ${visible.includes(s.key)
-                ? "border-white/15 bg-white/5 text-white/80"
-                : "border-white/8 bg-transparent text-white/30 hover:text-white/50"}`}>
-            <span className="w-2 h-2 rounded-full transition-opacity"
-              style={{ background: s.color, opacity: visible.includes(s.key) ? 1 : 0.25 }} />
-            {s.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Explanation */}
-      <p className="text-xs text-white/30 mb-4">
-        Positive = FII holds more longs than shorts (bullish). Negative = more shorts (bearish).
-        Futures positioning is a direct market view; PE net long = hedging or bearish bet.
-      </p>
-
-      {loading ? (
-        <div className="h-72 flex items-center justify-center"><LoadingSpinner /></div>
-      ) : (
-        <ResponsiveContainer width="100%" height={300}>
-          <ComposedChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-            <XAxis dataKey="date" tick={{ fontSize: 10, fill: "rgba(255,255,255,0.3)" }}
-              tickLine={false} axisLine={false}
-              interval={Math.max(1, Math.floor(chartData.length / 9))} />
-            <YAxis tick={{ fontSize: 10, fill: "rgba(255,255,255,0.3)" }}
-              tickLine={false} axisLine={false} tickFormatter={fmtK} width={64} />
-            <Tooltip content={<ChartTooltip valueFmt={v => `${fmtK(v)} lots`} />} />
-            <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 2" />
-            <Legend wrapperStyle={{ fontSize: 10, color: "rgba(255,255,255,0.4)", paddingTop: 8 }}
-              iconType="circle" iconSize={8} />
-            {OI_SERIES.map(s => visible.includes(s.key) && (
-              <Line key={s.key} type="monotone" dataKey={s.key} name={s.label}
-                stroke={s.color} dot={false} strokeWidth={1.5} connectNulls />
-            ))}
-          </ComposedChart>
-        </ResponsiveContainer>
-      )}
-    </SectionCard>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TAB 5 — STATS EXPLORER
-// ─────────────────────────────────────────────────────────────────────────────
-const FEATURED = [
-  "INDEX FUTURES", "NIFTY FUTURES", "BANKNIFTY FUTURES",
-  "INDEX OPTIONS",  "NIFTY OPTIONS",  "BANKNIFTY OPTIONS",
-  "STOCK FUTURES",  "STOCK OPTIONS",
-];
-const PALETTE = ["#00B0F0","#26a69a","#FFA726","#B39DDB","#ef5350","#64B5F6","#A5D6A7","#FFCC80"];
-
-const EXPLORER_CSV = [
-  { key: "trade_date",    label: "Date"              },
-  { key: "instrument",    label: "Instrument"        },
-  { key: "buy_contracts", label: "Bought (Lots)"     },
-  { key: "buy_amount_cr", label: "Buy Value (₹ Cr)"  },
-  { key: "sell_contracts",label: "Sold (Lots)"       },
-  { key: "sell_amount_cr",label: "Sell Value (₹ Cr)" },
-  { key: "oi_contracts",  label: "OI (Lots)"         },
-  { key: "oi_amount_cr",  label: "OI Value (₹ Cr)"   },
-  { key: "net_contracts", label: "Net Lots"          },
-  { key: "net_amount_cr", label: "Net Value (₹ Cr)"  },
-];
-
-function StatsExplorerTab({ allInstruments, latestDate }) {
-  const [rows,      setRows]      = useState([]);
-  const [chartData, setChartData] = useState([]);
-  const [loading,   setLoading]   = useState(false);
-  const [days,      setDays]      = useState(30);
-  const [selInstrs, setSelInstrs] = useState(["INDEX FUTURES", "NIFTY FUTURES", "BANKNIFTY FUTURES"]);
-  const [metric,    setMetric]    = useState("lots");
-
-  const instrList = useMemo(() => {
-    const rest = (allInstruments ?? []).filter(i => !FEATURED.includes(i));
-    return [...FEATURED, ...rest];
-  }, [allInstruments]);
-
-  const fetchData = useCallback(() => {
-    if (!selInstrs.length || !latestDate) return;
-    setLoading(true);
-    const start = subtractDays(latestDate, days);
-    fii.stats(start, latestDate, selInstrs).then(data => {
-      setRows(data);
-      const map = {};
-      data.forEach(r => {
-        const d = r.trade_date;
-        if (!map[d]) map[d] = { date: d.slice(5) };
-        const k = r.instrument.replace(/ /g, "_").toLowerCase();
-        map[d][`${k}_lots`]  = r.net_contracts;
-        map[d][`${k}_value`] = r.net_amount_cr;
-      });
-      setChartData(Object.values(map).sort((a, b) => a.date.localeCompare(b.date)));
-    }).catch(() => { setRows([]); setChartData([]); }).finally(() => setLoading(false));
-  }, [selInstrs, days, latestDate]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  const toggleInstr = ins =>
-    setSelInstrs(prev => prev.includes(ins) ? prev.filter(i => i !== ins) : [...prev, ins]);
-
-  return (
-    <SectionCard
-      title="Stats Explorer"
-      subtitle="Compare multiple instruments over a custom date range"
-      action={
-        <div className="flex items-center gap-2 flex-wrap">
-          <RangePicker value={days} onChange={setDays} />
-          <ToggleGroup
-            options={[{ label: "Net Lots", value: "lots" }, { label: "Net Value", value: "value" }]}
-            value={metric} onChange={setMetric}
-          />
-          <CSVButton onClick={() => downloadCSV(rows, "fii_stats_explorer.csv", EXPLORER_CSV)} />
-        </div>
-      }
-    >
-      {/* Instrument selector */}
-      <div className="mb-5">
-        <p className="text-xs text-white/30 mb-2 uppercase tracking-wider">Select Instruments</p>
-        <div className="flex flex-wrap gap-1.5">
-          {instrList.map((ins, idx) => {
-            const active = selInstrs.includes(ins);
-            const color  = PALETTE[FEATURED.indexOf(ins) % PALETTE.length] ?? "#00B0F0";
-            return (
-              <button key={ins} onClick={() => toggleInstr(ins)}
-                className={`px-2.5 py-1 rounded-lg border text-xs transition-colors
-                  ${active
-                    ? "border-white/15 bg-white/5 text-white/80"
-                    : "border-white/8 bg-transparent text-white/30 hover:text-white/50"}`}>
-                {active && (
-                  <span className="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle"
-                    style={{ background: color }} />
-                )}
-                {ins}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="h-64 flex items-center justify-center"><LoadingSpinner /></div>
-      ) : (
-        <>
-          {/* Chart */}
-          {chartData.length > 0 && (
-            <div className="mb-6">
-              <ResponsiveContainer width="100%" height={260}>
-                <ComposedChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: "rgba(255,255,255,0.3)" }}
-                    tickLine={false} axisLine={false}
-                    interval={Math.max(1, Math.floor(chartData.length / 9))} />
-                  <YAxis tick={{ fontSize: 10, fill: "rgba(255,255,255,0.3)" }}
-                    tickLine={false} axisLine={false}
-                    tickFormatter={metric === "value" ? v => `₹${fmtK(v)}` : fmtK}
-                    width={68} />
-                  <Tooltip content={
-                    <ChartTooltip valueFmt={metric === "value" ? fmtCr : v => `${fmtK(v)} lots`} />
-                  } />
-                  <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 2" />
-                  <Legend wrapperStyle={{ fontSize: 10, color: "rgba(255,255,255,0.4)", paddingTop: 8 }}
-                    iconType="circle" iconSize={8} />
-                  {selInstrs.map((ins, idx) => {
-                    const k = ins.replace(/ /g, "_").toLowerCase();
-                    return (
-                      <Line key={ins} type="monotone"
-                        dataKey={`${k}_${metric}`} name={ins}
-                        stroke={PALETTE[idx % PALETTE.length]}
-                        dot={false} strokeWidth={1.5} connectNulls />
-                    );
-                  })}
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs border-collapse">
-              <thead>
-                <tr className="border-b border-white/8">
-                  {["Date", "Instrument", "Bought (Lots)", "Buy Value", "Sold (Lots)",
-                    "Sell Value", "OI (Lots)", "OI Value", "Net Lots", "Net Value"].map((h, i) => (
-                    <th key={h} className={`py-2.5 px-3 text-white/30 font-medium whitespace-nowrap
-                      ${i < 2 ? "text-left" : "text-right"}`}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.slice(0, 200).map((r, i) => (
-                  <tr key={i} className="border-b border-white/[0.04] hover:bg-white/[0.02] transition-colors">
-                    <td className="py-2 px-3 text-white/40 whitespace-nowrap">{r.trade_date}</td>
-                    <td className="py-2 px-3 text-white/80 font-medium whitespace-nowrap">{r.instrument}</td>
-                    <td className="py-2 px-3 text-right text-white/60 tabular-nums">{fmt(r.buy_contracts)}</td>
-                    <td className="py-2 px-3 text-right text-white/50 tabular-nums">{fmtCr(r.buy_amount_cr)}</td>
-                    <td className="py-2 px-3 text-right text-white/60 tabular-nums">{fmt(r.sell_contracts)}</td>
-                    <td className="py-2 px-3 text-right text-white/50 tabular-nums">{fmtCr(r.sell_amount_cr)}</td>
-                    <td className="py-2 px-3 text-right text-white/60 tabular-nums">{fmt(r.oi_contracts)}</td>
-                    <td className="py-2 px-3 text-right text-white/50 tabular-nums">{fmtCr(r.oi_amount_cr)}</td>
-                    <td className="py-2 px-3 text-right tabular-nums font-semibold"
-                        style={{ color: netCol(r.net_contracts) }}>
-                      {pre(r.net_contracts)}{fmt(r.net_contracts)}
-                    </td>
-                    <td className="py-2 px-3 text-right tabular-nums font-semibold"
-                        style={{ color: netCol(r.net_amount_cr) }}>
-                      {pre(r.net_amount_cr)}{fmtCr(r.net_amount_cr)}
-                    </td>
-                  </tr>
-                ))}
-                {rows.length > 200 && (
-                  <tr>
-                    <td colSpan={10} className="py-3 text-center text-white/25">
-                      Showing 200 of {rows.length} rows — download CSV for full data
-                    </td>
-                  </tr>
-                )}
-                {!rows.length && (
-                  <tr>
-                    <td colSpan={10} className="py-8 text-center text-white/25">
-                      Select instruments above to explore
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </SectionCard>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // ROOT PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 const TABS = [
-  { key: "overview",   label: "Overview"         },
-  { key: "indexflow",  label: "Index Flow"       },
-  { key: "daily",      label: "Daily Breakdown"  },
-  { key: "oi",         label: "OI Positioning"   },
-  { key: "explorer",   label: "Stats Explorer"   },
+  { key:'overview',  label:'Overview'        },
+  { key:'netoi',     label:'Net OI'          },
+  { key:'netvol',    label:'Net Volume'      },
+  { key:'options',   label:'Options'         },
+  { key:'daily',     label:'Daily Table'     },
+  { key:'analysis',  label:'Analysis'        },
+  { key:'explorer',  label:'Stats Explorer'  },
 ];
 
 export default function FII() {
   const [dates,       setDates]       = useState([]);
   const [instruments, setInstruments] = useState([]);
   const [loading,     setLoading]     = useState(true);
-  const [tab,         setTab]         = useState("overview");
+  const [tab,         setTab]         = useState('overview');
 
-  useEffect(() => {
+  // Snapshot stats for header strip
+  const [headerStats, setHeaderStats] = useState(null);
+
+  useEffect(()=>{
     Promise.all([fii.dates(), fii.instruments()])
-      .then(([d, ins]) => { setDates(d); setInstruments(ins); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+      .then(([d,ins])=>{ setDates(d); setInstruments(ins); })
+      .catch(()=>{})
+      .finally(()=>setLoading(false));
+  },[]);
 
-  const latestDate = dates?.[dates.length - 1] ?? null;
+  const latestDate = dates?.[dates.length-1]??null;
+
+  // Fetch header strip stats (FII/DII futures net for latest date)
+  useEffect(()=>{
+    if(!latestDate)return;
+    fii.stats(latestDate,latestDate).then(rows=>{
+      const get=(type,instr)=>rows.filter(r=>instr.includes(r.instrument)).reduce((a,r)=>a+(r.net_contracts??0),0);
+      setHeaderStats({
+        date:       latestDate,
+        asset:      'INDEX',
+        fiiFutNet:  get('FII',['INDEX FUTURES','NIFTY FUTURES','BANKNIFTY FUTURES']),
+        diiFutNet:  get('DII',['INDEX FUTURES','NIFTY FUTURES','BANKNIFTY FUTURES']),
+      });
+    }).catch(()=>{});
+  },[latestDate]);
 
   if (loading) return (
-    <div className="h-[calc(100vh-64px)] flex items-center justify-center"
-         style={{ background: "#0d1117" }}>
+    <div style={{ minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:T.bg }}>
       <LoadingSpinner />
     </div>
   );
 
   return (
-    <div className="p-6" style={{ background: "#0d1117", minHeight: "100vh" }}>
-      {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center gap-3 mb-1">
-          <span className="w-2.5 h-2.5 rounded-full bg-[#00B0F0]" />
-          <h1 className="text-2xl font-bold text-white">FII Activity</h1>
-          <span className="px-2 py-0.5 rounded-md bg-[#00B0F0]/10 border border-[#00B0F0]/20
-                           text-[#00B0F0] text-xs font-medium">NSE</span>
+    <div style={{ background:T.bg, minHeight:'100vh', display:'flex', flexDirection:'column', ...mono }}>
+
+      {/* ── Page title bar ── */}
+      <div style={{ padding:'8px 20px', borderBottom:`1px solid ${T.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', background:T.surface, flexShrink:0 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <span style={{ fontSize:13, fontWeight:700, color:T.textHi, letterSpacing:'0.12em', textTransform:'uppercase' }}>
+            FII Activity
+          </span>
+          <span style={{ fontSize:9, color:T.textLo, letterSpacing:'0.1em' }}>
+            FII › DII › Client › Pro — net positioning across futures and options
+          </span>
         </div>
-        <p className="text-sm text-white/45 ml-5">
-          Foreign Institutional Investor positions across F&amp;O instruments
-          {latestDate && <span className="ml-2 text-white/25">· Latest data: {latestDate}</span>}
-        </p>
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          <span style={{ width:6,height:6,borderRadius:'50%',background:T.green,boxShadow:`0 0 6px ${T.green}`,display:'inline-block' }} />
+          <span style={{ fontSize:9,letterSpacing:'0.12em',color:T.green,textTransform:'uppercase' }}>NSE Live</span>
+        </div>
       </div>
 
-      <TabBar tabs={TABS} active={tab} onChange={setTab} />
+      {/* ── Metric strip ── */}
+      {headerStats && (
+        <div style={{ display:'flex', borderBottom:`1px solid ${T.border}`, background:T.surface, flexShrink:0 }}>
+          {[
+            { label:'Snapshot Date', value:headerStats.date, color:T.textHi },
+            { label:'Asset Class',   value:headerStats.asset, color:T.amber },
+            { label:'FII Fut Net',   value:`${sign(headerStats.fiiFutNet)}${fmtK(headerStats.fiiFutNet)}`, color:netCol(headerStats.fiiFutNet) },
+            { label:'DII Fut Net',   value:`${sign(headerStats.diiFutNet)}${fmtK(headerStats.diiFutNet)}`, color:netCol(headerStats.diiFutNet) },
+          ].map((item,i,arr)=>(
+            <div key={item.label} style={{ padding:'10px 20px', borderRight: i<arr.length-1?`1px solid ${T.border}`:'none', minWidth:180 }}>
+              <div style={label11}>{item.label}</div>
+              <div style={{ ...val14, color:item.color, marginTop:4 }}>{item.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
-      {tab === "overview"  && <OverviewTab        latestDate={latestDate} />}
-      {tab === "indexflow" && <IndexFlowTab        latestDate={latestDate} />}
-      {tab === "daily"     && <DailyBreakdownTab   dates={dates} />}
-      {tab === "oi"        && <OIPositioningTab    latestDate={latestDate} />}
-      {tab === "explorer"  && <StatsExplorerTab    allInstruments={instruments} latestDate={latestDate} />}
+      {/* ── Tab bar ── */}
+      <div style={{ display:'flex', gap:0, borderBottom:`2px solid ${T.border}`, background:T.surface, overflowX:'auto', flexShrink:0 }}>
+        {TABS.map(t=>(
+          <button key={t.key} onClick={()=>setTab(t.key)} style={{
+            padding:'9px 18px', fontSize:10, letterSpacing:'0.09em', fontWeight:tab===t.key?700:400,
+            color:tab===t.key?T.amber:T.textMid,
+            background:tab===t.key?T.amberDim:'transparent',
+            border:'none', borderBottom:tab===t.key?`2px solid ${T.amber}`:'2px solid transparent',
+            cursor:'pointer', whiteSpace:'nowrap', textTransform:'uppercase',
+            transition:'color 0.15s', marginBottom:-2, borderRadius:0, ...mono,
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* ── Content ── */}
+      <main style={{ flex:1, padding:'16px 20px', overflowX:'hidden', display:'flex', flexDirection:'column', gap:12 }}>
+        {tab==='overview'  && <OverviewTab       latestDate={latestDate} />}
+        {tab==='netoi'     && <NetOITab          latestDate={latestDate} />}
+        {tab==='netvol'    && <NetVolumeTab      latestDate={latestDate} />}
+        {tab==='options'   && <OptionsTab        latestDate={latestDate} />}
+        {tab==='daily'     && <DailyTableTab     dates={dates} />}
+        {tab==='analysis'  && <AnalysisTab       dates={dates} />}
+        {tab==='explorer'  && <StatsExplorerTab  allInstruments={instruments} latestDate={latestDate} />}
+      </main>
     </div>
   );
 }

@@ -1,32 +1,27 @@
 // frontend/src/components/shared/LoadingSpinner.jsx
 
-export default function LoadingSpinner({
-  size = 'md',
-  label = 'Loading...'
-}) {
-  const sizeClasses = {
-    sm: 'w-5 h-5 border-2',
-    md: 'w-10 h-10 border-[3px]',
-    lg: 'w-16 h-16 border-4'
-  };
+export default function LoadingSpinner({ size = 'md', label = 'Loading...' }) {
+  const dim = size === 'sm' ? 16 : size === 'lg' ? 40 : 24;
+  const border = size === 'sm' ? 2 : size === 'lg' ? 3 : 2;
 
   return (
-    <div className="w-full flex flex-col items-center justify-center py-12">
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 0', gap: 12 }}>
       <div
-        className={`
-          ${sizeClasses[size]}
-          rounded-full
-          border-[#1f2937]
-          border-t-[#00B0F0]
-          animate-spin
-        `}
+        style={{
+          width: dim,
+          height: dim,
+          borderRadius: '50%',
+          border: `${border}px solid rgba(255,255,255,0.08)`,
+          borderTopColor: '#F5A623',
+          animation: 'terminal-spin 0.7s linear infinite',
+        }}
       />
-
       {label && (
-        <p className="mt-4 text-sm text-white/70">
+        <span style={{ fontSize: '10px', letterSpacing: '0.12em', color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase' }}>
           {label}
-        </p>
+        </span>
       )}
+      <style>{`@keyframes terminal-spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

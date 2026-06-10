@@ -5,7 +5,6 @@ Routes for:
   - Market activity (summary + index OHLC + breadth + top stocks + securities)
   - FII statistics
   - FO Volatility
-  - Research signal: FII vs Nifty
 
 Endpoints:
 
@@ -45,10 +44,6 @@ Endpoints:
   GET /volatility/dates
   GET /volatility/{ticker}
   GET /volatility/snapshot
-
-  Research
-  ────────
-  GET /research/fii-vs-nifty
 """
 
 from fastapi import APIRouter, Query, HTTPException
@@ -79,8 +74,6 @@ from api.db import (
     get_volatility_snapshot,
     get_volatility_tickers,
     get_volatility_available_dates,
-    # research
-    get_fii_vs_nifty,
 )
 
 router = APIRouter(tags=["Market"])
@@ -303,19 +296,4 @@ def vol_ticker(
     if df.empty:
         raise HTTPException(404, f"No volatility data for {ticker}")
     df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
-    return df.to_dict(orient="records")
-
-
-# ── Research ──────────────────────────────────────────────────────────────────
-
-@router.get("/research/fii-vs-nifty")
-def fii_vs_nifty(
-    start_date: str = Query(..., description="YYYY-MM-DD"),
-    end_date:   str = Query(..., description="YYYY-MM-DD"),
-):
-    df = get_fii_vs_nifty(start_date, end_date)
-    if df.empty:
-        raise HTTPException(404, "Insufficient data for signal")
-    df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
-    df = df.dropna(subset=["nifty_return_next"])
     return df.to_dict(orient="records")

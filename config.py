@@ -50,7 +50,7 @@ API_PREFIX = "/api/v1"
 
 CORS_ORIGINS = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:5173,http://localhost:3000"
+    "http://localhost:5173,http://localhost:8000"
 ).split(",")
 
 # ─── DUCKDB ───────────────────────────────────────────────────────────────────
