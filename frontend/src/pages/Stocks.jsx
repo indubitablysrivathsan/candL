@@ -188,7 +188,7 @@ const GLOBAL_CSS = `
   .trm-table th {
     padding: 7px 10px;
     background: ${T.surfaceHi};
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 500;
     letter-spacing: 0.12em;
     text-transform: uppercase;
@@ -868,10 +868,10 @@ function DeliveryView({ dates }) {
             padding: '6px 14px',
             background: T.surfaceHi,
             borderBottom: `1px solid ${T.borderHi}`,
-            fontSize: 9,
+            fontSize: 11,
             letterSpacing: '0.12em',
             textTransform: 'uppercase',
-            color: T.textMid,
+            color: T.textHi,
           }}>
             <span>#</span>
             <span>Ticker</span>
