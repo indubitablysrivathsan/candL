@@ -148,7 +148,7 @@ export default function DateSlider({ dates = [], selectedDate, onChange }) {
           </span>
           {/* Mini dot-track — compressed to MAX_DOTS buckets so it never overflows */}
           {(() => {
-            const MAX_DOTS = 350;
+            const MAX_DOTS = 80;
             const total    = dates.length;
             // How many real dates each dot represents (always ≥ 1)
             const ratio    = Math.ceil(total / MAX_DOTS);
