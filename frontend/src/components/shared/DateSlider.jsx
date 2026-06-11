@@ -1,150 +1,388 @@
 // frontend/src/components/shared/DateSlider.jsx
 
-import { useMemo } from 'react';
+import { useMemo, useRef, useEffect, useCallback } from 'react';
 
-const s = {
-  wrap: {
-    background: '#0d1117',
-    border: '1px solid rgba(255,255,255,0.08)',
-    padding: '10px 14px',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-  },
-  btn: {
-    width: 28,
-    height: 28,
-    background: 'transparent',
-    border: '1px solid rgba(255,255,255,0.1)',
-    color: 'rgba(255,255,255,0.4)',
-    fontSize: 10,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    transition: 'color 0.15s, border-color 0.15s',
-  },
-  btnDisabled: {
-    opacity: 0.25,
-    cursor: 'not-allowed',
-  },
-  sliderWrap: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 6,
-  },
-  meta: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  date: {
-    fontSize: 12,
-    fontWeight: 500,
-    color: '#F5A623',
-    letterSpacing: '0.04em',
-  },
-  counter: {
-    fontSize: 10,
-    color: 'rgba(255,255,255,0.25)',
-    letterSpacing: '0.06em',
-  },
+/* ─── design tokens ───────────────────────────────────────────── */
+const T = {
+  bg:       '#06080C',
+  surface:  '#0B0F16',
+  elevated: '#111720',
+  border:   'rgba(255,255,255,0.07)',
+  borderHi: 'rgba(255,255,255,0.18)',
+  amber:    '#F0A500',
+  amberDim: 'rgba(240,165,0,0.15)',
+  amberMid: 'rgba(240,165,0,0.35)',
+  textHi:   'rgba(255,255,255,0.90)',
+  textMid:  'rgba(255,255,255,0.45)',
+  textLo:   'rgba(255,255,255,0.20)',
 };
 
+const monoFont = "'IBM Plex Mono', 'Fira Code', 'Consolas', monospace";
+
+/* ─── helpers ─────────────────────────────────────────────────── */
+// How many side-slots are visible (each side of selected)
+const SIDE_VISIBLE = 3;
+const TOTAL_VISIBLE = SIDE_VISIBLE * 2 + 1; // 7 slots
+
+// Format date string to compact display: "2024-03-15" → "15 MAR"
+function fmtShort(d) {
+  if (!d) return '—';
+  const parts = d.split('-');
+  if (parts.length < 3) return d;
+  const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  return `${parts[2]} ${months[parseInt(parts[1], 10) - 1] ?? ''}`;
+}
+
+function fmtFull(d) {
+  if (!d) return '—';
+  const parts = d.split('-');
+  if (parts.length < 3) return d;
+  const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+  return `${parts[2]} ${months[parseInt(parts[1], 10) - 1] ?? ''} ${parts[0]}`;
+}
+
+/* ─── Component ───────────────────────────────────────────────── */
 export default function DateSlider({ dates = [], selectedDate, onChange }) {
+  const railRef = useRef(null);
+
   const selectedIndex = useMemo(() => {
     if (!dates.length) return 0;
     const idx = dates.findIndex((d) => d === selectedDate);
     return idx >= 0 ? idx : 0;
   }, [dates, selectedDate]);
 
-  const goPrevious = () => { if (selectedIndex > 0) onChange(dates[selectedIndex - 1]); };
-  const goNext     = () => { if (selectedIndex < dates.length - 1) onChange(dates[selectedIndex + 1]); };
+  const goPrevious = useCallback(() => {
+    if (selectedIndex > 0) onChange(dates[selectedIndex - 1]);
+  }, [selectedIndex, dates, onChange]);
+
+  const goNext = useCallback(() => {
+    if (selectedIndex < dates.length - 1) onChange(dates[selectedIndex + 1]);
+  }, [selectedIndex, dates, onChange]);
+
+  // Keyboard nav
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); goPrevious(); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); goNext(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [goPrevious, goNext]);
 
   if (!dates.length) {
     return (
-      <div style={s.wrap}>
-        <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.06em' }}>NO DATES</span>
+      <div style={{
+        background: T.surface,
+        border: `1px solid ${T.border}`,
+        padding: '12px 16px',
+        fontFamily: monoFont,
+        fontSize: 10,
+        color: T.textLo,
+        letterSpacing: '0.10em',
+      }}>
+        NO DATES
       </div>
     );
   }
 
+  const progress = dates.length > 1 ? selectedIndex / (dates.length - 1) : 0;
+
+  // Build the 7-slot window centred on selectedIndex
+  const slots = Array.from({ length: TOTAL_VISIBLE }, (_, i) => {
+    const offset = i - SIDE_VISIBLE; // -3 … +3
+    const idx    = selectedIndex + offset;
+    return {
+      offset,
+      idx,
+      date: idx >= 0 && idx < dates.length ? dates[idx] : null,
+    };
+  });
+
   return (
-    <div style={s.wrap}>
-      <style>{`
-        .terminal-slider {
-          -webkit-appearance: none;
-          appearance: none;
-          width: 100%;
-          height: 2px;
-          background: rgba(255,255,255,0.08);
-          outline: none;
-          cursor: pointer;
-        }
-        .terminal-slider::-webkit-slider-thumb {
-          -webkit-appearance: none;
-          width: 12px;
-          height: 12px;
-          background: #F5A623;
-          border-radius: 0;
-          cursor: pointer;
-        }
-        .terminal-slider::-moz-range-thumb {
-          width: 12px;
-          height: 12px;
-          background: #F5A623;
-          border-radius: 0;
-          cursor: pointer;
-          border: none;
-        }
-        .terminal-slider::-webkit-slider-runnable-track {
-          background: linear-gradient(
-            to right,
-            rgba(245,166,35,0.5) 0%,
-            rgba(245,166,35,0.5) calc(${(selectedIndex / Math.max(dates.length - 1, 1)) * 100}%),
-            rgba(255,255,255,0.08) calc(${(selectedIndex / Math.max(dates.length - 1, 1)) * 100}%)
-          );
-        }
-        .terminal-nav-btn:hover:not(:disabled) { color: #F5A623 !important; border-color: rgba(245,166,35,0.4) !important; }
-      `}</style>
-
-      <button
-        className="terminal-nav-btn"
-        onClick={goPrevious}
-        disabled={selectedIndex === 0}
-        style={{ ...s.btn, ...(selectedIndex === 0 ? s.btnDisabled : {}) }}
-      >
-        ◀
-      </button>
-
-      <div style={s.sliderWrap}>
-        <div style={s.meta}>
-          <span style={s.date}>{selectedDate}</span>
-          <span style={s.counter}>
-            {selectedIndex + 1} / {dates.length}
+    <div
+      style={{
+        background: T.surface,
+        border: `1px solid ${T.border}`,
+        borderTop: `1px solid ${T.borderHi}`,
+        fontFamily: monoFont,
+        userSelect: 'none',
+        width: '100%',
+        boxSizing: 'border-box',
+      }}
+    >
+      {/* ── Top strip: progress bar + meta ─────────────────────── */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '8px 16px 0',
+        gap: 12,
+      }}>
+        {/* Selected date — large anchor */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{
+            fontSize: 13,
+            fontWeight: 700,
+            color: T.amber,
+            letterSpacing: '0.08em',
+          }}>
+            {fmtFull(selectedDate)}
+          </span>
+          <span style={{
+            fontSize: 9,
+            color: T.textLo,
+            letterSpacing: '0.12em',
+          }}>
+            EXPIRY DATE
           </span>
         </div>
-        <input
-          type="range"
-          className="terminal-slider"
-          min={0}
-          max={dates.length - 1}
-          step={1}
-          value={selectedIndex}
-          onChange={(e) => { const d = dates[Number(e.target.value)]; if (d) onChange(d); }}
-        />
+
+        {/* Counter + position indicator */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{
+            fontSize: 9,
+            color: T.textLo,
+            letterSpacing: '0.10em',
+          }}>
+            {selectedIndex + 1} <span style={{ color: T.textLo, opacity: 0.5 }}>/</span> {dates.length}
+          </span>
+          {/* Mini dot-track — compressed to MAX_DOTS buckets so it never overflows */}
+          {(() => {
+            const MAX_DOTS = 350;
+            const total    = dates.length;
+            // How many real dates each dot represents (always ≥ 1)
+            const ratio    = Math.ceil(total / MAX_DOTS);
+            const dotCount = Math.ceil(total / ratio);
+            // Which bucket is the selected index in?
+            const activeBucket = Math.floor(selectedIndex / ratio);
+
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                {Array.from({ length: dotCount }, (_, b) => {
+                  const isActive = b === activeBucket;
+                  // Is this bucket entirely before the selected index?
+                  const bucketEnd = (b + 1) * ratio - 1;
+                  const isPast    = bucketEnd < selectedIndex && !isActive;
+                  return (
+                    <div
+                      key={b}
+                      onClick={() => {
+                        // Jump to the first date in this bucket
+                        const targetIdx = Math.min(b * ratio, total - 1);
+                        onChange(dates[targetIdx]);
+                      }}
+                      style={{
+                        width:  isActive ? 10 : 3,
+                        height: 3,
+                        background: isActive
+                          ? T.amber
+                          : isPast
+                          ? 'rgba(240,165,0,0.30)'
+                          : T.border,
+                        cursor: 'pointer',
+                        transition: 'width 0.15s, background 0.15s',
+                        flexShrink: 0,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
       </div>
 
-      <button
-        className="terminal-nav-btn"
-        onClick={goNext}
-        disabled={selectedIndex === dates.length - 1}
-        style={{ ...s.btn, ...(selectedIndex === dates.length - 1 ? s.btnDisabled : {}) }}
-      >
-        ▶
-      </button>
+      {/* ── Progress bar ───────────────────────────────────────── */}
+      <div style={{ padding: '6px 16px 0' }}>
+        <div
+          style={{
+            width: '100%',
+            height: 1,
+            background: T.border,
+            position: 'relative',
+            cursor: 'pointer',
+          }}
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const ratio = (e.clientX - rect.left) / rect.width;
+            const idx = Math.round(ratio * (dates.length - 1));
+            const clamped = Math.max(0, Math.min(dates.length - 1, idx));
+            onChange(dates[clamped]);
+          }}
+        >
+          {/* filled portion */}
+          <div style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            height: '100%',
+            width: `${progress * 100}%`,
+            background: T.amberMid,
+          }} />
+          {/* thumb */}
+          <div style={{
+            position: 'absolute',
+            top: '50%',
+            left: `${progress * 100}%`,
+            transform: 'translate(-50%, -50%)',
+            width: 8,
+            height: 8,
+            background: T.amber,
+            border: `1px solid ${T.bg}`,
+          }} />
+        </div>
+      </div>
+
+      {/* ── Date rail ──────────────────────────────────────────── */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'stretch',
+        marginTop: 8,
+        borderTop: `1px solid ${T.border}`,
+      }}>
+        {/* Prev button */}
+        <button
+          onClick={goPrevious}
+          disabled={selectedIndex === 0}
+          style={{
+            width: 36,
+            background: 'transparent',
+            border: 'none',
+            borderRight: `1px solid ${T.border}`,
+            color: selectedIndex === 0 ? T.textLo : T.textMid,
+            fontSize: 10,
+            cursor: selectedIndex === 0 ? 'not-allowed' : 'pointer',
+            opacity: selectedIndex === 0 ? 0.3 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'color 0.1s',
+            flexShrink: 0,
+          }}
+          onMouseEnter={e => { if (selectedIndex > 0) e.currentTarget.style.color = T.amber; }}
+          onMouseLeave={e => { e.currentTarget.style.color = selectedIndex === 0 ? T.textLo : T.textMid; }}
+        >
+          ◀
+        </button>
+
+        {/* 7-slot windowed date rail */}
+        <div
+          ref={railRef}
+          style={{
+            flex: 1,
+            display: 'grid',
+            gridTemplateColumns: `repeat(${TOTAL_VISIBLE}, 1fr)`,
+            overflow: 'hidden',
+          }}
+        >
+          {slots.map(({ offset, idx, date }) => {
+            const isSelected = offset === 0;
+            const isEdge     = Math.abs(offset) === SIDE_VISIBLE;
+            const exists     = date != null;
+            const opacity    = exists
+              ? isSelected ? 1
+              : isEdge     ? 0.35
+              : 1 - Math.abs(offset) * 0.18
+              : 0.15;
+
+            return (
+              <div
+                key={offset}
+                onClick={() => exists && onChange(date)}
+                style={{
+                  padding: '9px 4px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 3,
+                  cursor: exists ? 'pointer' : 'default',
+                  opacity,
+                  background: isSelected ? T.amberDim : 'transparent',
+                  borderLeft:  isSelected ? `1px solid ${T.amberMid}` : `1px solid ${T.border}`,
+                  borderRight: isSelected ? `1px solid ${T.amberMid}` : 'none',
+                  transition: 'background 0.1s',
+                  position: 'relative',
+                }}
+                onMouseEnter={e => {
+                  if (exists && !isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
+                }}
+                onMouseLeave={e => {
+                  if (!isSelected) e.currentTarget.style.background = 'transparent';
+                }}
+              >
+                {/* Amber top border on selected */}
+                {isSelected && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: 2,
+                    background: T.amber,
+                  }} />
+                )}
+
+                <span style={{
+                  fontSize: isSelected ? 11 : 10,
+                  fontWeight: isSelected ? 700 : 400,
+                  color: isSelected ? T.amber : T.textMid,
+                  letterSpacing: '0.06em',
+                  lineHeight: 1,
+                }}>
+                  {exists ? fmtShort(date) : '·'}
+                </span>
+
+                {/* Offset label: T-1, T+1 etc */}
+                {exists && !isSelected && (
+                  <span style={{
+                    fontSize: 8,
+                    color: T.textLo,
+                    letterSpacing: '0.08em',
+                  }}>
+                    {offset < 0 ? `T${offset}` : `T+${offset}`}
+                  </span>
+                )}
+                {isSelected && (
+                  <span style={{
+                    fontSize: 8,
+                    color: T.amber,
+                    letterSpacing: '0.10em',
+                    opacity: 0.7,
+                  }}>
+                    T
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Next button */}
+        <button
+          onClick={goNext}
+          disabled={selectedIndex === dates.length - 1}
+          style={{
+            width: 36,
+            background: 'transparent',
+            border: 'none',
+            borderLeft: `1px solid ${T.border}`,
+            color: selectedIndex === dates.length - 1 ? T.textLo : T.textMid,
+            fontSize: 10,
+            cursor: selectedIndex === dates.length - 1 ? 'not-allowed' : 'pointer',
+            opacity: selectedIndex === dates.length - 1 ? 0.3 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'color 0.1s',
+            flexShrink: 0,
+          }}
+          onMouseEnter={e => { if (selectedIndex < dates.length - 1) e.currentTarget.style.color = T.amber; }}
+          onMouseLeave={e => { e.currentTarget.style.color = selectedIndex === dates.length - 1 ? T.textLo : T.textMid; }}
+        >
+          ▶
+        </button>
+      </div>
     </div>
   );
 }

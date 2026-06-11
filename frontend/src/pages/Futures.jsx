@@ -162,11 +162,11 @@ function TerminalTh({ children }) {
     <th style={{
       padding: '7px 14px',
       textAlign: 'left',
-      fontSize: 9,
+      fontSize: 11,
       fontWeight: 700,
       letterSpacing: '0.14em',
       textTransform: 'uppercase',
-      color: T.textLo,
+      color: T.textHi,
     }}>
       {children}
     </th>
@@ -204,12 +204,21 @@ function PanelHeader({ title, meta, onExport }) {
 
 /* ─────────────────────────────────────────────────────────────────
    ANALYTICS PANEL
+   — activeTab is now lifted to the page level and passed in as a prop
+   — expiry tabs and metric strip are rendered by the parent (page),
+     not here, so this component only renders chart or table content
 ───────────────────────────────────────────────────────────────── */
-function AnalyticsPanel({ assetType, ticker, expiry, allExpiries }) {
-  const [data, setData]           = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState('');
-  const [activeTab, setActiveTab] = useState('table');
+function AnalyticsPanel({
+  assetType,
+  ticker,
+  expiry,
+  allExpiries,
+  validChartExpiries,
+  activeTab,            // 'table' | 'chart'  — controlled by parent
+}) {
+  const [data, setData]       = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
 
   useEffect(() => {
     if (!ticker || !expiry) return;
@@ -270,9 +279,23 @@ function AnalyticsPanel({ assetType, ticker, expiry, allExpiries }) {
     </div>
   );
 
+  /* ── OI Chart tab ── */
+  if (activeTab === 'chart') {
+    return (
+      <ScreenerOIChart
+        assetType={assetType}
+        ticker={ticker}
+        allExpiries={validChartExpiries}
+        selectedCycles={validChartExpiries.slice(0, 5)}
+        allDates={[]}
+      />
+    );
+  }
+
+  /* ── Rolling Table tab ── */
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* Metric cards — reuse existing MetricCard component */}
+      {/* Metric cards */}
       <div style={{ display: 'flex', border: `1px solid ${T.border}`, overflow: 'hidden' }}>
         <MetricCard
           title="Max OI (cycle)"
@@ -296,125 +319,108 @@ function AnalyticsPanel({ assetType, ticker, expiry, allExpiries }) {
         />
       </div>
 
-      {/* Tab bar */}
-      <div style={{ display: 'flex', gap: 4 }}>
-        <TerminalBtn active={activeTab === 'table'} onClick={() => setActiveTab('table')}>
-          Rolling Table
-        </TerminalBtn>
-        <TerminalBtn active={activeTab === 'chart'} onClick={() => setActiveTab('chart')} color="#92D050">
-          OI Chart
-        </TerminalBtn>
-      </div>
-
-      {activeTab === 'chart' && (
-        <OIChart
-          assetType={assetType}
-          ticker={ticker}
-          expiries={allExpiries}
-          mode="ticker"
+      {/* Table */}
+      <div style={panelStyle}>
+        <PanelHeader
+          title={`Rolling Analytics — ${ticker} / ${expiry}`}
+          onExport={() => {
+            const headers = ['Date','Close','Prev Close','Chng Price','Chng Price %','Chng OI','Chng OI %','Basis','CoC %','Vol/OI','DTE','Signal'];
+            const csvRows = [...data].reverse().map((row) => [
+              row.trade_date, row.close ?? '', row.prev_close ?? '',
+              row.chng_in_price ?? '', row.chng_price_per ?? '',
+              row.chng_in_oi ?? '', row.chng_oi_per ?? '',
+              row.basis ?? '',
+              row.cost_of_carry != null ? (row.cost_of_carry * 100).toFixed(2) : '',
+              row.volume_oi_ratio != null ? Number(row.volume_oi_ratio).toFixed(3) : '',
+              row.days_to_expiry ?? '', row.quadrant ?? '',
+            ].join(','));
+            const csv  = [headers.join(','), ...csvRows].join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement('a');
+            a.href = url; a.download = `futures_analytics_${ticker}_${expiry}.csv`;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a); URL.revokeObjectURL(url);
+          }}
         />
-      )}
-
-      {activeTab === 'table' && (
-        <div style={panelStyle}>
-          <PanelHeader
-            title={`Rolling Analytics — ${ticker} / ${expiry}`}
-            onExport={() => {
-              const headers = ['Date','Close','Prev Close','Chng Price','Chng Price %','Chng OI','Chng OI %','Basis','CoC %','Vol/OI','DTE','Signal'];
-              const csvRows = [...data].reverse().map((row) => [
-                row.trade_date, row.close ?? '', row.prev_close ?? '',
-                row.chng_in_price ?? '', row.chng_price_per ?? '',
-                row.chng_in_oi ?? '', row.chng_oi_per ?? '',
-                row.basis ?? '',
-                row.cost_of_carry != null ? (row.cost_of_carry * 100).toFixed(2) : '',
-                row.volume_oi_ratio != null ? Number(row.volume_oi_ratio).toFixed(3) : '',
-                row.days_to_expiry ?? '', row.quadrant ?? '',
-              ].join(','));
-              const csv  = [headers.join(','), ...csvRows].join('\n');
-              const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-              const url  = URL.createObjectURL(blob);
-              const a    = document.createElement('a');
-              a.href = url; a.download = `futures_analytics_${ticker}_${expiry}.csv`;
-              document.body.appendChild(a); a.click();
-              document.body.removeChild(a); URL.revokeObjectURL(url);
-            }}
-          />
-          <div style={{ overflowX: 'auto' }}>
-            <TerminalTable>
-              <thead>
-                <TerminalTr header>
-                  <TerminalTh>Date</TerminalTh><TerminalTh>Close</TerminalTh>
-                  <TerminalTh>Chng Price</TerminalTh><TerminalTh>Chng %</TerminalTh>
-                  <TerminalTh>OI</TerminalTh><TerminalTh>Chng OI</TerminalTh>
-                  <TerminalTh>Chng OI %</TerminalTh><TerminalTh>Basis</TerminalTh>
-                  <TerminalTh>CoC %</TerminalTh><TerminalTh>Vol/OI</TerminalTh>
-                  <TerminalTh>DTE</TerminalTh><TerminalTh>Signal</TerminalTh>
-                </TerminalTr>
-              </thead>
-              <tbody>
-                {[...data].reverse().map((row) => {
-                  const meta = QUADRANT_META[row.quadrant] ?? QUADRANT_META.long_buildup;
-                  return (
-                    <TerminalTr key={row.trade_date}>
-                      <TerminalTd accent={T.textLo}>{row.trade_date}</TerminalTd>
-                      <TerminalTd accent={T.textHi}>{formatCurrency(row.close, 2)}</TerminalTd>
-                      <TerminalTd accent={row.chng_in_price >= 0 ? T.green : T.red}>
-                        {row.chng_in_price >= 0 ? '+' : ''}{formatNumber(row.chng_in_price, 2)}
-                      </TerminalTd>
-                      <TerminalTd accent={row.chng_price_per >= 0 ? T.green : T.red}>
-                        {formatPercent(row.chng_price_per)}
-                      </TerminalTd>
-                      <TerminalTd accent={row.open_int >= 0 ? T.green : T.red}>
-                        {formatNumber(row.open_int)}
-                      </TerminalTd>
-                      <TerminalTd accent={row.chng_in_oi >= 0 ? T.green : T.red}>
-                        {row.chng_in_oi >= 0 ? '+' : ''}{formatNumber(row.chng_in_oi)}
-                      </TerminalTd>
-                      <TerminalTd accent={row.chng_oi_per >= 0 ? T.green : T.red}>
-                        {formatPercent(row.chng_oi_per)}
-                      </TerminalTd>
-                      <TerminalTd accent={row.basis >= 0 ? T.green : T.red}>
-                        {formatNumber(row.basis, 2)}
-                      </TerminalTd>
-                      <TerminalTd>{row.cost_of_carry != null ? `${(Number(row.cost_of_carry) * 100).toFixed(2)}%` : '--'}</TerminalTd>
-                      <TerminalTd>{row.volume_oi_ratio != null ? Number(row.volume_oi_ratio).toFixed(3) : '--'}</TerminalTd>
-                      <TerminalTd accent={T.textLo}>{row.days_to_expiry ?? '--'}</TerminalTd>
-                      <TerminalTd>
-                        <span style={{
-                          padding: '2px 7px',
-                          fontSize: 9,
-                          fontWeight: 700,
-                          letterSpacing: '0.10em',
-                          textTransform: 'uppercase',
-                          color: meta.color,
-                          background: `${meta.color}18`,
-                          border: `1px solid ${meta.color}30`,
-                        }}>
-                          {meta.label ?? row.quadrant}
-                        </span>
-                      </TerminalTd>
-                    </TerminalTr>
-                  );
-                })}
-              </tbody>
-            </TerminalTable>
-          </div>
+        <div style={{ overflowX: 'auto' }}>
+          <TerminalTable>
+            <thead>
+              <TerminalTr header>
+                <TerminalTh>Date</TerminalTh><TerminalTh>Close</TerminalTh>
+                <TerminalTh>Chng Price</TerminalTh><TerminalTh>Chng %</TerminalTh>
+                <TerminalTh>OI</TerminalTh><TerminalTh>Chng OI</TerminalTh>
+                <TerminalTh>Chng OI %</TerminalTh><TerminalTh>Basis</TerminalTh>
+                <TerminalTh>CoC %</TerminalTh><TerminalTh>Vol/OI</TerminalTh>
+                <TerminalTh>DTE</TerminalTh><TerminalTh>Signal</TerminalTh>
+              </TerminalTr>
+            </thead>
+            <tbody>
+              {[...data].reverse().map((row) => {
+                const meta = QUADRANT_META[row.quadrant] ?? QUADRANT_META.long_buildup;
+                return (
+                  <TerminalTr key={row.trade_date}>
+                    <TerminalTd>{row.trade_date}</TerminalTd>
+                    <TerminalTd accent={T.textHi}>{formatCurrency(row.close, 2)}</TerminalTd>
+                    <TerminalTd accent={row.chng_in_price >= 0 ? T.green : T.red}>
+                      {row.chng_in_price >= 0 ? '+' : ''}{formatNumber(row.chng_in_price, 2)}
+                    </TerminalTd>
+                    <TerminalTd accent={row.chng_price_per >= 0 ? T.green : T.red}>
+                      {formatPercent(row.chng_price_per)}
+                    </TerminalTd>
+                    <TerminalTd accent={row.open_int >= 0 ? T.green : T.red}>
+                      {formatNumber(row.open_int)}
+                    </TerminalTd>
+                    <TerminalTd accent={row.chng_in_oi >= 0 ? T.green : T.red}>
+                      {row.chng_in_oi >= 0 ? '+' : ''}{formatNumber(row.chng_in_oi)}
+                    </TerminalTd>
+                    <TerminalTd accent={row.chng_oi_per >= 0 ? T.green : T.red}>
+                      {formatPercent(row.chng_oi_per)}
+                    </TerminalTd>
+                    <TerminalTd accent={row.basis >= 0 ? T.green : T.red}>
+                      {formatNumber(row.basis, 2)}
+                    </TerminalTd>
+                    <TerminalTd>{row.cost_of_carry != null ? `${(Number(row.cost_of_carry) * 100).toFixed(2)}%` : '--'}</TerminalTd>
+                    <TerminalTd>{row.volume_oi_ratio != null ? Number(row.volume_oi_ratio).toFixed(3) : '--'}</TerminalTd>
+                    <TerminalTd accent={T.textLo}>{row.days_to_expiry ?? '--'}</TerminalTd>
+                    <TerminalTd>
+                      <span style={{
+                        padding: '2px 7px',
+                        fontSize: 9,
+                        fontWeight: 700,
+                        letterSpacing: '0.10em',
+                        textTransform: 'uppercase',
+                        color: meta.color,
+                        background: `${meta.color}18`,
+                        border: `1px solid ${meta.color}30`,
+                      }}>
+                        {meta.label ?? row.quadrant}
+                      </span>
+                    </TerminalTd>
+                  </TerminalTr>
+                );
+              })}
+            </tbody>
+          </TerminalTable>
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   ROLLUP PANEL
+   ROLLUP PANEL  (Market Screener — untouched)
 ───────────────────────────────────────────────────────────────── */
 function RollupPanel({
   assetType,
   allDates,
   marketDates,
+  relevantMarketDates,
   screenerExpiries,
   chartSelectedExpiries,
+  onChartExpiriesChange,
   allScreenerExpiries,
+  validChartExpiries,
   chartTicker,
   activeScreenerExpiry,
   onScreenerExpiryChange,
@@ -490,9 +496,10 @@ function RollupPanel({
       <ScreenerOIChart
         assetType={assetType}
         ticker={chartTicker}
-        allExpiries={allScreenerExpiries}
+        allExpiries={validChartExpiries}
         selectedCycles={chartSelectedExpiries}
-        allDates={marketDates}
+        allDates={relevantMarketDates}
+        isCombined={chartTicker === FUTURES_COMBINED_TICKER}
       />
     );
   }
@@ -502,16 +509,36 @@ function RollupPanel({
 
       {/* Expiry tabs */}
       {screenerExpiries.length > 0 && (
-        <div style={{ display: 'flex', gap: 4, overflowX: 'auto', paddingBottom: 2 }}>
+        <div style={{
+          display: 'flex',
+          gap: 0,
+          borderBottom: `1px solid ${T.border}`,
+          overflowX: 'auto',
+        }}>
           {screenerExpiries.map((expiry) => (
-            <TerminalBtn
+            <button
               key={expiry}
-              active={activeScreenerExpiry === expiry}
               onClick={() => onScreenerExpiryChange(expiry)}
-              color={T.amber}
+              style={{
+                padding: '8px 18px',
+                fontSize: 10,
+                letterSpacing: '0.09em',
+                fontWeight: activeScreenerExpiry === expiry ? 700 : 400,
+                color: activeScreenerExpiry === expiry ? T.amber : T.textMid,
+                background: activeScreenerExpiry === expiry ? T.amberDim : 'transparent',
+                border: 'none',
+                borderBottom: activeScreenerExpiry === expiry ? `2px solid ${T.amber}` : '2px solid transparent',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                textTransform: 'uppercase',
+                transition: 'color 0.15s, background 0.15s',
+                marginBottom: -1,
+                borderRadius: 0,
+                fontFamily: 'inherit',
+              }}
             >
               {expiry}
-            </TerminalBtn>
+            </button>
           ))}
         </div>
       )}
@@ -603,7 +630,7 @@ function RollupPanel({
                     <TerminalTr key={`${row.ticker}-${row.expiry}`}>
                       <TerminalTd accent={T.textGhost}>{idx + 1}</TerminalTd>
                       <TerminalTd accent={T.amber} bold>{row.ticker}</TerminalTd>
-                      <TerminalTd accent={T.textLo}>{row.expiry}</TerminalTd>
+                      <TerminalTd>{row.expiry}</TerminalTd>
                       <TerminalTd accent={T.textHi}>{formatCurrency(row.close, 2)}</TerminalTd>
                       <TerminalTd accent={row.chng_in_price >= 0 ? T.green : T.red}>
                         {row.chng_in_price >= 0 ? '+' : ''}{formatNumber(row.chng_in_price, 2)}
@@ -680,7 +707,10 @@ function ExpiryDropdown({ expiries, selectedExpiries, onToggle, singleSelect, ma
       </div>
       {open && (
         <div style={{
-          position: 'absolute', zIndex: 9999, marginTop: 34,
+          position: 'fixed',
+          top: (() => { const r = triggerRef.current?.getBoundingClientRect(); return r ? r.bottom + 2 : 0; })(),
+          left: (() => { const r = triggerRef.current?.getBoundingClientRect(); return r ? r.left : 0; })(),
+          zIndex: 9999,
           minWidth: 200, maxHeight: 300, overflowY: 'auto',
           background: '#0b0f16', border: `1px solid ${T.borderHi}`,
           boxShadow: '0 12px 40px rgba(0,0,0,0.7)',
@@ -734,6 +764,9 @@ export default function Futures({ assetType = 'stock_futures' }) {
   const [chartSelectedExpiries, setChartSelectedExpiries]   = useState([]);
   const [screenerTab, setScreenerTab]           = useState('screener');
 
+  // ── Ticker Analytics sub-tab (lifted out of AnalyticsPanel) ──
+  const [analyticsTab, setAnalyticsTab]         = useState('table'); // 'table' | 'chart'
+
   const validChartExpiries = useMemo(() => {
     if (!allExpiries.length) return [];
     const today = new Date();
@@ -753,15 +786,15 @@ export default function Futures({ assetType = 'stock_futures' }) {
     );
   }, [marketDates, chartSelectedExpiries, allExpiries]);
 
-  const chartTicker = useMemo(() => {
-    return selectedTicker || tickerList[0] || '';
-  }, [screenerTab, selectedTicker, tickerList]);
-
-  const displayTickerList = useMemo(() =>
-    (mode === 'screener' && screenerTab === 'charts')
-      ? [...tickerList, FUTURES_COMBINED_TICKER]
-      : tickerList,
-  [tickerList, mode, screenerTab]);
+  // displayTickerList: mirrors Options.jsx pattern — prepend FUTURES_COMBINED_TICKER
+  // only when in screener/charts tab (ScreenerOIChart supports combined),
+  // and use the plain tickerList everywhere else.
+  const displayTickerList = useMemo(() => {
+    if (screenerTab == 'charts') {
+      return [...tickerList, FUTURES_COMBINED_TICKER];
+    }
+    return tickerList;
+  }, [tickerList, mode, screenerTab]);
 
   const screenerThreeExpiries = useMemo(() => {
     if (!screenerSelectedExpiry || !allExpiries.length) return [];
@@ -794,6 +827,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
     setChartSelectedExpiries([]);
     setMode('screener');
     setScreenerTab('screener');
+    setAnalyticsTab('table');
     setError('');
     setLoading(true);
   }, [assetType]);
@@ -872,11 +906,9 @@ export default function Futures({ assetType = 'stock_futures' }) {
     }
   }, [selectedExpiries, activeExpiry]);
 
+  // When leaving screener/charts tab, clear FUTURES_COMBINED_TICKER from selection
   useEffect(() => {
-    if (
-      !(mode === 'screener' && screenerTab === 'charts') &&
-      selectedTicker === FUTURES_COMBINED_TICKER
-    ) {
+    if (selectedTicker === FUTURES_COMBINED_TICKER && !(mode === 'screener' && screenerTab === 'charts')) {
       setSelectedTicker(tickerList[0] || '');
     }
   }, [mode, screenerTab, selectedTicker, tickerList]);
@@ -922,7 +954,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
                   boxSizing: 'border-box',
                 }}
               >
-                {(mode === 'screener' && screenerTab === 'charts' ? displayTickerList : tickerList).map((t) => (
+                {displayTickerList.map((t) => (
                   <option key={t} value={t} style={{ background: T.surface }}>{t}</option>
                 ))}
               </select>
@@ -930,7 +962,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
             </div>
           </div>
 
-          {/* Mode (where Metric lives in Options) */}
+          {/* Mode */}
           <div style={cellStyle({ flex: 1 })}>
             <span style={sectionLabel({ marginBottom: 1 })}>Mode</span>
             <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -944,7 +976,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
           </div>
         </div>
 
-        {/* ROW 2: Expiry dropdown + chips + sub-tabs */}
+        {/* ROW 2: Expiry dropdown + chips + sub-tabs (screener only) */}
         <div style={{ ...rowStyle, borderBottom: `2px solid ${T.border}` }}>
 
           {/* Expiry dropdown */}
@@ -1008,37 +1040,14 @@ export default function Futures({ assetType = 'stock_futures' }) {
             </div>
           ) : null}
 
-          {/* Sub-tabs (screener) pushed right */}
+          {/* Screener sub-tabs pushed right — only in screener mode */}
           {mode === 'screener' && (
             <div style={{ ...cellStyle({ marginLeft: 'auto', borderRight: 'none' }), flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <TerminalBtn active={screenerTab === 'screener'} color={T.amber} onClick={() => setScreenerTab('screener')}>Screener</TerminalBtn>
-              <TerminalBtn active={screenerTab === 'charts'} color="#92D050" onClick={() => setScreenerTab('charts')}>Charts</TerminalBtn>
+              <TerminalBtn active={screenerTab === 'charts'} color="#92D050" onClick={() => { console.log('charts clicked'); setScreenerTab('charts'); }}>Charts</TerminalBtn>
             </div>
           )}
         </div>
-
-        {/* Expiry tab row — analytics mode only */}
-        {mode === 'expiry' && selectedExpiries.length > 0 && (
-          <div style={{ display: 'flex', gap: 0, borderBottom: `2px solid ${T.border}`, overflowX: 'auto', background: T.surface }}>
-            {selectedExpiries.map((expiry) => (
-              <button
-                key={expiry}
-                onClick={() => setActiveExpiry(expiry)}
-                style={{
-                  padding: '8px 18px', fontSize: 10, letterSpacing: '0.09em',
-                  fontWeight: activeExpiry === expiry ? 700 : 400,
-                  color: activeExpiry === expiry ? T.blue : T.textMid,
-                  background: activeExpiry === expiry ? `${T.blue}15` : 'transparent',
-                  border: 'none', borderBottom: activeExpiry === expiry ? `2px solid ${T.blue}` : '2px solid transparent',
-                  cursor: 'pointer', whiteSpace: 'nowrap', textTransform: 'uppercase',
-                  transition: 'color 0.15s', marginBottom: -2, borderRadius: 0, fontFamily: 'inherit',
-                }}
-              >
-                {expiry}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* ── PAGE HEADER ── */}
@@ -1092,6 +1101,34 @@ export default function Futures({ assetType = 'stock_futures' }) {
         </div>
       </div>
 
+      {/* ── ANALYTICS SUB-TAB ROW (Ticker Analytics mode only) ── */}
+      {mode === 'expiry' && (
+        <div style={{
+          background: T.surface,
+          borderBottom: `1px solid ${T.border}`,
+          padding: '8px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          flexShrink: 0,
+        }}>
+          <TerminalBtn
+            active={analyticsTab === 'table'}
+            color={T.amber}
+            onClick={() => setAnalyticsTab('table')}
+          >
+            Rolling Table
+          </TerminalBtn>
+          <TerminalBtn
+            active={analyticsTab === 'chart'}
+            color="#92D050"
+            onClick={() => setAnalyticsTab('chart')}
+          >
+            OI Chart
+          </TerminalBtn>
+        </div>
+      )}
+
       {/* ── MAIN CONTENT ── */}
       <main style={{ flex: 1, padding: '16px 20px', overflowX: 'hidden' }}>
 
@@ -1101,10 +1138,13 @@ export default function Futures({ assetType = 'stock_futures' }) {
             assetType={assetType}
             allDates={allDates}
             marketDates={relevantMarketDates}
+            relevantMarketDates={relevantMarketDates}
             screenerExpiries={screenerThreeExpiries}
             chartSelectedExpiries={chartSelectedExpiries}
+            onChartExpiriesChange={setChartSelectedExpiries}
             allScreenerExpiries={allExpiries}
-            chartTicker={chartTicker}
+            validChartExpiries={validChartExpiries}
+            chartTicker={selectedTicker}
             activeScreenerExpiry={activeScreenerExpiry}
             onScreenerExpiryChange={setActiveScreenerExpiry}
             activeTab={screenerTab}
@@ -1129,14 +1169,58 @@ export default function Futures({ assetType = 'stock_futures' }) {
                 </span>
               </div>
             )}
-            {selectedExpiries.length > 0 && activeExpiry && (
-              <AnalyticsPanel
-                key={`${assetType}-${selectedTicker}-${activeExpiry}`}
-                assetType={assetType}
-                ticker={selectedTicker}
-                expiry={activeExpiry}
-                allExpiries={allExpiries}
-              />
+
+            {selectedExpiries.length > 0 && (
+              <>
+                {/* Expiry tabs — only show in Rolling Table mode */}
+                {analyticsTab === 'table' && (
+                  <div style={{
+                    display: 'flex',
+                    gap: 0,
+                    marginBottom: 14,
+                    borderBottom: `1px solid ${T.border}`,
+                    overflowX: 'auto',
+                  }}>
+                    {selectedExpiries.map((expiry) => (
+                      <button
+                        key={expiry}
+                        onClick={() => setActiveExpiry(expiry)}
+                        style={{
+                          padding: '8px 18px',
+                          fontSize: 10,
+                          letterSpacing: '0.09em',
+                          fontWeight: activeExpiry === expiry ? 700 : 400,
+                          color: activeExpiry === expiry ? T.amber : T.textMid,
+                          background: activeExpiry === expiry ? T.amberDim : 'transparent',
+                          border: 'none',
+                          borderBottom: activeExpiry === expiry ? `2px solid ${T.amber}` : '2px solid transparent',
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                          textTransform: 'uppercase',
+                          transition: 'color 0.15s, background 0.15s',
+                          marginBottom: -1,
+                          borderRadius: 0,
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        {expiry}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {activeExpiry && (
+                  <AnalyticsPanel
+                    key={`${assetType}-${selectedTicker}-${activeExpiry}-${analyticsTab}`}
+                    assetType={assetType}
+                    ticker={selectedTicker}
+                    expiry={activeExpiry}
+                    allExpiries={allExpiries}
+                    validChartExpiries={validChartExpiries}
+                    activeTab={analyticsTab}
+                  />
+                )}
+              </>
             )}
           </>
         )}

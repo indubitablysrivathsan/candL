@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 
 import {
+  getFuturesAnalytics,
   getFuturesCycleHistory,
   getFuturesCombinedHistory,
   getOptionsCycleHistory,
@@ -519,7 +520,7 @@ export function ScreenerOIChart({
     const fetcher = fetchHistory
       ? fetchHistory(assetType, ticker)
       : isCombined
-        ? getFuturesCombinedHistory(assetType, allDates, selectedCycles, orderedExpiries)
+        ? getFuturesCombinedHistory(assetType, allDates, selectedCycles, orderedExpiries, ticker)
         : getFuturesCycleHistory(assetType, ticker);
 
     fetcher
@@ -528,7 +529,7 @@ export function ScreenerOIChart({
 
     return () => { mounted = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assetType, ticker, fetchHistory, isCombined, allDates, selectedCycles]);
+  }, [assetType, ticker, fetchHistory, isCombined]);
 
   const chartData = useMemo(() => {
     const FRAME = Array.from({ length: 25 }, (_, i) => i - 24);

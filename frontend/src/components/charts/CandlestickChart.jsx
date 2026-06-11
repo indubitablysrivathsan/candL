@@ -1,18 +1,17 @@
 // frontend/src/components/charts/CandlestickChart.jsx
+//
+// Requires: npm install lightweight-charts
+//
+// Props:
+//   data            – array of { trade_date: 'YYYY-MM-DD', open, high, low, close, avg_price?, prev_close? }
+//   showCandles     – boolean
+//   showAvg         – boolean
+//   formatCurrency  – (value, decimals) => string
 
-import { useRef } from 'react';
-import {
-  ResponsiveContainer,
-  ComposedChart,
-  CartesianGrid,
-  XAxis,
-  YAxis,
-  Tooltip,
-  Line,
-  Bar,
-} from 'recharts';
+import { useEffect, useRef, useCallback } from 'react';
+import { createChart, CrosshairMode, LineStyle, CandlestickSeries, LineSeries } from 'lightweight-charts';
 
-/* ─── design tokens ───────────────────────────────────────────── */
+/* ─── Design tokens ────────────────────────────────────────────── */
 const T = {
   bg:       '#06080C',
   surface:  '#0B0F16',
@@ -25,244 +24,322 @@ const T = {
   textHi:   'rgba(255,255,255,0.90)',
   textMid:  'rgba(255,255,255,0.50)',
   textLo:   'rgba(255,255,255,0.25)',
-  grid:     'rgba(255,255,255,0.08)',
+  grid:     'rgba(255,255,255,0.06)',
   axis:     'rgba(255,255,255,0.12)',
 };
 
 const monoFont = "'IBM Plex Mono', 'Fira Code', 'Consolas', monospace";
 
-const tickStyle = {
-  fill: T.textMid,
-  fontSize: 10,
-  fontFamily: monoFont,
-  letterSpacing: '0.03em',
-};
-
-const fmt = (n, dec = 2) =>
-  n == null
-    ? '—'
-    : Number(n).toLocaleString('en-IN', { maximumFractionDigits: dec });
-
-/* ─── Tooltip ─────────────────────────────────────────────────── */
-function PriceTooltip({ active, payload, label, showCandles, showAvg, formatCurrency }) {
-  if (!active || !payload?.length) return null;
-  const row = payload[0]?.payload;
-  if (!row) return null;
-
-  const fields = [
-    showCandles && row.open  != null && { label: 'OPEN',  value: formatCurrency(row.open,  2), color: T.textMid },
-    showCandles && row.high  != null && { label: 'HIGH',  value: formatCurrency(row.high,  2), color: T.green   },
-    showCandles && row.low   != null && { label: 'LOW',   value: formatCurrency(row.low,   2), color: T.red     },
-    showCandles && row.close != null && { label: 'CLOSE', value: formatCurrency(row.close, 2), color: T.textHi  },
-    showAvg && row.avg_price != null && { label: 'AVG',   value: formatCurrency(row.avg_price, 2), color: T.amber },
-  ].filter(Boolean);
-
-  const change = row.prev_close != null && row.close != null
-    ? ((row.close - row.prev_close) / row.prev_close * 100).toFixed(2)
-    : null;
-
-  return (
-    <div style={{
-      background: T.elevated,
-      border: `1px solid ${T.borderHi}`,
-      padding: '10px 14px',
-      boxShadow: '0 8px 32px rgba(0,0,0,0.8)',
-      minWidth: 180,
-      fontFamily: monoFont,
-    }}>
-      <div style={{
-        fontSize: 9,
-        fontWeight: 700,
-        letterSpacing: '0.14em',
-        textTransform: 'uppercase',
-        color: T.textLo,
-        marginBottom: 8,
-        borderBottom: `1px solid ${T.border}`,
-        paddingBottom: 6,
-      }}>
-        {label}
-      </div>
-
-      {fields.map(({ label: name, value, color }) => (
-        <div key={name} style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 20,
-          fontSize: 11,
-          letterSpacing: '0.05em',
-          marginBottom: 4,
-        }}>
-          <span style={{ color: T.textMid, fontSize: 9, fontWeight: 700, letterSpacing: '0.12em' }}>
-            {name}
-          </span>
-          <span style={{ color, fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
-            {value}
-          </span>
-        </div>
-      ))}
-
-      {change != null && (
-        <div style={{
-          marginTop: 6,
-          paddingTop: 6,
-          borderTop: `1px solid ${T.border}`,
-          display: 'flex',
-          justifyContent: 'space-between',
-          fontSize: 9,
-          letterSpacing: '0.10em',
-        }}>
-          <span style={{ color: T.textLo, fontWeight: 700 }}>CHG</span>
-          <span style={{ color: parseFloat(change) >= 0 ? T.green : T.red, fontWeight: 700 }}>
-            {parseFloat(change) >= 0 ? '+' : ''}{change}%
-          </span>
-        </div>
-      )}
-    </div>
-  );
+/* ─── Tooltip DOM helper ───────────────────────────────────────── */
+function buildTooltipEl() {
+  const el = document.createElement('div');
+  Object.assign(el.style, {
+    position:    'absolute',
+    top:         '0',
+    left:        '0',
+    display:     'none',
+    zIndex:      '10',
+    pointerEvents: 'none',
+    background:  T.elevated,
+    border:      `1px solid ${T.borderHi}`,
+    padding:     '10px 14px',
+    boxShadow:   '0 8px 32px rgba(0,0,0,0.8)',
+    minWidth:    '180px',
+    fontFamily:  monoFont,
+  });
+  return el;
 }
 
-/* ─── Chart ───────────────────────────────────────────────────── */
+function renderTooltip(el, bar, showCandles, showAvg, formatCurrency) {
+  if (!bar) { el.style.display = 'none'; return; }
+
+  const { time, open, high, low, close, avg_price, prev_close } = bar;
+
+  const change = prev_close != null && close != null
+    ? ((close - prev_close) / prev_close * 100).toFixed(2)
+    : null;
+
+  const fields = [
+    showCandles && open  != null && { label: 'OPEN',  value: formatCurrency(open,  2), color: T.textMid },
+    showCandles && high  != null && { label: 'HIGH',  value: formatCurrency(high,  2), color: T.green   },
+    showCandles && low   != null && { label: 'LOW',   value: formatCurrency(low,   2), color: T.red     },
+    showCandles && close != null && { label: 'CLOSE', value: formatCurrency(close, 2), color: T.textHi  },
+    showAvg    && avg_price != null && { label: 'AVG', value: formatCurrency(avg_price, 2), color: T.amber },
+  ].filter(Boolean);
+
+  // Format date label: time is 'YYYY-MM-DD'
+  const dateLabel = typeof time === 'string' ? time.slice(5) : String(time);
+
+  el.innerHTML = `
+    <div style="
+      font-size:9px; font-weight:700; letter-spacing:0.14em;
+      text-transform:uppercase; color:${T.textLo};
+      margin-bottom:8px; border-bottom:1px solid ${T.border}; padding-bottom:6px;
+    ">${dateLabel}</div>
+    ${fields.map(({ label, value, color }) => `
+      <div style="
+        display:flex; justify-content:space-between; align-items:center;
+        gap:20px; font-size:11px; letter-spacing:0.05em; margin-bottom:4px;
+      ">
+        <span style="color:${T.textMid}; font-size:9px; font-weight:700; letter-spacing:0.12em;">${label}</span>
+        <span style="color:${color}; font-variant-numeric:tabular-nums; font-weight:600;">${value}</span>
+      </div>
+    `).join('')}
+    ${change != null ? `
+      <div style="
+        margin-top:6px; padding-top:6px; border-top:1px solid ${T.border};
+        display:flex; justify-content:space-between;
+        font-size:9px; letter-spacing:0.10em;
+      ">
+        <span style="color:${T.textLo}; font-weight:700;">CHG</span>
+        <span style="color:${parseFloat(change) >= 0 ? T.green : T.red}; font-weight:700;">
+          ${parseFloat(change) >= 0 ? '+' : ''}${change}%
+        </span>
+      </div>
+    ` : ''}
+  `;
+  el.style.display = 'block';
+}
+
+/* ─── Chart component ──────────────────────────────────────────── */
 export default function CandlestickChart({ data, showCandles, showAvg, formatCurrency }) {
-  // useRef so the map survives React StrictMode's double-invocation of render
-  // without being reset between CloseShape and LowShape calls
-  const pixelMapRef = useRef({});
-  const pixelMap = pixelMapRef.current;
+  const containerRef = useRef(null);
+  const chartRef     = useRef(null);
+  const candleRef    = useRef(null);
+  const avgRef       = useRef(null);
+  const tooltipRef   = useRef(null);
+  // Keep a fast lookup from time string → full data row for tooltip enrichment
+  const dataMapRef   = useRef({});
 
-  const CloseShape = (props) => {
-    const { x, y, index, payload } = props;
+  // stable ref so the crosshair handler doesn't go stale
+  const showCandlesRef = useRef(showCandles);
+  const showAvgRef     = useRef(showAvg);
+  showCandlesRef.current = showCandles;
+  showAvgRef.current     = showAvg;
 
-    if (x == null || isNaN(x) || y == null || isNaN(y)) return null;
+  /* ── Build/destroy chart on mount ─────────────────────────────── */
+  useEffect(() => {
+    if (!containerRef.current) return;
 
-    if (!pixelMap[index]) pixelMap[index] = {};
-    pixelMap[index].closeY   = y;
-    pixelMap[index].closeVal = payload?.close;
-    pixelMap[index].x        = x;
+    const chart = createChart(containerRef.current, {
+      width:  containerRef.current.clientWidth,
+      height: 560,
+      layout: {
+        background:   { color: T.surface },
+        textColor:    T.textMid,
+        fontFamily:   monoFont,
+        fontSize:     10,
+      },
+      grid: {
+        vertLines:   { color: T.grid,   style: LineStyle.Dotted },
+        horzLines:   { color: T.grid,   style: LineStyle.Dotted },
+      },
+      crosshair: {
+        mode:          CrosshairMode.Normal,
+        vertLine: {
+          color:        T.borderHi,
+          width:        1,
+          style:        LineStyle.Dashed,
+          labelVisible: true,
+          labelBackgroundColor: T.elevated,
+        },
+        horzLine: {
+          color:        T.borderHi,
+          width:        1,
+          style:        LineStyle.Dashed,
+          labelVisible: true,
+          labelBackgroundColor: T.elevated,
+        },
+      },
+      rightPriceScale: {
+        borderColor:        T.axis,
+        scaleMargins:       { top: 0.08, bottom: 0.08 },
+        minimumWidth:       72,
+        ticksVisible:       true,
+        borderVisible:      true,
+        entireTextOnly:     false,
+      },
+      timeScale: {
+        borderColor:              T.axis,
+        borderVisible:            true,
+        visible:                  true,
+        ticksVisible:             true,
+        timeVisible:              false,
+        secondsVisible:           false,
+        fixLeftEdge:              true,
+        fixRightEdge:             true,
+        tickMarkMaxCharacterLength: 6,
+      },
+      handleScroll: true,
+      handleScale:  true,
+    });
 
-    // Store prev index's x so we can compute slot width from the gap
-    if (index > 0 && pixelMap[index - 1]?.x != null) {
-      const slotWidth = x - pixelMap[index - 1].x;
-      pixelMap[index].slotWidth     = slotWidth;
-      pixelMap[index - 1].slotWidth = slotWidth; // back-fill prev
+    chartRef.current = chart;
+
+    // ── Tooltip overlay ───────────────────────────────────────────
+    const tooltipEl = buildTooltipEl();
+    containerRef.current.appendChild(tooltipEl);
+    tooltipRef.current = tooltipEl;
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.point || !param.time) {
+        tooltipEl.style.display = 'none';
+        return;
+      }
+
+      const timeKey = typeof param.time === 'object'
+        ? `${param.time.year}-${String(param.time.month).padStart(2,'0')}-${String(param.time.day).padStart(2,'0')}`
+        : String(param.time);
+
+      const row = dataMapRef.current[timeKey];
+      if (!row) { tooltipEl.style.display = 'none'; return; }
+
+      // Merge series data into row for tooltip
+      const candleSeries = candleRef.current;
+      const seriesData   = candleSeries ? param.seriesData?.get(candleSeries) : null;
+      const merged = {
+        ...row,
+        ...(seriesData || {}),
+        time: timeKey,
+      };
+
+      renderTooltip(tooltipEl, merged, showCandlesRef.current, showAvgRef.current, formatCurrency);
+
+      // Position tooltip: keep within container bounds
+      const { width: cw } = containerRef.current.getBoundingClientRect();
+      const tw = tooltipEl.offsetWidth || 180;
+      const left = param.point.x + 16 + tw > cw
+        ? param.point.x - tw - 8
+        : param.point.x + 16;
+      tooltipEl.style.left = `${left}px`;
+      tooltipEl.style.top  = `${Math.max(0, param.point.y - 60)}px`;
+    });
+
+    // ── Resize observer ───────────────────────────────────────────
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) chart.applyOptions({ width: entry.contentRect.width });
+    });
+    ro.observe(containerRef.current);
+
+    return () => {
+      ro.disconnect();
+      tooltipEl.remove();
+      chart.remove();
+      chartRef.current  = null;
+      candleRef.current = null;
+      avgRef.current    = null;
+      tooltipRef.current = null;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Sync data whenever it changes ──────────────────────────────── */
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !data?.length) return;
+
+    // Build lookup map for tooltip enrichment
+    const map = {};
+    data.forEach((row) => { map[row.trade_date] = row; });
+    dataMapRef.current = map;
+
+    // lightweight-charts supports per-bar color/borderColor/wickColor.
+    // Color  = close vs prev_close: green if up, red if down
+    // Fill   = close vs open:       hollow (transparent) if close>=open, filled if close<open
+    // This gives all 4 combinations: hollow-green, filled-green, hollow-red, filled-red
+    const ohlc = data
+      .filter((r) => r.open != null && r.high != null && r.low != null && r.close != null)
+      .map((r) => {
+        const sentiment  = r.prev_close != null ? r.close > r.prev_close : r.close >= r.open;
+        const accentColor = sentiment ? T.green : T.red;
+        const isHollow    = r.close >= r.open;
+        return {
+          time:        r.trade_date,
+          open:        r.open,
+          high:        r.high,
+          low:         r.low,
+          close:       r.close,
+          color:       isHollow ? 'transparent' : accentColor,
+          borderColor: accentColor,
+          wickColor:   accentColor,
+        };
+      })
+      .sort((a, b) => (a.time < b.time ? -1 : 1));
+
+    const lineData = data
+      .filter((r) => r.avg_price != null)
+      .map((r) => ({ time: r.trade_date, value: r.avg_price }))
+      .sort((a, b) => (a.time < b.time ? -1 : 1));
+
+    // ── Candle series ─────────────────────────────────────────────
+    if (candleRef.current) {
+      chart.removeSeries(candleRef.current);
+      candleRef.current = null;
     }
 
-    return null;
-  };
+    if (showCandles && ohlc.length) {
+      const series = chart.addSeries(CandlestickSeries, {
+        // Per-bar color/borderColor/wickColor is set on each data point above.
+        // These defaults are fallbacks only (should never show).
+        upColor:          'transparent',
+        downColor:        T.red,
+        borderUpColor:    T.green,
+        borderDownColor:  T.red,
+        wickUpColor:      T.green,
+        wickDownColor:    T.red,
+        priceFormat: {
+          type:      'price',
+          precision: 2,
+          minMove:   0.01,
+        },
+      });
+      series.setData(ohlc);
+      candleRef.current = series;
+    }
 
-  const LowShape = (props) => {
-    if (!showCandles) return null;
-    const { x, y, index, payload } = props;
+    // ── Avg price line ────────────────────────────────────────────
+    if (avgRef.current) {
+      chart.removeSeries(avgRef.current);
+      avgRef.current = null;
+    }
 
-    if (x == null || isNaN(x) || y == null || isNaN(y)) return null;
+    if (showAvg && lineData.length) {
+      const series = chart.addSeries(LineSeries, {
+        color:           T.amber,
+        lineWidth:       1,
+        lineStyle:       LineStyle.Dashed,
+        crosshairMarkerVisible: true,
+        crosshairMarkerRadius:  3,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      });
+      series.setData(lineData);
+      avgRef.current = series;
+    }
 
-    if (!pixelMap[index]) pixelMap[index] = {};
-    pixelMap[index].lowY  = y;
-    pixelMap[index].lowVal = payload?.low;
+    chart.timeScale().fitContent();
+  }, [data, showCandles, showAvg]);
 
-    const pm = pixelMap[index];
-
-    if (
-      pm.closeY    == null || isNaN(pm.closeY) ||
-      pm.lowY      == null || isNaN(pm.lowY)   ||
-      pm.closeVal  == null ||
-      pm.lowVal    == null ||
-      pm.x         == null ||
-      pm.slotWidth == null
-    ) return null;
-
-    const { open, high, low, close, prev_close } = payload;
-    if ([open, high, low, close].some((v) => v == null || isNaN(v))) return null;
-
-    const priceDelta = low - close;
-    if (priceDelta === 0) return null;
-    const pxPerUnit = (pm.lowY - pm.closeY) / priceDelta;
-    const scaleY    = (val) => pm.closeY + (val - close) * pxPerUnit;
-
-    const isBullish = prev_close != null ? close > prev_close : close >= open;
-    const isHollow  = close >= open;
-    const color     = isBullish ? T.green : T.red;
-
-    // x is the left edge of the barSize=8 bar.
-    // The slot is slotWidth wide and the bar is centred in it by Recharts,
-    // so the true slot left edge = x - (slotWidth - 8) / 2
-    // and the tick centre = slot left + slotWidth / 2 = x + 4 - (slotWidth/2 - 4) ... simplifies to:
-    const BAR_SIZE = 8;
-    const cx = pm.x + BAR_SIZE / 2 + (pm.slotWidth - BAR_SIZE) / 2;
-
-    const yOpen  = scaleY(open);
-    const yClose = scaleY(close);
-    const yHigh  = scaleY(high);
-    const yLow   = scaleY(low);
-
-    // Sanity-check all derived pixels
-    if ([yOpen, yClose, yHigh, yLow, cx].some(isNaN)) return null;
-
-    const bodyTop    = Math.min(yOpen, yClose);
-    const bodyHeight = Math.max(Math.abs(yClose - yOpen), 1);
-    const bodyWidth  = Math.max(pm.slotWidth * 0.5, 4);
-    const bodyX      = cx - bodyWidth / 2;
-
-    return (
-      <g>
-        {/* Upper wick */}
-        <line x1={cx} y1={yHigh} x2={cx} y2={bodyTop} stroke={color} strokeWidth={1.5} />
-        {/* Lower wick */}
-        <line x1={cx} y1={bodyTop + bodyHeight} x2={cx} y2={yLow} stroke={color} strokeWidth={1.5} />
-        {/* Body */}
-        <rect
-          x={bodyX}
-          y={bodyTop}
-          width={bodyWidth}
-          height={bodyHeight}
-          fill={isHollow ? 'transparent' : color}
-          stroke={color}
-          strokeWidth={1.5}
-        />
-      </g>
-    );
-  };
-
-  const TooltipContent = (props) => (
-    <PriceTooltip
-      {...props}
-      showCandles={showCandles}
-      showAvg={showAvg}
-      formatCurrency={formatCurrency}
-    />
-  );
-
+  /* ── Render ──────────────────────────────────────────────────────── */
   return (
-    <div style={{
-      background: T.surface,
-      border: `1px solid ${T.border}`,
-      fontFamily: monoFont,
-    }}>
-      {/* ── Header strip ─────────────────────────────────────────── */}
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, fontFamily: monoFont }}>
+
+      {/* Header strip */}
       <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '10px 16px',
-        borderBottom: `1px solid ${T.border}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '10px 16px', borderBottom: `1px solid ${T.border}`,
       }}>
         <div>
           <span style={{
-            fontSize: 11,
-            fontWeight: 700,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-            color: T.textHi,
+            fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
+            textTransform: 'uppercase', color: T.textHi,
           }}>
             Price Action
           </span>
           <span style={{
-            fontSize: 9,
-            letterSpacing: '0.10em',
-            textTransform: 'uppercase',
-            color: T.textLo,
-            marginLeft: 12,
+            fontSize: 9, letterSpacing: '0.10em', textTransform: 'uppercase',
+            color: T.textLo, marginLeft: 12,
           }}>
-            OHLC Candlestick
+            OHLC + Avg
           </span>
         </div>
 
@@ -272,11 +349,8 @@ export default function CandlestickChart({ data, showCandles, showAvg, formatCur
             <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <div style={{ width: 8, height: 12, background: color }} />
               <span style={{
-                fontSize: 9,
-                fontWeight: 700,
-                letterSpacing: '0.12em',
-                textTransform: 'uppercase',
-                color: T.textMid,
+                fontSize: 9, fontWeight: 700, letterSpacing: '0.12em',
+                textTransform: 'uppercase', color: T.textMid,
               }}>
                 {name}
               </span>
@@ -288,11 +362,8 @@ export default function CandlestickChart({ data, showCandles, showAvg, formatCur
                 <line x1="0" y1="5" x2="20" y2="5" stroke={T.amber} strokeWidth="1.5" strokeDasharray="4 3" />
               </svg>
               <span style={{
-                fontSize: 9,
-                fontWeight: 700,
-                letterSpacing: '0.12em',
-                textTransform: 'uppercase',
-                color: T.textMid,
+                fontSize: 9, fontWeight: 700, letterSpacing: '0.12em',
+                textTransform: 'uppercase', color: T.textMid,
               }}>
                 AVG
               </span>
@@ -301,80 +372,11 @@ export default function CandlestickChart({ data, showCandles, showAvg, formatCur
         </div>
       </div>
 
-      {/* ── Chart area ───────────────────────────────────────────── */}
-      <div style={{ width: '100%', height: 600, padding: '8px 0 0' }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart
-            data={data}
-            margin={{ top: 16, right: 20, bottom: 20, left: 0 }}
-            barGap={0}
-            barCategoryGap="20%"
-          >
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="rgba(255,255,255,0.12)"
-            />
-
-            <XAxis
-              dataKey="trade_date"
-              tick={tickStyle}
-              tickFormatter={(d) => d.slice(5)}
-              interval="preserveStartEnd"
-              tickLine={false}
-              axisLine={{ stroke: T.axis }}
-            />
-
-            <YAxis
-              domain={['auto', 'auto']}
-              tick={tickStyle}
-              tickFormatter={(v) => `₹${fmt(v, 0)}`}
-              width={76}
-              tickLine={false}
-              axisLine={false}
-            />
-
-            <Tooltip
-              content={<TooltipContent />}
-              cursor={{ stroke: T.borderHi, strokeWidth: 1, strokeDasharray: '3 3' }}
-            />
-
-            {showAvg && (
-              <Line
-                dataKey="avg_price"
-                name="Avg"
-                stroke={T.amber}
-                dot={false}
-                strokeWidth={1.5}
-                strokeDasharray="4 3"
-                isAnimationActive={false}
-              />
-            )}
-
-            {/*
-              Two bars with identical barSize force Recharts to give them the
-              same x/width slot. barGap=0 removes the inter-bar gap so they
-              perfectly overlap → cx = x + width/2 is exact tick centre.
-            */}
-            <Bar
-              dataKey="close"
-              barSize={8}
-              shape={<CloseShape />}
-              isAnimationActive={false}
-              legendType="none"
-              tooltipType="none"
-            />
-
-            <Bar
-              dataKey="low"
-              barSize={8}
-              shape={<LowShape />}
-              isAnimationActive={false}
-              legendType="none"
-              tooltipType="none"
-            />
-          </ComposedChart>
-        </ResponsiveContainer>
-      </div>
+      {/* Chart mount point — lightweight-charts injects its own canvas here */}
+      <div
+        ref={containerRef}
+        style={{ position: 'relative', width: '100%', height: 560 }}
+      />
     </div>
   );
 }

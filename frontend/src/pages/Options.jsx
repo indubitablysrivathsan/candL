@@ -883,11 +883,11 @@ function TerminalTh({ children }) {
     <th style={{
       padding: '7px 14px',
       textAlign: 'left',
-      fontSize: 9,
+      fontSize: 11,
       fontWeight: 700,
       letterSpacing: '0.14em',
       textTransform: 'uppercase',
-      color: T.textLo,
+      color: T.textHi,
     }}>
       {children}
     </th>
