@@ -138,7 +138,7 @@ def _process_futures(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
         prev_oi       = open_int - chng_in_oi if (open_int and chng_in_oi) else None
         basis         = close - underlying if (close and underlying) else None
         coc           = (basis / underlying) * (365 / dte) if (underlying and dte) else None
-        vor           = volume / open_int if open_int else None
+        choivr        = chng_in_oi / volume if volume else None
         quadrant      = _QUADRANT[(chng_in_oi >= 0, chng_price >= 0)] if (chng_in_oi is not None and chng_price is not None) else None
         chng_price_p  = (chng_price / prev_close * 100) if prev_close else None
         chng_oi_p     = (chng_in_oi / prev_oi * 100) if prev_oi else None
@@ -147,19 +147,19 @@ def _process_futures(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
             str(r["instrument_type"]), str(r["ticker"]),
             expiry, pd.to_datetime(trade_date).date(),
             close, prev_close, chng_price, chng_price_p,
-            chng_in_oi, chng_oi_p, open_int, underlying,
-            quadrant, basis, coc, vor, dte,
+            chng_in_oi, chng_oi_p, open_int, volume, underlying,
+            quadrant, basis, coc, choivr, dte,
         ))
 
     conn.executemany("""
-        INSERT INTO futures_analytics VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO futures_analytics VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
             close=excluded.close, prev_close=excluded.prev_close,
             chng_in_price=excluded.chng_in_price, chng_price_per=excluded.chng_price_per,
             chng_in_oi=excluded.chng_in_oi, chng_oi_per=excluded.chng_oi_per,
-            open_int=excluded.open_int, underlying=excluded.underlying,
+            open_int=excluded.open_int, volume=excluded.volume, underlying=excluded.underlying,
             quadrant=excluded.quadrant, basis=excluded.basis,
-            cost_of_carry=excluded.cost_of_carry, volume_oi_ratio=excluded.volume_oi_ratio,
+            cost_of_carry=excluded.cost_of_carry, choi_volume_ratio=excluded.choi_volume_ratio,
             days_to_expiry=excluded.days_to_expiry
     """, rows)
 

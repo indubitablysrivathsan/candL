@@ -215,11 +215,12 @@ CREATE TABLE IF NOT EXISTS futures_analytics (
     chng_in_oi      DOUBLE,
     chng_oi_per     DOUBLE,
     open_int        DOUBLE,
+    volume          DOUBLE,
     underlying      DOUBLE,
     quadrant        VARCHAR,
     basis           DOUBLE,
     cost_of_carry   DOUBLE,
-    volume_oi_ratio DOUBLE,
+    choi_volume_ratio DOUBLE,
     days_to_expiry  INTEGER,
     PRIMARY KEY (instrument_type, ticker, expiry, trade_date)
 );

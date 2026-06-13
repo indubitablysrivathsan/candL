@@ -331,7 +331,7 @@ function AnalyticsPanel({
               row.chng_in_oi ?? '', row.chng_oi_per ?? '',
               row.basis ?? '',
               row.cost_of_carry != null ? (row.cost_of_carry * 100).toFixed(2) : '',
-              row.volume_oi_ratio != null ? Number(row.volume_oi_ratio).toFixed(3) : '',
+              row.choi_volume_ratio != null ? Number(row.choi_volume_ratio).toFixed(3) : '',
               row.days_to_expiry ?? '', row.quadrant ?? '',
             ].join(','));
             const csv  = [headers.join(','), ...csvRows].join('\n');
@@ -350,9 +350,10 @@ function AnalyticsPanel({
                 <TerminalTh>Date</TerminalTh><TerminalTh>Close</TerminalTh>
                 <TerminalTh>Chng Price</TerminalTh><TerminalTh>Chng %</TerminalTh>
                 <TerminalTh>OI</TerminalTh><TerminalTh>Chng OI</TerminalTh>
-                <TerminalTh>Chng OI %</TerminalTh><TerminalTh>Basis</TerminalTh>
-                <TerminalTh>CoC %</TerminalTh><TerminalTh>Vol/OI</TerminalTh>
-                <TerminalTh>DTE</TerminalTh><TerminalTh>Signal</TerminalTh>
+                <TerminalTh>Chng OI %</TerminalTh><TerminalTh>Volume</TerminalTh>
+                <TerminalTh>Basis</TerminalTh><TerminalTh>CoC %</TerminalTh>
+                <TerminalTh>ChOI/Vol</TerminalTh><TerminalTh>DTE</TerminalTh>
+                <TerminalTh>Signal</TerminalTh>
               </TerminalTr>
             </thead>
             <tbody>
@@ -368,7 +369,7 @@ function AnalyticsPanel({
                     <TerminalTd accent={row.chng_price_per >= 0 ? T.green : T.red}>
                       {formatPercent(row.chng_price_per)}
                     </TerminalTd>
-                    <TerminalTd accent={row.open_int >= 0 ? T.green : T.red}>
+                    <TerminalTd>
                       {formatNumber(row.open_int)}
                     </TerminalTd>
                     <TerminalTd accent={row.chng_in_oi >= 0 ? T.green : T.red}>
@@ -377,11 +378,16 @@ function AnalyticsPanel({
                     <TerminalTd accent={row.chng_oi_per >= 0 ? T.green : T.red}>
                       {formatPercent(row.chng_oi_per)}
                     </TerminalTd>
+                    <TerminalTd>
+                      {formatNumber(row.volume)}
+                    </TerminalTd>
                     <TerminalTd accent={row.basis >= 0 ? T.green : T.red}>
                       {formatNumber(row.basis, 2)}
                     </TerminalTd>
                     <TerminalTd>{row.cost_of_carry != null ? `${(Number(row.cost_of_carry) * 100).toFixed(2)}%` : '--'}</TerminalTd>
-                    <TerminalTd>{row.volume_oi_ratio != null ? Number(row.volume_oi_ratio).toFixed(3) : '--'}</TerminalTd>
+                    <TerminalTd accent={row.choi_volume_ratio >= 0 ? T.green : T.red}>
+                      {row.choi_volume_ratio != null ? Number(row.choi_volume_ratio).toFixed(3) : '--'}
+                    </TerminalTd>
                     <TerminalTd accent={T.textLo}>{row.days_to_expiry ?? '--'}</TerminalTd>
                     <TerminalTd>
                       <span style={{
@@ -620,9 +626,9 @@ function RollupPanel({
                     <TerminalTh>Close</TerminalTh><TerminalTh>Chng Price</TerminalTh>
                     <TerminalTh>Chng %</TerminalTh><TerminalTh>OI</TerminalTh>
                     <TerminalTh>Combined OI</TerminalTh><TerminalTh>Chng OI</TerminalTh>
-                    <TerminalTh>Chng OI %</TerminalTh><TerminalTh>Basis</TerminalTh>
-                    <TerminalTh>CoC %</TerminalTh><TerminalTh>Vol/OI</TerminalTh>
-                    <TerminalTh>DTE</TerminalTh>
+                    <TerminalTh>Chng OI %</TerminalTh><TerminalTh>Volume</TerminalTh>
+                    <TerminalTh>Basis</TerminalTh><TerminalTh>CoC %</TerminalTh>
+                    <TerminalTh>ChOI/Vol</TerminalTh><TerminalTh>DTE</TerminalTh>
                   </TerminalTr>
                 </thead>
                 <tbody>
@@ -638,10 +644,10 @@ function RollupPanel({
                       <TerminalTd accent={row.chng_price_per >= 0 ? T.green : T.red}>
                         {formatPercent(row.chng_price_per)}
                       </TerminalTd>
-                      <TerminalTd accent={row.open_int >= 0 ? T.green : T.red}>
+                      <TerminalTd>
                         {formatNumber(row.open_int)}
                       </TerminalTd>
-                      <TerminalTd accent={combinedOIMap[row.ticker] >= 0 ? T.green : T.red}>
+                      <TerminalTd>
                         {combinedOIMap[row.ticker] != null ? formatNumber(combinedOIMap[row.ticker]) : '--'}
                       </TerminalTd>
                       <TerminalTd accent={row.chng_in_oi >= 0 ? T.green : T.red}>
@@ -650,11 +656,16 @@ function RollupPanel({
                       <TerminalTd accent={row.chng_oi_per >= 0 ? T.green : T.red}>
                         {formatPercent(row.chng_oi_per)}
                       </TerminalTd>
+                      <TerminalTd>
+                        {formatNumber(row.volume)}
+                      </TerminalTd>
                       <TerminalTd accent={row.basis >= 0 ? T.green : T.red}>
                         {formatNumber(row.basis, 2)}
                       </TerminalTd>
                       <TerminalTd>{row.cost_of_carry != null ? `${(Number(row.cost_of_carry) * 100).toFixed(2)}%` : '--'}</TerminalTd>
-                      <TerminalTd>{row.volume_oi_ratio != null ? Number(row.volume_oi_ratio).toFixed(3) : '--'}</TerminalTd>
+                      <TerminalTd accent={row.choi_volume_ratio >= 0 ? T.green : T.red}>
+                        {row.choi_volume_ratio != null ? Number(row.choi_volume_ratio).toFixed(3) : '--'}
+                      </TerminalTd>
                       <TerminalTd accent={T.textLo}>{row.days_to_expiry ?? '--'}</TerminalTd>
                     </TerminalTr>
                   ))}
