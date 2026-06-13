@@ -3,13 +3,15 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis,
+  BarChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Cell, Legend,
-  AreaChart, Area,
+  LineChart, Line,
 } from 'recharts';
 
-import MetricCard     from '../components/shared/MetricCard';
-import LoadingSpinner from '../components/shared/LoadingSpinner';
+import MetricCard        from '../components/shared/MetricCard';
+import LoadingSpinner    from '../components/shared/LoadingSpinner';
+import CandlestickChart  from '../components/charts/CandlestickChart';
+import DailyChangeChart  from '../components/charts/DailyChangeChart';
 import { participant, fii, volatility, market } from '../api/client';
 
 /* ─── DESIGN TOKENS ──────────────────────────────────────────── */
@@ -136,19 +138,24 @@ function Panel({ title, subtitle, right, children, style = {} }) {
   );
 }
 
+// ── FIXED: uses MetricCard as specified ──────────────────────────
 function MetricStrip({ items }) {
   return (
-    <div style={{ display: 'flex', border: `1px solid ${T.border}`, overflow: 'hidden' }}>
-      {items.map(({ title, value, sub, accent = T.amber }, i) => (
-        <div key={title} style={{
-          flex: 1, padding: '10px 14px',
-          borderRight: i < items.length - 1 ? `1px solid ${T.border}` : 'none',
-          background: T.surface, minWidth: 0,
-        }}>
-          <div style={labelStyle({ marginBottom: 5 })}>{title}</div>
-          <div style={{ ...mono, fontSize: 14, fontWeight: 600, color: accent, letterSpacing: '0.04em' }}>{value}</div>
-          {sub && <div style={{ ...mono, fontSize: 9, color: T.textLo, marginTop: 3 }}>{sub}</div>}
-        </div>
+    <div style={{
+      display: 'flex',
+      width: '100%',
+      border: `1px solid ${T.border}`,
+      borderTop: 'none',
+      overflow: 'hidden',
+    }}>
+      {items.map(({ title, value, subtitle, accent = T.amber }) => (
+        <MetricCard
+          key={title}
+          title={title}
+          value={value}
+          subtitle={subtitle}
+          accent={accent}
+        />
       ))}
     </div>
   );
@@ -335,7 +342,12 @@ function IndexSnapshot({ marketDates }) {
   const [data, setData]           = useState([]);
   const [loading, setLoading]     = useState(false);
 
-  useEffect(() => { if (marketDates.length) setTradeDate(marketDates.at(-1)); }, [marketDates]);
+  // ── FIX: initialise to latest date as soon as marketDates arrives ──
+  useEffect(() => {
+    if (marketDates.length && !tradeDate) {
+      setTradeDate(marketDates.at(-1));
+    }
+  }, [marketDates]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!tradeDate) return;
@@ -345,6 +357,13 @@ function IndexSnapshot({ marketDates }) {
 
   const advances = data.filter(d => d.pct_change > 0).length;
   const declines = data.filter(d => d.pct_change < 0).length;
+
+  // ── date input style (matching IndexHistory) ───────────────────
+  const inputStyle = {
+    ...mono, fontSize: 10, padding: '4px 8px',
+    background: T.surfaceHi, border: `1px solid ${T.border}`,
+    color: T.textMid, outline: 'none', borderRadius: 0, letterSpacing: '0.04em',
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -357,11 +376,10 @@ function IndexSnapshot({ marketDates }) {
         ]} />
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0' }}>
+      {/* ── CHANGED: dropdown → date input ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
         <span style={labelStyle()}>Session</span>
-        <TermSelect value={tradeDate} onChange={setTradeDate}>
-          {[...marketDates].reverse().map(d => <option key={d} value={d}>{d}</option>)}
-        </TermSelect>
+        <input type="date" value={tradeDate}  min={marketDates[0] ?? ''}  max={marketDates.at(-1) ?? ''}   onChange={e => setTradeDate(e.target.value)}   style={inputStyle} />
       </div>
 
       {loading ? <TerminalLoading /> : (
@@ -413,23 +431,38 @@ function IndexHistory({ marketDates }) {
   const [data, setData]             = useState([]);
   const [loading, setLoading]       = useState(false);
 
+  // Load index names once
   useEffect(() => {
-    market.indexNames().then(n => { setIndexNames(n); if (n.length) setSelected(n[0]); }).catch(console.error);
-    const r = defaultRange(marketDates, 6); setStartDate(r.start); setEndDate(r.end);
+    market.indexNames()
+      .then(n => { setIndexNames(n); if (n.length) setSelected(n[0]); })
+      .catch(console.error);
+  }, []);
+
+  // Set dates once marketDates arrives
+  useEffect(() => {
+    if (!marketDates.length) return;
+    const r = defaultRange(marketDates, 6);
+    setStartDate(r.start);
+    setEndDate(r.end);
   }, [marketDates]);
 
-  const load = useCallback(async () => {
-    if (!selected || !startDate || !endDate) return;
-    setLoading(true);
-    try { setData(await market.indexHistory(selected, startDate, endDate)); }
-    catch (e) { console.error(e); }
-    setLoading(false);
-  }, [selected, startDate, endDate]);
+  // Only fire when ALL THREE are ready — no more race
+  useEffect(() => {
+      if (!selected || !startDate || !endDate) return;
+      let cancelled = false;
+      setLoading(true);
+      market.indexHistory(selected, startDate, endDate)
+        .then(d  => { if (!cancelled) setData(d); })
+        .catch(() => { if (!cancelled) setData([]); })
+        .finally(() => { if (!cancelled) setLoading(false); });
+      return () => { cancelled = true; };
+    }, [selected, startDate, endDate]);
 
-  useEffect(() => { load(); }, [load]);
-
-  const last = data.at(-1);
+  const last  = data.at(-1);
   const first = data[0];
+
+  // formatCurrency passed to CandlestickChart
+  const formatCurrency = (v, dec = 2) => fmt(v, dec);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -438,7 +471,9 @@ function IndexHistory({ marketDates }) {
           { title: 'Index',   value: selected,           accent: T.textMid },
           { title: 'Latest',  value: fmt(last.close, 0), accent: T.textHi },
           { title: 'Period Δ',
-            value: first ? `${pctSign(((last.close - first.close) / first.close) * 100)}${(((last.close - first.close) / first.close) * 100).toFixed(1)}%` : '—',
+            value: first
+              ? `${pctSign(((last.close - first.close) / first.close) * 100)}${(((last.close - first.close) / first.close) * 100).toFixed(1)}%`
+              : '—',
             accent: last.close >= (first?.close ?? last.close) ? T.green : T.red,
           },
           { title: 'Sessions', value: data.length, accent: T.textMid },
@@ -457,37 +492,21 @@ function IndexHistory({ marketDates }) {
       </div>
 
       {loading ? <TerminalLoading /> : data.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <SectionLabel>Price — {selected}</SectionLabel>
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={data} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
-              <defs>
-                <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%"   stopColor={T.blue} stopOpacity={0.18} />
-                  <stop offset="100%" stopColor={T.blue} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid {...gridProps} />
-              <XAxis dataKey="trade_date" {...chartAxisProps} tickFormatter={d => d.slice(5)} interval="preserveStartEnd" />
-              <YAxis {...chartAxisProps} tickFormatter={v => fmtInt(v)} width={62} />
-              <Tooltip content={<TermTooltip valueFormatter={v => fmt(v, 2)} />} />
-              <Area dataKey="close" name="Close" stroke={T.blue} fill="url(#areaGrad)" strokeWidth={1.5} dot={false} />
-            </AreaChart>
-          </ResponsiveContainer>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {/* ── CHANGED: CandlestickChart for OHLC ── */}
+          <CandlestickChart
+            data={data}
+            showCandles={true}
+            showAvg={false}
+            formatCurrency={formatCurrency}
+          />
 
-          <SectionLabel style={{ marginTop: 10 }}>Daily Change %</SectionLabel>
-          <ResponsiveContainer width="100%" height={100}>
-            <BarChart data={data} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
-              <CartesianGrid {...gridProps} />
-              <XAxis dataKey="trade_date" {...chartAxisProps} tickFormatter={d => d.slice(5)} interval="preserveStartEnd" />
-              <YAxis {...chartAxisProps} tickFormatter={v => `${fmt(v, 1)}%`} width={46} />
-              <ReferenceLine y={0} stroke={T.borderHi} strokeDasharray="3 3" />
-              <Tooltip content={<TermTooltip valueFormatter={v => `${fmt(v, 2)}%`} />} />
-              <Bar dataKey="pct_change" name="Change %" radius={0}>
-                {data.map((row, i) => <Cell key={i} fill={row.pct_change >= 0 ? T.green : T.red} opacity={0.85} />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
+          {/* ── CHANGED: DailyChangeChart asset for pct change ── */}
+          <DailyChangeChart
+            data={data}
+            height={160}
+            title={`Daily Change % — ${selected}`}
+          />
         </div>
       ) : <Empty />}
     </div>
@@ -640,7 +659,7 @@ function TopByValue({ marketDates }) {
         {pctSign(r.pct_change)}{fmt(r.pct_change)}%
       </span> },
     { key: 'turnover',   label: 'Value (Cr)', align: 'right',
-      render: r => <span style={{ ...mono, fontSize: 11, color: T.amber }}>{fmt(r.turnover, 1)}</span> },
+      render: r => (<span style={{ ...mono, fontSize: 11, color: T.amber }}>{fmt(r.turnover / 100, 1)}</span>) },
     { key: 'volume',     label: 'Volume',     align: 'right',
       render: r => <span style={{ ...mono, fontSize: 11, color: T.textMid }}>{fmtInt(r.volume)}</span> },
   ];
@@ -691,7 +710,7 @@ function GainersLosers({ marketDates }) {
         {pctSign(r.pct_change)}{fmt(r.pct_change)}%
       </span> },
     { key: 'turnover',   label: 'Value (Cr)', align: 'right',
-      render: r => <span style={{ ...mono, fontSize: 11, color: T.amber }}>{fmt(r.turnover, 1)}</span> },
+      render: r => (<span style={{ ...mono, fontSize: 11, color: T.amber }}>{fmt(r.turnover / 100, 1)}</span>) },
   ];
 
   const rows = (side === 'gainers' ? gainers : losers).map((r, i) => ({ ...r, _rank: i + 1 }));
@@ -990,8 +1009,8 @@ export default function Market() {
   }, []);
 
   if (loading) return (
-    <div style={{ height: 'calc(100vh - 64px)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.bg }}>
-      <span style={{ ...mono, fontSize: 11, color: T.textLo, letterSpacing: '0.14em' }}>INITIALIZING…</span>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.bg }}>
+      <LoadingSpinner size="lg" />
     </div>
   );
 

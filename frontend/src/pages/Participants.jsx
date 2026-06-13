@@ -1131,8 +1131,8 @@ export default function Participants() {
   ];
 
   if (loading) return (
-    <div style={{ height: 'calc(100vh - 64px)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.bg }}>
-      <span style={{ ...mono, fontSize: 11, color: T.textLo, letterSpacing: '0.14em' }}>INITIALIZING…</span>
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.bg }}>
+      <LoadingSpinner size="lg" />
     </div>
   );
 

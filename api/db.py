@@ -1495,11 +1495,35 @@ def get_market_available_dates() -> list[str]:
 def get_market_index_names() -> list[str]:
     conn = get_conn(read_only=True)
     try:
-        rows = conn.execute(
-            "SELECT DISTINCT index_name FROM market_activity_index ORDER BY index_name"
-        ).fetchall()
+        rows = conn.execute("""
+            SELECT DISTINCT index_name
+            FROM market_activity_index
+            ORDER BY
+                CASE
+                    -- 1. Core indices (highest priority group)
+
+                    WHEN LOWER(index_name) LIKE '%nifty bank%' THEN 0
+                    WHEN LOWER(index_name) LIKE '%nifty fin service%' THEN 0
+                    WHEN LOWER(index_name) LIKE '%nifty mid select%' THEN 0
+                    WHEN LOWER(index_name) LIKE '%nifty next 50%' THEN 0
+                    WHEN LOWER(index_name) LIKE '%india vix%' THEN 0
+
+                    -- 2. All other NIFTY indices
+                    WHEN LOWER(index_name) LIKE '%nifty%' THEN 1
+
+                    -- 3. BharatBond
+                    WHEN LOWER(index_name) LIKE 'bharatbond%' THEN 2
+
+                    -- 4. Everything else
+                    ELSE 3
+                END,
+
+                -- secondary sort: alphabetical inside buckets
+                LOWER(index_name)
+        """).fetchall()
     finally:
         conn.close()
+
     return [r[0] for r in rows]
 
 
