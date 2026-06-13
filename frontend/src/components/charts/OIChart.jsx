@@ -553,12 +553,15 @@ export function ScreenerOIChart({
           return (!prevExpiry || td > prevExpiry) && td <= cycleExp;
         });
       } else {
-        cycleRows = historyRows.filter((r) => {
-          const td        = r.trade_date?.split?.('T')[0] ?? String(r.trade_date).slice(0, 10);
-          const rowExpiry = r.expiry?.split?.('T')[0]     ?? String(r.expiry).slice(0, 10);
-          const inWindow  = (!prevExpiry || td > prevExpiry) && td <= cycleExp;
-          return inWindow && constituents.includes(rowExpiry);
+        const allCycleRows = historyRows.filter((r) => {
+          const rowExpiry =
+            r.expiry?.split?.('T')[0] ??
+            String(r.expiry).slice(0, 10);
+
+          return constituents.includes(rowExpiry);
         });
+
+        cycleRows = allCycleRows;
       }
 
       const groupedByDate = {};
@@ -589,8 +592,9 @@ export function ScreenerOIChart({
         }
       });
 
-      const tradingDates = Object.keys(groupedByDate).sort((a, b) => new Date(a) - new Date(b));
-      const lastIdx      = tradingDates.length - 1;
+      let tradingDates = Object.keys(groupedByDate).sort((a, b) => new Date(a) - new Date(b));
+      if (metricToggle) tradingDates = tradingDates.slice(-25);
+      const lastIdx = tradingDates.length - 1;
 
       tradingDates.forEach((date, i) => {
         let offset = i - lastIdx;

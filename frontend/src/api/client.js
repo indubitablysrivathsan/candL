@@ -83,23 +83,25 @@ export async function getTickers(assetType = 'stock_options') {
 
 function _sortExpiries(expiries) {
   const today = new Date();
-  const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  today.setHours(0, 0, 0, 0);
 
   const future = [];
   const past   = [];
 
   for (const exp of expiries) {
-    const d          = new Date(exp);
-    const monthStart = new Date(d.getFullYear(), d.getMonth(), 1);
-    if (monthStart >= currentMonthStart) {
-      future.push(exp);
-    } else {
-      past.push(exp);
-    }
+    const d = new Date(exp);
+    d.setHours(0, 0, 0, 0);
+
+    if (d >= today) future.push(exp);
+    else past.push(exp);
   }
 
+  // ✅ keep your intended logic:
+  // future ascending
   future.sort((a, b) => new Date(a) - new Date(b));
-  past.sort((a, b)   => new Date(b) - new Date(a));
+
+  // past descending (most recent expired first)
+  past.sort((a, b) => new Date(b) - new Date(a));
 
   return [...future, ...past];
 }
