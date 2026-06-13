@@ -2,18 +2,6 @@
 data/
 raw/
 
-# Extras
-00-2023/
-01-Jan 2024/
-12-Dec 2025/
-01-Jan 2026/
-02-Feb 2026/
-03-Mar 2026/
-04-Apr 2026/
-05-May 2026/
-May 2026 Plots/
-OI Analysis/
-
 # Python
 __pycache__/
 *.pyc
@@ -29,6 +17,7 @@ build/
 .env
 venv/
 .venv/
+candlenv/
 
 # IDE
 .idea/

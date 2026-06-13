@@ -761,12 +761,8 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
   if (metric === 'ts') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <div style={{ display: 'flex', gap: 4 }}>
-          {[['chart', 'Price & Max Pain'], ['pcr', 'PCR']].map(([tab, lbl]) => (
-            <TerminalBtn key={tab} active={innerTab === tab} onClick={() => setInnerTab(tab)}>{lbl}</TerminalBtn>
-          ))}
-        </div>
-        {innerTab === 'chart' ? <TimeSeriesChart analyticsData={analyticsData} /> : <PCRChart analyticsData={analyticsData} />}
+        <TimeSeriesChart analyticsData={analyticsData} />
+        <PCRChart analyticsData={analyticsData} />
       </div>
     );
   }
