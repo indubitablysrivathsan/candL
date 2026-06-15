@@ -147,12 +147,32 @@ def _process_futures(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
             str(r["instrument_type"]), str(r["ticker"]),
             expiry, pd.to_datetime(trade_date).date(),
             close, prev_close, chng_price, chng_price_p,
-            chng_in_oi, chng_oi_p, open_int, volume, underlying,
-            quadrant, basis, coc, choivr, dte,
+            chng_in_oi, chng_oi_p, open_int, underlying,
+            quadrant, basis, coc, choivr, dte, volume
         ))
 
     conn.executemany("""
-        INSERT INTO futures_analytics VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO futures_analytics (
+            instrument_type,
+            ticker,
+            expiry,
+            trade_date,
+            close,
+            prev_close,
+            chng_in_price,
+            chng_price_per,
+            chng_in_oi,
+            chng_oi_per,
+            open_int,
+            underlying,
+            quadrant,
+            basis,
+            cost_of_carry,
+            choi_volume_ratio,
+            days_to_expiry,
+            volume
+        )
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
             close=excluded.close, prev_close=excluded.prev_close,
             chng_in_price=excluded.chng_in_price, chng_price_per=excluded.chng_price_per,
