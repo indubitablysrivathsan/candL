@@ -35,7 +35,7 @@ MANIFEST_PATH    = RAW_ROOT / "manifest.csv"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
 SYNC_ON_STARTUP = os.getenv("SYNC_ON_STARTUP", "True").lower() == "true"
-SYNC_START_DATE = "2024-08-01"
+SYNC_START_DATE = "2024-06-21"
 
 # ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
 NSE_BASE_URL = "https://nsearchives.nseindia.com"
