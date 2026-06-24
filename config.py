@@ -22,6 +22,7 @@ DATA_ROOT = PROJECT_ROOT / "data"
 
 # ─── RAW DATA ─────────────────────────────────────────────────────────────────
 RAW_ROOT         = PROJECT_ROOT / "raw"
+
 FO_RAW_ROOT      = RAW_ROOT / "fo"
 EQ_BHAV_ROOT     = RAW_ROOT / "eq_bhav"
 CM_BHAV_ROOT     = RAW_ROOT / "cm_bhav"
@@ -32,6 +33,9 @@ FO_VOLT_ROOT     = RAW_ROOT / "fo_volt"
 MKT_ACT_ROOT     = RAW_ROOT / "mkt_act"
 
 MANIFEST_PATH    = RAW_ROOT / "manifest.csv"
+
+# ─── RESEARCH ─────────────────────────────────────────────────────────────────
+RESEARCH_ROOT    = PROJECT_ROOT / "research"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
 SYNC_ON_STARTUP = os.getenv("SYNC_ON_STARTUP", "True").lower() == "true"
