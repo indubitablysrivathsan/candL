@@ -60,5 +60,3 @@ CORS_ORIGINS = os.getenv(
 # ─── DUCKDB ───────────────────────────────────────────────────────────────────
 db_name = os.getenv("DB_FILE", "nse.db")
 NSE_DB_PATH = DATA_ROOT / db_name
-
-RESEARCH_DB_PATH = DATA_ROOT / "research.db"
