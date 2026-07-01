@@ -406,7 +406,25 @@ function AddIndicatorPopup({ onAdd, onClose }) {
 }
 
 /* ─── Chart component ──────────────────────────────────────────── */
-export default function CandlestickChart({ data, formatCurrency }) {
+// Props (updated):
+//   data              – bar array
+//   formatCurrency    – formatter
+//   indicators        – controlled: [{id, type, params, color}]
+//   onIndicatorsChange – (newArray) => void
+//   showCandles       – controlled boolean
+//   onShowCandlesChange – (bool) => void
+//   showAvg           – controlled boolean
+//   onShowAvgChange   – (bool) => void
+export default function CandlestickChart({
+  data,
+  formatCurrency,
+  indicators,
+  onIndicatorsChange,
+  showCandles,
+  onShowCandlesChange,
+  showAvg,
+  onShowAvgChange,
+}) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const candleRef    = useRef(null);
@@ -419,9 +437,6 @@ export default function CandlestickChart({ data, formatCurrency }) {
   // indicator points lookup for tooltip enrichment: { [seriesKey]: { [time]: value } }
   const indicatorPointsRef = useRef({});
 
-  const [showCandles, setShowCandles] = useState(true);
-  const [showAvg, setShowAvg] = useState(false);
-  const [indicators, setIndicators] = useState([]); // [{id, type, params, color}]
   const [popupOpen, setPopupOpen] = useState(false);
 
   // stable refs so the crosshair handler doesn't go stale
@@ -433,17 +448,15 @@ export default function CandlestickChart({ data, formatCurrency }) {
   indicatorsRef.current  = indicators;
 
   const handleAddIndicator = useCallback((partial) => {
-    setIndicators((prev) => {
-      const color = nextColor(prev.map((p) => p.color));
-      const id = `ind-${Date.now()}-${Math.round(Math.random() * 1000)}`;
-      return [...prev, { id, color, ...partial }];
-    });
+    const color = nextColor(indicators.map((p) => p.color));
+    const id = `ind-${Date.now()}-${Math.round(Math.random() * 1000)}`;
+    onIndicatorsChange([...indicators, { id, color, ...partial }]);
     setPopupOpen(false);
-  }, []);
+  }, [indicators, onIndicatorsChange]);
 
   const handleRemoveIndicator = useCallback((id) => {
-    setIndicators((prev) => prev.filter((i) => i.id !== id));
-  }, []);
+    onIndicatorsChange(indicators.filter((i) => i.id !== id));
+  }, [indicators, onIndicatorsChange]);
 
   /* ── Build/destroy chart on mount ─────────────────────────────── */
   useEffect(() => {
@@ -774,10 +787,10 @@ export default function CandlestickChart({ data, formatCurrency }) {
         padding: '8px 16px', borderBottom: `1px solid ${T.border}`,
         background: T.elevated,
       }}>
-        <button style={toolbarBtn(showCandles)} onClick={() => setShowCandles((v) => !v)}>
+        <button style={toolbarBtn(showCandles)} onClick={() => onShowCandlesChange(!showCandles)}>
           OHLC
         </button>
-        <button style={toolbarBtn(showAvg)} onClick={() => setShowAvg((v) => !v)}>
+        <button style={toolbarBtn(showAvg)} onClick={() => onShowAvgChange(!showAvg)}>
           Avg Price
         </button>
 
@@ -792,7 +805,7 @@ export default function CandlestickChart({ data, formatCurrency }) {
           </div>
         ))}
 
-        <div style={{ position: 'relative', marginLeft: indicators.length ? 0 : 'auto' }}>
+        <div style={{ position: 'relative', marginLeft: 'auto'}}>
           <button style={plusBtn} onClick={() => setPopupOpen((v) => !v)} title="Add indicator">
             +
           </button>

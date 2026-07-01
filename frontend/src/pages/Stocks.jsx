@@ -507,9 +507,11 @@ function OHLCView({ tickers, dates }) {
   const [rollData,  setRollData]  = useState([]);
   const [loading,   setLoading]   = useState(false);
   const [chartTab,  setChartTab]  = useState('price');
-  // NOTE: showCandles / showAvg used to live here and were passed down to
-  // CandlestickChart as props. They've moved into CandlestickChart itself
-  // (along with the indicator toolbar), so this page no longer owns them.
+
+  // ── Persistent overlay state — survives ticker/date changes ──────
+  const [showCandles,  setShowCandles]  = useState(true);
+  const [showAvg,      setShowAvg]      = useState(false);
+  const [indicators,   setIndicators]   = useState([]); // [{id, type, params, color}]
 
   const load = useCallback(async () => {
     if (!ticker || !startDate || !endDate) return;
@@ -662,6 +664,12 @@ function OHLCView({ tickers, dates }) {
               <CandlestickChart
                 data={data}
                 formatCurrency={formatCurrency}
+                showCandles={showCandles}
+                onShowCandlesChange={setShowCandles}
+                showAvg={showAvg}
+                onShowAvgChange={setShowAvg}
+                indicators={indicators}
+                onIndicatorsChange={setIndicators}
               />
             )}
 
