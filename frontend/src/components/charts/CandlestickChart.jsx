@@ -4,12 +4,21 @@
 //
 // Props:
 //   data            – array of { trade_date: 'YYYY-MM-DD', open, high, low, close, avg_price?, prev_close? }
-//   showCandles     – boolean
-//   showAvg         – boolean
 //   formatCurrency  – (value, decimals) => string
+//
+// This component now owns its own toolbar (OHLC / Avg Price toggles +
+// indicator chips + "+" add-indicator menu). Stocks.jsx no longer needs to
+// pass showCandles/showAvg — they're internal state here.
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { createChart, CrosshairMode, LineStyle, CandlestickSeries, LineSeries } from 'lightweight-charts';
+import {
+  computeIndicatorLines,
+  describeIndicator,
+  nextColor,
+  validateFormula,
+  FormulaError,
+} from './indicators';
 
 /* ─── Design tokens ────────────────────────────────────────────── */
 const T = {
@@ -19,6 +28,7 @@ const T = {
   border:   'rgba(255,255,255,0.07)',
   borderHi: 'rgba(255,255,255,0.14)',
   amber:    '#F0A500',
+  amberDim: 'rgba(240,165,0,0.12)',
   green:    '#00C896',
   red:      '#E05252',
   textHi:   'rgba(255,255,255,0.90)',
@@ -50,7 +60,7 @@ function buildTooltipEl() {
   return el;
 }
 
-function renderTooltip(el, bar, showCandles, showAvg, formatCurrency) {
+function renderTooltip(el, bar, showCandles, showAvg, formatCurrency, indicatorVals) {
   if (!bar) { el.style.display = 'none'; return; }
 
   const { time, open, high, low, close, avg_price, prev_close } = bar;
@@ -70,6 +80,16 @@ function renderTooltip(el, bar, showCandles, showAvg, formatCurrency) {
   // Format date label: time is 'YYYY-MM-DD'
   const dateLabel = typeof time === 'string' ? time.slice(5) : String(time);
 
+  const indicatorRows = (indicatorVals || []).map(({ label, value, color }) => `
+    <div style="
+      display:flex; justify-content:space-between; align-items:center;
+      gap:20px; font-size:11px; letter-spacing:0.05em; margin-bottom:4px;
+    ">
+      <span style="color:${color}; font-size:9px; font-weight:700; letter-spacing:0.10em;">${label}</span>
+      <span style="color:${T.textHi}; font-variant-numeric:tabular-nums; font-weight:600;">${formatCurrency(value, 2)}</span>
+    </div>
+  `).join('');
+
   el.innerHTML = `
     <div style="
       font-size:9px; font-weight:700; letter-spacing:0.14em;
@@ -85,6 +105,7 @@ function renderTooltip(el, bar, showCandles, showAvg, formatCurrency) {
         <span style="color:${color}; font-variant-numeric:tabular-nums; font-weight:600;">${value}</span>
       </div>
     `).join('')}
+    ${indicatorRows}
     ${change != null ? `
       <div style="
         margin-top:6px; padding-top:6px; border-top:1px solid ${T.border};
@@ -101,8 +122,291 @@ function renderTooltip(el, bar, showCandles, showAvg, formatCurrency) {
   el.style.display = 'block';
 }
 
+/* ─── Toolbar sub-styles ───────────────────────────────────────── */
+const toolbarBtn = (active) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '4px 10px',
+  fontSize: 10,
+  fontFamily: monoFont,
+  letterSpacing: '0.10em',
+  textTransform: 'uppercase',
+  border: `1px solid ${active ? T.amber : T.border}`,
+  background: active ? T.amberDim : 'transparent',
+  color: active ? T.amber : T.textMid,
+  cursor: 'pointer',
+  transition: 'all 120ms',
+  borderRadius: 0,
+});
+
+const chipStyle = (color) => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '4px 8px',
+  fontSize: 10,
+  fontFamily: monoFont,
+  letterSpacing: '0.06em',
+  border: `1px solid ${color}55`,
+  background: `${color}1A`,
+  color,
+  cursor: 'default',
+});
+
+const chipCloseBtn = {
+  background: 'none',
+  border: 'none',
+  color: 'inherit',
+  cursor: 'pointer',
+  fontSize: 11,
+  lineHeight: 1,
+  padding: 0,
+  opacity: 0.7,
+};
+
+const plusBtn = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 24,
+  height: 24,
+  fontSize: 14,
+  fontWeight: 600,
+  border: `1px solid ${T.borderHi}`,
+  background: 'transparent',
+  color: T.textMid,
+  cursor: 'pointer',
+  borderRadius: 0,
+};
+
+/* ─── Add Indicator popup ──────────────────────────────────────── */
+
+const INDICATOR_TYPES = [
+  { key: 'ma',        label: 'Moving Average' },
+  { key: 'bollinger', label: 'Bollinger Bands' },
+  { key: 'custom',    label: 'Custom Formula' },
+];
+
+const popupInputStyle = {
+  background: T.bg,
+  border: `1px solid ${T.border}`,
+  color: T.textHi,
+  fontSize: 11,
+  fontFamily: monoFont,
+  padding: '5px 8px',
+  outline: 'none',
+  borderRadius: 0,
+  width: '100%',
+  boxSizing: 'border-box',
+};
+
+const popupLabel = {
+  fontSize: 9,
+  letterSpacing: '0.12em',
+  textTransform: 'uppercase',
+  color: T.textMid,
+  marginBottom: 4,
+  display: 'block',
+};
+
+function AddIndicatorPopup({ onAdd, onClose }) {
+  const [type, setType] = useState('ma');
+  const [method, setMethod] = useState('sma');
+  const [period, setPeriod] = useState(20);
+  const [stdDev, setStdDev] = useState(2);
+  const [source, setSource] = useState('close');
+  const [formula, setFormula] = useState('');
+  const [label, setLabel] = useState('');
+  const [error, setError] = useState(null);
+
+  const popupRef = useRef(null);
+
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (popupRef.current && !popupRef.current.contains(e.target)) onClose();
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [onClose]);
+
+  const handleSubmit = () => {
+    setError(null);
+
+    if (type === 'ma') {
+      if (!period || period < 1) { setError('Period must be a positive number'); return; }
+      onAdd({ type: 'ma', params: { method, period: Math.round(period), source } });
+      return;
+    }
+
+    if (type === 'bollinger') {
+      if (!period || period < 1) { setError('Period must be a positive number'); return; }
+      if (!stdDev || stdDev <= 0) { setError('Std dev must be a positive number'); return; }
+      onAdd({ type: 'bollinger', params: { period: Math.round(period), stdDev: Number(stdDev), source } });
+      return;
+    }
+
+    if (type === 'custom') {
+      if (!formula.trim()) { setError('Enter a formula'); return; }
+      try {
+        validateFormula(formula);
+      } catch (e) {
+        setError(e instanceof FormulaError ? e.message : 'Invalid formula');
+        return;
+      }
+      onAdd({ type: 'custom', params: { formula: formula.trim(), label: label.trim() || formula.trim() } });
+      return;
+    }
+  };
+
+  return (
+    <div
+      ref={popupRef}
+      style={{
+        position: 'absolute',
+        top: 36,
+        right: 0,
+        zIndex: 20,
+        width: 280,
+        background: T.elevated,
+        border: `1px solid ${T.borderHi}`,
+        boxShadow: '0 12px 36px rgba(0,0,0,0.85)',
+        padding: 14,
+        fontFamily: monoFont,
+      }}
+    >
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.textHi, marginBottom: 12 }}>
+        Add Indicator
+      </div>
+
+      {/* Type selector */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 12 }}>
+        {INDICATOR_TYPES.map(({ key, label: l }) => (
+          <button
+            key={key}
+            onClick={() => { setType(key); setError(null); }}
+            style={{ ...toolbarBtn(type === key), flex: 1, justifyContent: 'center', fontSize: 9 }}
+          >
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {type === 'ma' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <span style={popupLabel}>Method</span>
+              <select value={method} onChange={(e) => setMethod(e.target.value)} style={{ ...popupInputStyle, cursor: 'pointer' }}>
+                <option value="sma">SMA</option>
+                <option value="ema">EMA</option>
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <span style={popupLabel}>Period (days)</span>
+              <input type="number" min="1" value={period} onChange={(e) => setPeriod(e.target.value)} style={popupInputStyle} />
+            </div>
+          </div>
+          <div>
+            <span style={popupLabel}>Source</span>
+            <select value={source} onChange={(e) => setSource(e.target.value)} style={{ ...popupInputStyle, cursor: 'pointer' }}>
+              <option value="close">Close</option>
+              <option value="open">Open</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
+              <option value="avg_price">Avg Price</option>
+            </select>
+          </div>
+        </div>
+      )}
+
+      {type === 'bollinger' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <span style={popupLabel}>Period (days)</span>
+              <input type="number" min="1" value={period} onChange={(e) => setPeriod(e.target.value)} style={popupInputStyle} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <span style={popupLabel}>Std Dev</span>
+              <input type="number" min="0.1" step="0.1" value={stdDev} onChange={(e) => setStdDev(e.target.value)} style={popupInputStyle} />
+            </div>
+          </div>
+          <div>
+            <span style={popupLabel}>Source</span>
+            <select value={source} onChange={(e) => setSource(e.target.value)} style={{ ...popupInputStyle, cursor: 'pointer' }}>
+              <option value="close">Close</option>
+              <option value="open">Open</option>
+              <option value="high">High</option>
+              <option value="low">Low</option>
+              <option value="avg_price">Avg Price</option>
+            </select>
+          </div>
+        </div>
+      )}
+
+      {type === 'custom' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div>
+            <span style={popupLabel}>Formula</span>
+            <input
+              value={formula}
+              onChange={(e) => setFormula(e.target.value)}
+              placeholder="sma(close,20) + 2*stdev(close,20)"
+              style={popupInputStyle}
+            />
+            <div style={{ fontSize: 9, color: T.textLo, marginTop: 4, lineHeight: 1.5 }}>
+              Series: open, high, low, close, avg_price<br />
+              Functions: sma(series,n) · ema(series,n) · stdev(series,n)
+            </div>
+          </div>
+          <div>
+            <span style={popupLabel}>Label (optional)</span>
+            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. My Formula" style={popupInputStyle} />
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ marginTop: 10, fontSize: 10, color: T.red, letterSpacing: '0.03em' }}>
+          {error}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+        <button
+          onClick={onClose}
+          style={{ ...toolbarBtn(false), flex: 1, justifyContent: 'center' }}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSubmit}
+          style={{
+            flex: 1,
+            justifyContent: 'center',
+            display: 'inline-flex',
+            alignItems: 'center',
+            padding: '5px 10px',
+            fontSize: 10,
+            fontFamily: monoFont,
+            letterSpacing: '0.10em',
+            textTransform: 'uppercase',
+            border: `1px solid ${T.amber}`,
+            background: T.amberDim,
+            color: T.amber,
+            cursor: 'pointer',
+            borderRadius: 0,
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ─── Chart component ──────────────────────────────────────────── */
-export default function CandlestickChart({ data, showCandles, showAvg, formatCurrency }) {
+export default function CandlestickChart({ data, formatCurrency }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const candleRef    = useRef(null);
@@ -110,12 +414,36 @@ export default function CandlestickChart({ data, showCandles, showAvg, formatCur
   const tooltipRef   = useRef(null);
   // Keep a fast lookup from time string → full data row for tooltip enrichment
   const dataMapRef   = useRef({});
+  // indicator line series refs, keyed by series key (e.g. "ind123-line")
+  const indicatorSeriesRef = useRef({});
+  // indicator points lookup for tooltip enrichment: { [seriesKey]: { [time]: value } }
+  const indicatorPointsRef = useRef({});
 
-  // stable ref so the crosshair handler doesn't go stale
+  const [showCandles, setShowCandles] = useState(true);
+  const [showAvg, setShowAvg] = useState(false);
+  const [indicators, setIndicators] = useState([]); // [{id, type, params, color}]
+  const [popupOpen, setPopupOpen] = useState(false);
+
+  // stable refs so the crosshair handler doesn't go stale
   const showCandlesRef = useRef(showCandles);
   const showAvgRef     = useRef(showAvg);
+  const indicatorsRef  = useRef(indicators);
   showCandlesRef.current = showCandles;
   showAvgRef.current     = showAvg;
+  indicatorsRef.current  = indicators;
+
+  const handleAddIndicator = useCallback((partial) => {
+    setIndicators((prev) => {
+      const color = nextColor(prev.map((p) => p.color));
+      const id = `ind-${Date.now()}-${Math.round(Math.random() * 1000)}`;
+      return [...prev, { id, color, ...partial }];
+    });
+    setPopupOpen(false);
+  }, []);
+
+  const handleRemoveIndicator = useCallback((id) => {
+    setIndicators((prev) => prev.filter((i) => i.id !== id));
+  }, []);
 
   /* ── Build/destroy chart on mount ─────────────────────────────── */
   useEffect(() => {
@@ -203,7 +531,22 @@ export default function CandlestickChart({ data, showCandles, showAvg, formatCur
         time: timeKey,
       };
 
-      renderTooltip(tooltipEl, merged, showCandlesRef.current, showAvgRef.current, formatCurrency);
+      // Gather indicator values at this time for tooltip (uses precomputed
+      // points map from the indicator-sync effect — covers multi-line
+      // indicators like Bollinger Bands automatically since each line has
+      // its own key prefixed with the indicator id).
+      const indicatorVals = [];
+      for (const ind of indicatorsRef.current) {
+        for (const key of Object.keys(indicatorPointsRef.current)) {
+          if (!key.startsWith(ind.id)) continue;
+          const val = indicatorPointsRef.current[key][timeKey];
+          if (val == null) continue;
+          const meta = indicatorSeriesRef.current[key];
+          indicatorVals.push({ label: meta?.label || key, value: val, color: meta?.color || T.textHi });
+        }
+      }
+
+      renderTooltip(tooltipEl, merged, showCandlesRef.current, showAvgRef.current, formatCurrency, indicatorVals);
 
       // Position tooltip: keep within container bounds
       const { width: cw } = containerRef.current.getBoundingClientRect();
@@ -230,10 +573,12 @@ export default function CandlestickChart({ data, showCandles, showAvg, formatCur
       candleRef.current = null;
       avgRef.current    = null;
       tooltipRef.current = null;
+      indicatorSeriesRef.current = {};
+      indicatorPointsRef.current = {};
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ── Sync data whenever it changes ──────────────────────────────── */
+  /* ── Sync candle/avg data whenever it changes ─────────────────── */
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !data?.length) return;
@@ -319,6 +664,56 @@ export default function CandlestickChart({ data, showCandles, showAvg, formatCur
     chart.timeScale().fitContent();
   }, [data, showCandles, showAvg]);
 
+  /* ── Sync indicator overlays whenever data or indicator list changes ── */
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    // Remove all existing indicator series first (simplest correct approach;
+    // indicator count is small so this is cheap)
+    for (const key of Object.keys(indicatorSeriesRef.current)) {
+      const entry = indicatorSeriesRef.current[key];
+      if (entry?.series) {
+        try { chart.removeSeries(entry.series); } catch { /* already gone */ }
+      }
+    }
+    indicatorSeriesRef.current = {};
+    indicatorPointsRef.current = {};
+
+    if (!data?.length) return;
+
+    for (const ind of indicators) {
+      let lines;
+      try {
+        lines = computeIndicatorLines(ind, data);
+      } catch (e) {
+        // Skip a broken indicator rather than crashing the whole chart
+        console.error('Indicator computation failed:', ind, e);
+        continue;
+      }
+
+      for (const line of lines) {
+        const series = chart.addSeries(LineSeries, {
+          color: line.color,
+          lineWidth: 1,
+          lineStyle: line.lineStyle ?? 0,
+          crosshairMarkerVisible: true,
+          crosshairMarkerRadius: 3,
+          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+          lastValueVisible: false,
+          priceLineVisible: false,
+        });
+        series.setData(line.points);
+
+        const pointsByTime = {};
+        for (const p of line.points) pointsByTime[p.time] = p.value;
+
+        indicatorSeriesRef.current[line.key] = { series, color: line.color, label: line.label };
+        indicatorPointsRef.current[line.key] = pointsByTime;
+      }
+    }
+  }, [data, indicators]);
+
   /* ── Render ──────────────────────────────────────────────────────── */
   return (
     <div style={{ background: T.surface, border: `1px solid ${T.border}`, fontFamily: monoFont }}>
@@ -339,7 +734,7 @@ export default function CandlestickChart({ data, showCandles, showAvg, formatCur
             fontSize: 9, letterSpacing: '0.10em', textTransform: 'uppercase',
             color: T.textLo, marginLeft: 12,
           }}>
-            OHLC + Avg
+            OHLC + Avg + Indicators
           </span>
         </div>
 
@@ -368,6 +763,44 @@ export default function CandlestickChart({ data, showCandles, showAvg, formatCur
                 AVG
               </span>
             </div>
+          )}
+        </div>
+      </div>
+
+      {/* Indicator / overlay toolbar */}
+      <div style={{
+        position: 'relative',
+        display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+        padding: '8px 16px', borderBottom: `1px solid ${T.border}`,
+        background: T.elevated,
+      }}>
+        <button style={toolbarBtn(showCandles)} onClick={() => setShowCandles((v) => !v)}>
+          OHLC
+        </button>
+        <button style={toolbarBtn(showAvg)} onClick={() => setShowAvg((v) => !v)}>
+          Avg Price
+        </button>
+
+        <div style={{ width: 1, alignSelf: 'stretch', background: T.border, margin: '0 4px' }} />
+
+        {indicators.map((ind) => (
+          <div key={ind.id} style={chipStyle(ind.color)}>
+            <span>{describeIndicator(ind)}</span>
+            <button style={chipCloseBtn} onClick={() => handleRemoveIndicator(ind.id)} title="Remove indicator">
+              ×
+            </button>
+          </div>
+        ))}
+
+        <div style={{ position: 'relative', marginLeft: indicators.length ? 0 : 'auto' }}>
+          <button style={plusBtn} onClick={() => setPopupOpen((v) => !v)} title="Add indicator">
+            +
+          </button>
+          {popupOpen && (
+            <AddIndicatorPopup
+              onAdd={handleAddIndicator}
+              onClose={() => setPopupOpen(false)}
+            />
           )}
         </div>
       </div>

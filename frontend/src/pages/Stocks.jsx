@@ -297,30 +297,33 @@ const fmtInt = (n) =>
 const pctColor = (v) =>
   v > 0 ? T.green : v < 0 ? T.red : T.textLo;
 
-/* ── Shared control-bar layout helpers (matches options page) ── */
+/* ── Shared control-bar layout helpers — matches Futures.jsx exactly ── */
 const rowStyle = {
   display: 'flex',
-  alignItems: 'flex-end',
+  alignItems: 'stretch',
   gap: 0,
   borderBottom: `1px solid ${T.border}`,
-  flexWrap: 'wrap',
+  background: T.surface,
+  flexShrink: 0,
 };
 
 const cellStyle = (extra = {}) => ({
+  padding: '10px 16px',
+  borderRight: `1px solid ${T.border}`,
   display: 'flex',
   flexDirection: 'column',
-  gap: 4,
-  padding: '8px 14px',
-  borderRight: `1px solid ${T.border}`,
+  justifyContent: 'center',
+  gap: 5,
+  flexShrink: 0,
   ...extra,
 });
 
 const sectionLabel = (extra = {}) => ({
-  fontSize: 9,
+  fontSize: 11,
+  fontWeight: 700,
   letterSpacing: '0.14em',
   textTransform: 'uppercase',
-  color: T.textMid,
-  marginBottom: 2,
+  color: T.textLo,
   ...extra,
 });
 
@@ -420,9 +423,36 @@ function ChartTooltip({ active, payload, label, valueFormatter }) {
 
 function TabRow({ tabs, active, onChange }) {
   return (
-    <div className="trm-tab-row">
+    <div style={{
+      display: 'flex',
+      gap: 0,
+      borderBottom: `1px solid ${T.borderHi}`,
+      background: T.surface,
+      overflowX: 'auto',
+      flexShrink: 0,
+    }}>
       {tabs.map(({ key, label }) => (
-        <button key={key} className={`trm-tab${active === key ? ' active' : ''}`} onClick={() => onChange(key)}>
+        <button
+          key={key}
+          onClick={() => onChange(key)}
+          style={{
+            padding: '8px 18px',
+            fontSize: 10,
+            fontFamily: 'inherit',
+            letterSpacing: '0.09em',
+            fontWeight: active === key ? 700 : 400,
+            color: active === key ? T.amber : T.textMid,
+            background: active === key ? T.amberDim : 'transparent',
+            border: 'none',
+            borderBottom: active === key ? `2px solid ${T.amber}` : '2px solid transparent',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            textTransform: 'uppercase',
+            transition: 'color 0.15s, background 0.15s',
+            marginBottom: -1,
+            borderRadius: 0,
+          }}
+        >
           {label}
         </button>
       ))}
@@ -440,7 +470,6 @@ function MetricStrip({ items }) {
       display: 'flex',
       width: '100%',
       border: `1px solid ${T.border}`,
-      borderTop: 'none',
       overflow: 'hidden',
     }}>
       {items.map(({ title, value, subtitle, accent = T.amber }) => (
@@ -478,8 +507,9 @@ function OHLCView({ tickers, dates }) {
   const [rollData,  setRollData]  = useState([]);
   const [loading,   setLoading]   = useState(false);
   const [chartTab,  setChartTab]  = useState('price');
-  const [showCandles, setShowCandles] = useState(true);
-  const [showAvg,     setShowAvg]     = useState(false);
+  // NOTE: showCandles / showAvg used to live here and were passed down to
+  // CandlestickChart as props. They've moved into CandlestickChart itself
+  // (along with the indicator toolbar), so this page no longer owns them.
 
   const load = useCallback(async () => {
     if (!ticker || !startDate || !endDate) return;
@@ -519,14 +549,13 @@ function OHLCView({ tickers, dates }) {
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       {/* Control bar */}
-      <div style={{ background: T.surface, border: `1px solid ${T.border}` }}>
-        <div style={rowStyle}>
+      <div style={{ ...rowStyle, borderBottom: `2px solid ${T.border}` }}>
           {/* Ticker */}
-          <div style={cellStyle({ minWidth: 200 })}>
+          <div style={cellStyle({ minWidth: 220 })}>
             <span style={sectionLabel()}>Ticker</span>
-            <TermSelect value={ticker || tickers[0]} onChange={(e) => setTicker(e.target.value)} style={{ minWidth: 180 }}>
+            <TermSelect value={ticker || tickers[0]} onChange={(e) => setTicker(e.target.value)} style={{ minWidth: 190 }}>
               {tickers.map((t) => <option key={t} value={t} style={{ background: T.surface }}>{t}</option>)}
             </TermSelect>
           </div>
@@ -540,21 +569,43 @@ function OHLCView({ tickers, dates }) {
             </div>
           </div>
           {/* Load + status */}
-          <div style={{ ...cellStyle({ borderRight: 'none', marginLeft: 'auto' }), flexDirection: 'row', alignItems: 'flex-end', gap: 12 }}>
-            <button className="trm-action" onClick={load} disabled={!ticker || loading}>
+          <div style={{ ...cellStyle({ borderRight: 'none', marginLeft: 'auto' }), flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <button
+              onClick={load}
+              disabled={!ticker || loading}
+              style={{
+                padding: '4px 18px',
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.10em',
+                textTransform: 'uppercase',
+                border: `1px solid ${T.amber}`,
+                background: T.amberDim,
+                color: T.amber,
+                cursor: (!ticker || loading) ? 'not-allowed' : 'pointer',
+                opacity: (!ticker || loading) ? 0.4 : 1,
+                transition: 'background 0.15s',
+                borderRadius: 0,
+                fontFamily: 'inherit',
+                whiteSpace: 'nowrap',
+              }}
+            >
               {loading ? 'Loading…' : 'Load'}
             </button>
             {data.length > 0 && (
-              <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.10em', textTransform: 'uppercase', paddingBottom: 6 }}>
+              <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.10em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
                 {data.length} sessions
               </span>
             )}
           </div>
-        </div>
       </div>
 
       {/* Metric strip */}
-      {metrics.length > 0 && <MetricStrip items={metrics} />}
+      {metrics.length > 0 && (
+        <div style={{ marginTop: 1 }}>
+          <MetricStrip items={metrics} />
+        </div>
+      )}
 
       {/* Chart panel */}
       {loading && (
@@ -563,7 +614,7 @@ function OHLCView({ tickers, dates }) {
 
       {!loading && data.length > 0 && (
         <div style={{ border: `1px solid ${T.border}`, borderTop: 'none' }}>
-          {/* Black header bar: ticker context left, tabs centre, toggles right */}
+          {/* Black header bar: ticker context left, tabs centre */}
           <div style={{
             background: T.bg,
             borderBottom: `1px solid ${T.borderHi}`,
@@ -603,14 +654,6 @@ function OHLCView({ tickers, dates }) {
               ))}
               <div style={{ flex: 1 }} /> {/* spacer */}
             </div>
-
-            {/* Price chart toggles — right */}
-            {chartTab === 'price' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 14px', borderLeft: `1px solid ${T.border}` }}>
-                <button className={`trm-btn${showCandles ? ' active' : ''}`} onClick={() => setShowCandles(v => !v)}>OHLC</button>
-                <button className={`trm-btn${showAvg ? ' active' : ''}`} onClick={() => setShowAvg(v => !v)}>Avg Price</button>
-              </div>
-            )}
           </div>
 
           {/* Chart body */}
@@ -618,8 +661,6 @@ function OHLCView({ tickers, dates }) {
             {chartTab === 'price' && (
               <CandlestickChart
                 data={data}
-                showCandles={showCandles}
-                showAvg={showAvg}
                 formatCurrency={formatCurrency}
               />
             )}
@@ -759,11 +800,10 @@ function ScreenerView({ dates }) {
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <div style={{ background: T.surface, border: `1px solid ${T.border}` }}>
-        <div style={rowStyle}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+      <div style={{ ...rowStyle, borderBottom: `2px solid ${T.border}` }}>
           {/* Date */}
-          <div style={cellStyle({ minWidth: 180 })}>
+          <div style={cellStyle({ minWidth: 200 })}>
             <span style={sectionLabel()}>Date</span>
             <input type="date" value={tradeDate} onChange={(e) => setTradeDate(e.target.value)} style={dateInputStyle} />
           </div>
@@ -778,12 +818,11 @@ function ScreenerView({ dates }) {
             />
           </div>
           {/* Row count */}
-          <div style={{ ...cellStyle({ borderRight: 'none', marginLeft: 'auto' }), justifyContent: 'flex-end' }}>
-            <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.12em', textTransform: 'uppercase', paddingBottom: 7 }}>
+          <div style={{ ...cellStyle({ borderRight: 'none', marginLeft: 'auto' }), flexDirection: 'row', alignItems: 'center' }}>
+            <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
               {displayed.length} instruments
             </span>
           </div>
-        </div>
       </div>
 
       {loading ? (
@@ -840,21 +879,19 @@ function DeliveryView({ dates }) {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <div style={{ background: T.surface, border: `1px solid ${T.border}` }}>
-        <div style={rowStyle}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+      <div style={{ ...rowStyle, borderBottom: `2px solid ${T.border}` }}>
           {/* Date */}
-          <div style={cellStyle({ minWidth: 180 })}>
+          <div style={cellStyle({ minWidth: 200 })}>
             <span style={sectionLabel()}>Date</span>
             <input type="date" value={tradeDate} onChange={(e) => setTradeDate(e.target.value)} style={dateInputStyle} />
           </div>
           {/* Context label */}
-          <div style={{ ...cellStyle({ borderRight: 'none', flex: 1 }), justifyContent: 'flex-end' }}>
-            <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.10em', textTransform: 'uppercase', paddingBottom: 7 }}>
+          <div style={{ ...cellStyle({ borderRight: 'none', flex: 1 }), flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
+            <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.10em', textTransform: 'uppercase' }}>
               Top 50 by delivery % · Institutional conviction signal
             </span>
           </div>
-        </div>
       </div>
 
       {loading ? (
@@ -953,37 +990,66 @@ export default function Stocks() {
     <div className="trm-root" style={{ padding: '0' }}>
       <StyleInjector />
 
-      {/* Page header strip */}
+      {/* ── PAGE HEADER — matches Futures.jsx ── */}
       <div style={{
+        padding: '8px 20px',
+        borderBottom: `1px solid ${T.border}`,
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '10px 18px',
-        background: T.surfaceHi,
-        borderBottom: `1px solid ${T.borderHi}`,
+        gap: 16,
+        background: T.surface,
+        flexShrink: 0,
       }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 16 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: T.textHi }}>
-            EQ Stocks
-          </span>
-          <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.10em', textTransform: 'uppercase' }}>
-            {tickers.length} tickers · {dates.length} sessions · NSE Cash Market
+        <span style={{
+          fontSize: 16,
+          fontWeight: 700,
+          color: T.textHi,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+        }}>
+          EQ Stocks
+        </span>
+        <span style={{
+          fontSize: 10,
+          letterSpacing: '0.14em',
+          color: T.textLo,
+          textTransform: 'uppercase',
+          borderLeft: `1px solid ${T.border}`,
+          paddingLeft: 16,
+        }}>
+          NSE · Cash Market
+        </span>
+        <span style={{
+          fontSize: 10,
+          letterSpacing: '0.12em',
+          color: T.textLo,
+          textTransform: 'uppercase',
+        }}>
+          {tickers.length} tickers · {dates.length} sessions
+        </span>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%',
+            background: T.green,
+            boxShadow: `0 0 6px ${T.green}`,
+            display: 'inline-block',
+          }} />
+          <span style={{ fontSize: 9, letterSpacing: '0.12em', color: T.textLo, textTransform: 'uppercase' }}>
+            {dates.at(-1)}
           </span>
         </div>
-        <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.10em', textTransform: 'uppercase' }}>
-          {dates.at(-1)}
-        </span>
       </div>
 
-      {/* View tab row */}
+      {/* ── VIEW TAB ROW ── */}
       <TabRow tabs={views} active={view} onChange={setView} />
 
-      {/* Content */}
-      <div style={{ padding: '12px 18px', display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {/* ── CONTENT — no outer padding, views own their own spacing ── */}
+      <main style={{ flex: 1, padding: '16px 20px', overflowX: 'hidden' }}>
         {view === 'ohlc'     && <OHLCView     tickers={tickers} dates={dates} />}
         {view === 'screener' && <ScreenerView dates={dates} />}
         {view === 'delivery' && <DeliveryView dates={dates} />}
-      </div>
+      </main>
     </div>
   );
 }
