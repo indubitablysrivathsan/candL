@@ -2,16 +2,40 @@
 //
 // Requires: npm install lightweight-charts
 //
-// Props:
-//   data            – array of { trade_date: 'YYYY-MM-DD', open, high, low, close, avg_price?, prev_close? }
-//   formatCurrency  – (value, decimals) => string
+// Props (ALL of these except `data`/`formatCurrency` are optional — the
+// component is fully usable standalone with just those two):
+//   data                 – array of { trade_date, open, high, low, close,
+//                           avg_price?, prev_close?, volume?, delivery_pct? }
+//   formatCurrency       – (value, decimals) => string
+//   indicators           – controlled: [{id, type, params, color}]        (default [])
+//   onIndicatorsChange   – (newArray) => void                             (default noop)
+//   showCandles          – controlled boolean                             (default true)
+//   onShowCandlesChange  – (bool) => void                                 (default noop)
+//   showAvg              – controlled boolean                             (default false)
+//   onShowAvgChange      – (bool) => void                                 (default noop)
+//   showVolume           – boolean, renders a Volume pane                 (default false)
+//   showDelivery         – boolean, renders a Delivery% pane               (default false)
 //
-// This component now owns its own toolbar (OHLC / Avg Price toggles +
-// indicator chips + "+" add-indicator menu). Stocks.jsx no longer needs to
-// pass showCandles/showAvg — they're internal state here.
+// showVolume/showDelivery are plain flags, not toggled from inside the
+// component — there's no toolbar button for them. A consumer that wants
+// them on just passes showVolume/showDelivery, a consumer that doesn't
+// (e.g. a minimal standalone usage) simply omits them and gets the
+// original OHLC + Avg chart with its usual toolbar.
+//
+// Panes are stacked top → bottom: Candles, Volume, Delivery% — all sharing
+// a single lightweight-charts instance, so they share one time scale.
+// Panning/zooming/crosshair on any pane moves/reflects across all of them
+// automatically; no manual sync code needed.
 
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
-import { createChart, CrosshairMode, LineStyle, CandlestickSeries, LineSeries } from 'lightweight-charts';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import {
+  createChart,
+  CrosshairMode,
+  LineStyle,
+  CandlestickSeries,
+  LineSeries,
+  HistogramSeries,
+} from 'lightweight-charts';
 import {
   computeIndicatorLines,
   describeIndicator,
@@ -31,6 +55,7 @@ const T = {
   amberDim: 'rgba(240,165,0,0.12)',
   green:    '#00C896',
   red:      '#E05252',
+  blue:     '#4A9EFF',
   textHi:   'rgba(255,255,255,0.90)',
   textMid:  'rgba(255,255,255,0.50)',
   textLo:   'rgba(255,255,255,0.25)',
@@ -39,6 +64,10 @@ const T = {
 };
 
 const monoFont = "'IBM Plex Mono', 'Fira Code', 'Consolas', monospace";
+
+/* ─── Pane sizing — ratio 50 : 20 : 20 (Candles : Volume : Delivery) ── */
+const MAIN_PANE_HEIGHT   = 450;
+const SUB_PANE_HEIGHT    = 100;
 
 /* ─── Tooltip DOM helper ───────────────────────────────────────── */
 function buildTooltipEl() {
@@ -60,10 +89,10 @@ function buildTooltipEl() {
   return el;
 }
 
-function renderTooltip(el, bar, showCandles, showAvg, formatCurrency, indicatorVals) {
+function renderTooltip(el, bar, showCandles, showAvg, showVolume, showDelivery, formatCurrency, indicatorVals) {
   if (!bar) { el.style.display = 'none'; return; }
 
-  const { time, open, high, low, close, avg_price, prev_close } = bar;
+  const { time, open, high, low, close, avg_price, prev_close, volume, delivery_pct } = bar;
 
   const change = prev_close != null && close != null
     ? ((close - prev_close) / prev_close * 100).toFixed(2)
@@ -75,6 +104,8 @@ function renderTooltip(el, bar, showCandles, showAvg, formatCurrency, indicatorV
     showCandles && low   != null && { label: 'LOW',   value: formatCurrency(low,   2), color: T.red     },
     showCandles && close != null && { label: 'CLOSE', value: formatCurrency(close, 2), color: T.textHi  },
     showAvg    && avg_price != null && { label: 'AVG', value: formatCurrency(avg_price, 2), color: T.amber },
+    showVolume && volume != null && { label: 'VOL', value: Number(volume).toLocaleString('en-IN'), color: T.blue, raw: true },
+    showDelivery && delivery_pct != null && { label: 'DEL %', value: `${Number(delivery_pct).toFixed(2)}%`, color: T.amber, raw: true },
   ].filter(Boolean);
 
   // Format date label: time is 'YYYY-MM-DD'
@@ -96,13 +127,13 @@ function renderTooltip(el, bar, showCandles, showAvg, formatCurrency, indicatorV
       text-transform:uppercase; color:${T.textLo};
       margin-bottom:8px; border-bottom:1px solid ${T.border}; padding-bottom:6px;
     ">${dateLabel}</div>
-    ${fields.map(({ label, value, color }) => `
+    ${fields.map(({ label, value, color, raw }) => `
       <div style="
         display:flex; justify-content:space-between; align-items:center;
         gap:20px; font-size:11px; letter-spacing:0.05em; margin-bottom:4px;
       ">
         <span style="color:${T.textMid}; font-size:9px; font-weight:700; letter-spacing:0.12em;">${label}</span>
-        <span style="color:${color}; font-variant-numeric:tabular-nums; font-weight:600;">${value}</span>
+        <span style="color:${color}; font-variant-numeric:tabular-nums; font-weight:600;">${raw ? value : value}</span>
       </div>
     `).join('')}
     ${indicatorRows}
@@ -406,29 +437,24 @@ function AddIndicatorPopup({ onAdd, onClose }) {
 }
 
 /* ─── Chart component ──────────────────────────────────────────── */
-// Props (updated):
-//   data              – bar array
-//   formatCurrency    – formatter
-//   indicators        – controlled: [{id, type, params, color}]
-//   onIndicatorsChange – (newArray) => void
-//   showCandles       – controlled boolean
-//   onShowCandlesChange – (bool) => void
-//   showAvg           – controlled boolean
-//   onShowAvgChange   – (bool) => void
 export default function CandlestickChart({
   data,
   formatCurrency,
-  indicators,
-  onIndicatorsChange,
-  showCandles,
-  onShowCandlesChange,
-  showAvg,
-  onShowAvgChange,
+  indicators = [],
+  onIndicatorsChange = () => {},
+  showCandles = true,
+  onShowCandlesChange = () => {},
+  showAvg = false,
+  onShowAvgChange = () => {},
+  showVolume = false,
+  showDelivery = false,
 }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const candleRef    = useRef(null);
   const avgRef       = useRef(null);
+  const volumeRef    = useRef(null);
+  const deliveryRef  = useRef(null);
   const tooltipRef   = useRef(null);
   // Keep a fast lookup from time string → full data row for tooltip enrichment
   const dataMapRef   = useRef({});
@@ -440,12 +466,16 @@ export default function CandlestickChart({
   const [popupOpen, setPopupOpen] = useState(false);
 
   // stable refs so the crosshair handler doesn't go stale
-  const showCandlesRef = useRef(showCandles);
-  const showAvgRef     = useRef(showAvg);
-  const indicatorsRef  = useRef(indicators);
-  showCandlesRef.current = showCandles;
-  showAvgRef.current     = showAvg;
-  indicatorsRef.current  = indicators;
+  const showCandlesRef  = useRef(showCandles);
+  const showAvgRef      = useRef(showAvg);
+  const showVolumeRef   = useRef(showVolume);
+  const showDeliveryRef = useRef(showDelivery);
+  const indicatorsRef   = useRef(indicators);
+  showCandlesRef.current  = showCandles;
+  showAvgRef.current      = showAvg;
+  showVolumeRef.current   = showVolume;
+  showDeliveryRef.current = showDelivery;
+  indicatorsRef.current   = indicators;
 
   const handleAddIndicator = useCallback((partial) => {
     const color = nextColor(indicators.map((p) => p.color));
@@ -464,12 +494,16 @@ export default function CandlestickChart({
 
     const chart = createChart(containerRef.current, {
       width:  containerRef.current.clientWidth,
-      height: 560,
+      height: MAIN_PANE_HEIGHT,
       layout: {
         background:   { color: T.surface },
         textColor:    T.textMid,
         fontFamily:   monoFont,
         fontSize:     10,
+        panes: {
+          separatorColor: T.border,
+          separatorHoverColor: T.borderHi,
+        },
       },
       grid: {
         vertLines:   { color: T.grid,   style: LineStyle.Dotted },
@@ -559,7 +593,16 @@ export default function CandlestickChart({
         }
       }
 
-      renderTooltip(tooltipEl, merged, showCandlesRef.current, showAvgRef.current, formatCurrency, indicatorVals);
+      renderTooltip(
+        tooltipEl,
+        merged,
+        showCandlesRef.current,
+        showAvgRef.current,
+        showVolumeRef.current,
+        showDeliveryRef.current,
+        formatCurrency,
+        indicatorVals,
+      );
 
       // Position tooltip: keep within container bounds
       const { width: cw } = containerRef.current.getBoundingClientRect();
@@ -582,10 +625,12 @@ export default function CandlestickChart({
       ro.disconnect();
       tooltipEl.remove();
       chart.remove();
-      chartRef.current  = null;
-      candleRef.current = null;
-      avgRef.current    = null;
-      tooltipRef.current = null;
+      chartRef.current    = null;
+      candleRef.current   = null;
+      avgRef.current       = null;
+      volumeRef.current    = null;
+      deliveryRef.current  = null;
+      tooltipRef.current   = null;
       indicatorSeriesRef.current = {};
       indicatorPointsRef.current = {};
     };
@@ -629,7 +674,7 @@ export default function CandlestickChart({
       .map((r) => ({ time: r.trade_date, value: r.avg_price }))
       .sort((a, b) => (a.time < b.time ? -1 : 1));
 
-    // ── Candle series ─────────────────────────────────────────────
+    // ── Candle series (always pane 0) ───────────────────────────────
     if (candleRef.current) {
       chart.removeSeries(candleRef.current);
       candleRef.current = null;
@@ -650,12 +695,12 @@ export default function CandlestickChart({
           precision: 2,
           minMove:   0.01,
         },
-      });
+      }, 0);
       series.setData(ohlc);
       candleRef.current = series;
     }
 
-    // ── Avg price line ────────────────────────────────────────────
+    // ── Avg price line (pane 0, overlaid on candles) ────────────────
     if (avgRef.current) {
       chart.removeSeries(avgRef.current);
       avgRef.current = null;
@@ -669,13 +714,131 @@ export default function CandlestickChart({
         crosshairMarkerVisible: true,
         crosshairMarkerRadius:  3,
         priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-      });
+      }, 0);
       series.setData(lineData);
       avgRef.current = series;
     }
 
     chart.timeScale().fitContent();
   }, [data, showCandles, showAvg]);
+
+  /* ── Sync Volume / Delivery% sub-panes ────────────────────────────
+     Order: Candles = pane 0 (always present).
+     Volume = pane 1 if enabled.
+     Delivery% = next available pane index (1 if volume off, else 2).
+     Panes are recreated whenever the enabled set changes, so indices
+     stay contiguous and empty panes don't linger. ────────────────── */
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    if (volumeRef.current) {
+      try { chart.removeSeries(volumeRef.current); } catch { /* already gone */ }
+      volumeRef.current = null;
+    }
+    if (deliveryRef.current) {
+      try { chart.removeSeries(deliveryRef.current); } catch { /* already gone */ }
+      deliveryRef.current = null;
+    }
+
+    const currentWidth = containerRef.current?.clientWidth ?? 0;
+    const newTotalHeight = MAIN_PANE_HEIGHT
+      + (showVolume ? SUB_PANE_HEIGHT : 0)
+      + (showDelivery ? SUB_PANE_HEIGHT : 0);
+    chart.resize(currentWidth, newTotalHeight, true);
+
+    // Relative weights, not pixels — 50 : 20 : 20. setStretchFactor is the
+    // stable cross-version API for pane sizing (setHeight's absolute-pixel
+    // behavior gets renormalized on layout and was why every pane kept
+    // ending up equal height).
+    const applyStretch = (paneIndex, factor) => {
+      const pane = chart.panes()[paneIndex];
+      if (!pane) return;
+      if (typeof pane.setStretchFactor === 'function') pane.setStretchFactor(factor);
+      else if (typeof pane.setHeight === 'function') pane.setHeight(factor * (SUB_PANE_HEIGHT / 2));
+    };
+
+    applyStretch(0, 5);
+
+    if (!data?.length) return;
+
+    let nextPane = 1;
+
+    if (showVolume) {
+      const volData = data
+        .filter((r) => r.volume != null)
+        .map((r) => ({
+          time:  r.trade_date,
+          value: r.volume,
+          color: (r.prev_close != null ? r.close > r.prev_close : r.close >= r.open)
+            ? 'rgba(0,200,150,0.55)'
+            : 'rgba(224,82,82,0.55)',
+        }))
+        .sort((a, b) => (a.time < b.time ? -1 : 1));
+
+      if (volData.length) {
+        const series = chart.addSeries(HistogramSeries, {
+          priceFormat: {
+            type: 'volume',
+          },
+          // No custom priceScaleId — the default 'right' id is scoped
+          // per-pane in multi-pane charts, so this gets its own visible
+          // axis in this pane rather than sharing/hiding behind the
+          // main price scale.
+        }, nextPane);
+        series.priceScale().applyOptions({
+          scaleMargins: { top: 0.15, bottom: 0.05 },
+          visible: true,
+          borderColor: T.axis,
+          borderVisible: true,
+          textColor: T.textMid,
+          minimumWidth: 72,
+          autoScale: true, // range computed dynamically from the actual volume values received
+        });
+        series.setData(volData);
+        volumeRef.current = series;
+        applyStretch(nextPane, 2);
+
+        nextPane += 1;
+      }
+    }
+
+    if (showDelivery) {
+      const delData = data
+        .filter((r) => r.delivery_pct != null)
+        .map((r) => ({
+          time:  r.trade_date,
+          value: r.delivery_pct,
+          color: r.delivery_pct > 60 ? T.green : r.delivery_pct > 40 ? T.amber : T.textLo,
+        }))
+        .sort((a, b) => (a.time < b.time ? -1 : 1));
+
+      if (delData.length) {
+        const series = chart.addSeries(HistogramSeries, {
+          priceFormat: {
+            type: 'custom',
+            formatter: (v) => `${v.toFixed(1)}%`,
+            minMove: 0.1,
+          },
+          // No custom priceScaleId — see volume pane comment above.
+        }, nextPane);
+        series.priceScale().applyOptions({
+          scaleMargins: { top: 0.15, bottom: 0.05 },
+          visible: true,
+          borderColor: T.axis,
+          borderVisible: true,
+          textColor: T.textMid,
+          minimumWidth: 72,
+          autoScale: true, // range computed dynamically from the actual delivery_pct values received, not a fixed 0-100
+        });
+        series.setData(delData);
+        deliveryRef.current = series;
+        applyStretch(nextPane, 2);
+      }
+    }
+
+    chart.timeScale().fitContent();
+  }, [data, showVolume, showDelivery]);
 
   /* ── Sync indicator overlays whenever data or indicator list changes ── */
   useEffect(() => {
@@ -715,7 +878,7 @@ export default function CandlestickChart({
           priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
           lastValueVisible: false,
           priceLineVisible: false,
-        });
+        }, 0);
         series.setData(line.points);
 
         const pointsByTime = {};
@@ -728,6 +891,10 @@ export default function CandlestickChart({
   }, [data, indicators]);
 
   /* ── Render ──────────────────────────────────────────────────────── */
+  const totalHeight = MAIN_PANE_HEIGHT
+    + (showVolume ? SUB_PANE_HEIGHT : 0)
+    + (showDelivery ? SUB_PANE_HEIGHT : 0);
+
   return (
     <div style={{ background: T.surface, border: `1px solid ${T.border}`, fontFamily: monoFont }}>
 
@@ -747,7 +914,7 @@ export default function CandlestickChart({
             fontSize: 9, letterSpacing: '0.10em', textTransform: 'uppercase',
             color: T.textLo, marginLeft: 12,
           }}>
-            OHLC + Avg + Indicators
+            OHLC + Avg + Indicators{showVolume ? ' + Volume' : ''}{showDelivery ? ' + Delivery' : ''}
           </span>
         </div>
 
@@ -818,10 +985,12 @@ export default function CandlestickChart({
         </div>
       </div>
 
-      {/* Chart mount point — lightweight-charts injects its own canvas here */}
+      {/* Chart mount point — lightweight-charts injects its own canvas here.
+          Container height grows to include Volume/Delivery panes when active;
+          lightweight-charts' own pane-resize logic manages the internal split. */}
       <div
         ref={containerRef}
-        style={{ position: 'relative', width: '100%', height: 560 }}
+        style={{ position: 'relative', width: '100%', height: totalHeight }}
       />
     </div>
   );

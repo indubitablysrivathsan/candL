@@ -1,11 +1,7 @@
 // frontend/src/pages/Stocks.jsx
 // Bloomberg Terminal / Institutional Trading Workstation aesthetic
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Cell,
-} from 'recharts';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 
 import MetricCard     from '../components/shared/MetricCard';
 import LoadingSpinner from '../components/shared/LoadingSpinner';
@@ -390,34 +386,6 @@ function TermSelect({ value, onChange, children, style = {} }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   CHART TOOLTIP — terminal style
-───────────────────────────────────────────────────────────────── */
-
-function ChartTooltip({ active, payload, label, valueFormatter }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{
-      background: T.surfaceHi,
-      border: `1px solid ${T.borderHi}`,
-      padding: '8px 12px',
-      fontSize: 10,
-      letterSpacing: '0.08em',
-      minWidth: 160,
-    }}>
-      <div style={{ color: T.textMid, marginBottom: 6, textTransform: 'uppercase', fontSize: 9 }}>{label}</div>
-      {payload.map((p, i) => (
-        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 3 }}>
-          <span style={{ color: p.color, textTransform: 'uppercase', fontSize: 9, letterSpacing: '0.10em' }}>{p.name}</span>
-          <span style={{ color: T.textHi, fontWeight: 500 }}>
-            {valueFormatter ? valueFormatter(p.value, p.name) : fmt(p.value)}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────────────────────────
    TAB ROW
 ───────────────────────────────────────────────────────────────── */
 
@@ -486,17 +454,10 @@ function MetricStrip({ items }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   COMMON CHART AXES PROPS
-───────────────────────────────────────────────────────────────── */
-
-const axisStyle = {
-  tick: { fill: T.textMid, fontSize: 9, fontFamily: 'IBM Plex Mono, monospace' },
-  axisLine: { stroke: T.border },
-  tickLine: false,
-};
-
-/* ─────────────────────────────────────────────────────────────────
    OHLCV + DELIVERY VIEW
+   Candles, Volume, and Delivery % now render inside a single
+   CandlestickChart instance as stacked, x-axis-synced panes — no
+   separate chart-tab submenu needed since they're all one chart.
 ───────────────────────────────────────────────────────────────── */
 
 function OHLCView({ tickers, dates }) {
@@ -506,12 +467,14 @@ function OHLCView({ tickers, dates }) {
   const [data,      setData]      = useState([]);
   const [rollData,  setRollData]  = useState([]);
   const [loading,   setLoading]   = useState(false);
-  const [chartTab,  setChartTab]  = useState('price');
 
   // ── Persistent overlay state — survives ticker/date changes ──────
   const [showCandles,  setShowCandles]  = useState(true);
   const [showAvg,      setShowAvg]      = useState(false);
   const [indicators,   setIndicators]   = useState([]); // [{id, type, params, color}]
+
+  // Volume and Delivery % are always-on panes on this page — fixed, not
+  // toggleable, since they're the three canonical views for a ticker here.
 
   const load = useCallback(async () => {
     if (!ticker || !startDate || !endDate) return;
@@ -529,6 +492,22 @@ function OHLCView({ tickers, dates }) {
 
   const latest = rollData.at(-1);
 
+  // `data` (from stocks.ohlc) only has OHLC/avg fields. Volume and
+  // delivery_pct live in `rollData` (from stocks.rolling), keyed by the
+  // same trade_date. Merge them so CandlestickChart's Volume/Delivery
+  // panes actually have something to plot.
+  const chartData = useMemo(() => {
+    if (!data.length) return data;
+    const rollMap = {};
+    rollData.forEach((r) => { rollMap[r.trade_date] = r; });
+    return data.map((row) => {
+      const roll = rollMap[row.trade_date];
+      return roll
+        ? { ...row, volume: roll.volume, delivery_pct: roll.delivery_pct }
+        : row;
+    });
+  }, [data, rollData]);
+
   const metrics = latest ? [
     { title: 'Last Traded Price',  value: formatCurrency(latest.close, 2),
       accent: T.amber },
@@ -543,12 +522,6 @@ function OHLCView({ tickers, dates }) {
     { title: 'Relative Volume',    value: fmt(latest.rel_volume),
       accent: latest.rel_volume > 2 ? T.amber : T.textHi },
   ] : [];
-
-  const chartTabs = [
-    { key: 'price',    label: 'Price' },
-    { key: 'delivery', label: 'Delivery %' },
-    { key: 'volume',   label: 'Volume' },
-  ];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -616,124 +589,33 @@ function OHLCView({ tickers, dates }) {
 
       {!loading && data.length > 0 && (
         <div style={{ border: `1px solid ${T.border}`, borderTop: 'none' }}>
-          {/* Black header bar: ticker context left, tabs centre */}
+          {/* Black header bar: ticker context left */}
           <div style={{
             background: T.bg,
             borderBottom: `1px solid ${T.borderHi}`,
             display: 'flex',
             alignItems: 'stretch',
-            justifyContent: 'space-between',
           }}>
-            {/* Ticker + exchange badge */}
-            <div style={{ display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10, borderRight: `1px solid ${T.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', padding: '0 14px', gap: 10 }}>
               <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.08em', color: T.textHi }}>{ticker}</span>
               <span style={{ fontSize: 9, color: T.textMid, letterSpacing: '0.12em', textTransform: 'uppercase' }}>NSE · EQ</span>
             </div>
-
-            {/* Chart tabs — centre */}
-            <div style={{ display: 'flex', flex: 1 }}>
-              {chartTabs.map(({ key, label }) => (
-                <button
-                  key={key}
-                  onClick={() => setChartTab(key)}
-                  style={{
-                    padding: '9px 20px',
-                    fontSize: 10,
-                    fontFamily: 'inherit',
-                    letterSpacing: '0.12em',
-                    textTransform: 'uppercase',
-                    background: chartTab === key ? T.surfaceHi : 'transparent',
-                    color: chartTab === key ? T.amber : T.textMid,
-                    border: 'none',
-                    borderRight: `1px solid ${T.border}`,
-                    borderBottom: chartTab === key ? `2px solid ${T.amber}` : '2px solid transparent',
-                    cursor: 'pointer',
-                    transition: 'all 120ms',
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-              <div style={{ flex: 1 }} /> {/* spacer */}
-            </div>
           </div>
 
-          {/* Chart body */}
+          {/* Chart body — Candles, Volume, Delivery % all in one synced chart */}
           <div style={{ background: T.surface, padding: '14px 14px 10px' }}>
-            {chartTab === 'price' && (
-              <CandlestickChart
-                data={data}
-                formatCurrency={formatCurrency}
-                showCandles={showCandles}
-                onShowCandlesChange={setShowCandles}
-                showAvg={showAvg}
-                onShowAvgChange={setShowAvg}
-                indicators={indicators}
-                onIndicatorsChange={setIndicators}
-              />
-            )}
-
-            {chartTab === 'delivery' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="2 4" stroke={T.border} />
-                    <XAxis dataKey="trade_date" {...axisStyle} tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" />
-                    <YAxis {...axisStyle} tickFormatter={(v) => `${v}%`} width={40} />
-                    <Tooltip content={<ChartTooltip valueFormatter={(v) => `${fmt(v)}%`} />} />
-                    <Bar dataKey="delivery_pct" name="Del %" maxBarSize={12}>
-                      {data.map((row, i) => (
-                        <Cell key={i} fill={row.delivery_pct > 60 ? T.green : row.delivery_pct > 40 ? T.amber : T.textLo} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-                <div style={{ fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.textMid, paddingLeft: 4 }}>
-                  MA5 / MA20 — Delivery % Moving Averages
-                </div>
-                <ResponsiveContainer width="100%" height={130}>
-                  <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="2 4" stroke={T.border} />
-                    <XAxis dataKey="trade_date" {...axisStyle} tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" />
-                    <YAxis {...axisStyle} tickFormatter={(v) => `${v}%`} width={40} />
-                    <Tooltip content={<ChartTooltip valueFormatter={(v) => `${fmt(v)}%`} />} />
-                    <Line dataKey="delivery_pct_ma5"  name="MA5"  stroke={T.blue}  dot={false} strokeWidth={1.5} />
-                    <Line dataKey="delivery_pct_ma20" name="MA20" stroke={T.amber} dot={false} strokeWidth={1.5} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-
-            {chartTab === 'volume' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="2 4" stroke={T.border} />
-                    <XAxis dataKey="trade_date" {...axisStyle} tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" />
-                    <YAxis {...axisStyle} tickFormatter={(v) => `${(v / 1e6).toFixed(1)}M`} width={48} />
-                    <Tooltip content={<ChartTooltip valueFormatter={(v) => fmtInt(v)} />} />
-                    <Bar dataKey="volume" name="Volume" maxBarSize={10}>
-                      {data.map((row, i) => (
-                        <Cell key={i} fill={row.rel_volume > 2 ? T.amber : row.rel_volume > 1.5 ? T.blue : T.textLo} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-                <div style={{ fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: T.textMid, paddingLeft: 4 }}>
-                  Relative Volume — vs 20-day average
-                </div>
-                <ResponsiveContainer width="100%" height={110}>
-                  <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="2 4" stroke={T.border} />
-                    <XAxis dataKey="trade_date" {...axisStyle} tickFormatter={(d) => d.slice(5)} interval="preserveStartEnd" />
-                    <YAxis {...axisStyle} width={40} />
-                    <ReferenceLine y={1} stroke="rgba(255,255,255,0.18)" strokeDasharray="3 3" />
-                    <Tooltip content={<ChartTooltip valueFormatter={(v) => fmt(v)} />} />
-                    <Line dataKey="rel_volume" name="Rel Vol" stroke={T.pink} dot={false} strokeWidth={1.5} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )}
+            <CandlestickChart
+              data={chartData}
+              formatCurrency={formatCurrency}
+              showCandles={showCandles}
+              onShowCandlesChange={setShowCandles}
+              showAvg={showAvg}
+              onShowAvgChange={setShowAvg}
+              showVolume
+              showDelivery
+              indicators={indicators}
+              onIndicatorsChange={setIndicators}
+            />
           </div>
         </div>
       )}
