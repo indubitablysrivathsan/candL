@@ -42,7 +42,7 @@ import {
   nextColor,
   validateFormula,
   FormulaError,
-} from './indicators';
+} from './Indicators';
 
 /* ─── Design tokens ────────────────────────────────────────────── */
 const T = {

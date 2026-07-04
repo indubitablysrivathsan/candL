@@ -675,26 +675,34 @@ def get_chart_scale(
 
 # ── Futures public API ────────────────────────────────────────────────────────
 
+_FUT_JOIN = """
+    FROM futures_analytics fa
+    JOIN instruments i
+        ON i.instrument_type = fa.instrument_type
+       AND i.ticker          = fa.ticker
+       AND i.expiry          = fa.expiry
+    JOIN market_data_daily m
+        ON m.instrument_key = i.instrument_key
+       AND m.trade_date     = fa.trade_date
+"""
+
+_FUT_SELECT = """
+    fa.*,
+    m.close, m.prev_close, m.open_interest AS open_int,
+    m.change_in_oi AS chng_in_oi, m.underlying_price AS underlying,
+    m.volume,
+    i.lot_size
+"""
+
+
 def get_futures_analytics(asset_type: str, ticker: str, expiry: str) -> pd.DataFrame:
     instr = _instr(asset_type)
     conn = get_conn(read_only=True)
     try:
         df = conn.execute(
-            """
-            SELECT
-                fa.*,
-                m.close, m.prev_close, m.open_interest AS open_int,
-                m.change_in_oi AS chng_in_oi, m.underlying_price AS underlying,
-                m.volume,
-                i.lot_size
-            FROM futures_analytics fa
-            JOIN instruments i
-                ON i.instrument_type = fa.instrument_type
-               AND i.ticker          = fa.ticker
-               AND i.expiry          = fa.expiry
-            JOIN market_data_daily m
-                ON m.instrument_key = i.instrument_key
-               AND m.trade_date     = fa.trade_date
+            f"""
+            SELECT {_FUT_SELECT}
+            {_FUT_JOIN}
             WHERE fa.instrument_type = ? AND fa.ticker = ? AND fa.expiry = CAST(? AS DATE)
             ORDER BY fa.trade_date
             """,
@@ -716,14 +724,15 @@ def get_futures_rollup(
     instr = _instr(asset_type)
     conn = get_conn(read_only=True)
     params = [instr, trade_date]
-    query = """
-        SELECT * FROM futures_analytics
-        WHERE instrument_type = ? AND trade_date = CAST(? AS DATE)
+    query = f"""
+        SELECT {_FUT_SELECT}
+        {_FUT_JOIN}
+        WHERE fa.instrument_type = ? AND fa.trade_date = CAST(? AS DATE)
     """
     if ticker:
-        query += " AND ticker = ?"
+        query += " AND fa.ticker = ?"
         params.append(ticker)
-    query += " ORDER BY ABS(chng_in_oi) DESC"
+    query += " ORDER BY ABS(m.change_in_oi) DESC"
     try:
         df = conn.execute(query, params).df()
     finally:
@@ -760,12 +769,12 @@ def get_futures_cycle_history(
     conn = get_conn(read_only=True)
     try:
         df = conn.execute(
-            """
-            SELECT *
-            FROM futures_analytics
-            WHERE instrument_type = ?
-              AND ticker = ?
-            ORDER BY trade_date ASC
+            f"""
+            SELECT {_FUT_SELECT}
+            {_FUT_JOIN}
+            WHERE fa.instrument_type = ?
+              AND fa.ticker = ?
+            ORDER BY fa.trade_date ASC
             """,
             [instr, ticker],
         ).df()

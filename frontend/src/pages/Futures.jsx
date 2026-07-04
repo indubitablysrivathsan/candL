@@ -324,11 +324,12 @@ function AnalyticsPanel({
         <PanelHeader
           title={`Rolling Analytics — ${ticker} / ${expiry}`}
           onExport={() => {
-            const headers = ['Date','Close','Prev Close','Chng Price','Chng Price %','Chng OI','Chng OI %','Basis','CoC %','Vol/OI','DTE','Signal'];
+            const headers = ['Date','Close','Prev Close','Chng Price','Chng Price %','Chng OI','Chng OI %','Volume','Lot Size','Basis','CoC %','Vol/OI','DTE','Signal'];
             const csvRows = [...data].reverse().map((row) => [
               row.trade_date, row.close ?? '', row.prev_close ?? '',
               row.chng_in_price ?? '', row.chng_price_per ?? '',
               row.chng_in_oi ?? '', row.chng_oi_per ?? '',
+              row.volume ?? '', row.lot_size ?? '',
               row.basis ?? '',
               row.cost_of_carry != null ? (row.cost_of_carry * 100).toFixed(2) : '',
               row.choi_volume_ratio != null ? Number(row.choi_volume_ratio).toFixed(3) : '',
@@ -351,9 +352,9 @@ function AnalyticsPanel({
                 <TerminalTh>Chng Price</TerminalTh><TerminalTh>Chng %</TerminalTh>
                 <TerminalTh>OI</TerminalTh><TerminalTh>Chng OI</TerminalTh>
                 <TerminalTh>Chng OI %</TerminalTh><TerminalTh>Volume</TerminalTh>
-                <TerminalTh>Basis</TerminalTh><TerminalTh>CoC %</TerminalTh>
-                <TerminalTh>ChOI/Vol</TerminalTh><TerminalTh>DTE</TerminalTh>
-                <TerminalTh>Signal</TerminalTh>
+                <TerminalTh>Lot Size</TerminalTh><TerminalTh>Basis</TerminalTh>
+                <TerminalTh>CoC %</TerminalTh><TerminalTh>ChOI/Vol</TerminalTh>
+                <TerminalTh>DTE</TerminalTh><TerminalTh>Signal</TerminalTh>
               </TerminalTr>
             </thead>
             <tbody>
@@ -380,6 +381,9 @@ function AnalyticsPanel({
                     </TerminalTd>
                     <TerminalTd>
                       {formatNumber(row.volume)}
+                    </TerminalTd>
+                    <TerminalTd>
+                      {formatNumber(row.lot_size)}
                     </TerminalTd>
                     <TerminalTd accent={row.basis >= 0 ? T.green : T.red}>
                       {formatNumber(row.basis, 2)}
@@ -627,8 +631,9 @@ function RollupPanel({
                     <TerminalTh>Chng %</TerminalTh><TerminalTh>OI</TerminalTh>
                     <TerminalTh>Combined OI</TerminalTh><TerminalTh>Chng OI</TerminalTh>
                     <TerminalTh>Chng OI %</TerminalTh><TerminalTh>Volume</TerminalTh>
-                    <TerminalTh>Basis</TerminalTh><TerminalTh>CoC %</TerminalTh>
-                    <TerminalTh>ChOI/Vol</TerminalTh><TerminalTh>DTE</TerminalTh>
+                    <TerminalTh>Lot Size</TerminalTh><TerminalTh>Basis</TerminalTh>
+                    <TerminalTh>CoC %</TerminalTh><TerminalTh>ChOI/Vol</TerminalTh>
+                    <TerminalTh>DTE</TerminalTh>
                   </TerminalTr>
                 </thead>
                 <tbody>
@@ -658,6 +663,9 @@ function RollupPanel({
                       </TerminalTd>
                       <TerminalTd>
                         {formatNumber(row.volume)}
+                      </TerminalTd>
+                      <TerminalTd>
+                        {formatNumber(row.lot_size)}
                       </TerminalTd>
                       <TerminalTd accent={row.basis >= 0 ? T.green : T.red}>
                         {formatNumber(row.basis, 2)}
