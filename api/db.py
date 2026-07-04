@@ -76,10 +76,6 @@ CREATE TABLE IF NOT EXISTS instruments (
     option_type         VARCHAR,
 
     lot_size            INTEGER,
-
-    underlying_symbol   VARCHAR,
-
-    is_active           BOOLEAN DEFAULT TRUE
 );
 
 CREATE TABLE IF NOT EXISTS market_data_daily (
@@ -208,20 +204,16 @@ CREATE TABLE IF NOT EXISTS futures_analytics (
     ticker          VARCHAR     NOT NULL,
     expiry          DATE        NOT NULL,
     trade_date      DATE        NOT NULL,
-    close           DOUBLE,
-    prev_close      DOUBLE,
-    chng_in_price   DOUBLE,
-    chng_price_per  DOUBLE,
-    chng_in_oi      DOUBLE,
-    chng_oi_per     DOUBLE,
-    open_int        DOUBLE,
-    volume          DOUBLE,
-    underlying      DOUBLE,
-    quadrant        VARCHAR,
-    basis           DOUBLE,
-    cost_of_carry   DOUBLE,
+
+    chng_in_price     DOUBLE,
+    chng_price_per    DOUBLE,
+    chng_oi_per       DOUBLE,
+    quadrant          VARCHAR,
+    basis             DOUBLE,
+    cost_of_carry     DOUBLE,
     choi_volume_ratio DOUBLE,
-    days_to_expiry  INTEGER,
+    days_to_expiry    INTEGER,
+
     PRIMARY KEY (instrument_type, ticker, expiry, trade_date)
 );
  
@@ -340,7 +332,7 @@ def list_tickers(asset_type: str) -> list[str]:
             """
             SELECT DISTINCT ticker
             FROM instruments
-            WHERE instrument_type = ? AND is_active = TRUE
+            WHERE instrument_type = ?
             ORDER BY ticker
             """,
             [instr],
@@ -689,9 +681,22 @@ def get_futures_analytics(asset_type: str, ticker: str, expiry: str) -> pd.DataF
     try:
         df = conn.execute(
             """
-            SELECT * FROM futures_analytics
-            WHERE instrument_type = ? AND ticker = ? AND expiry = CAST(? AS DATE)
-            ORDER BY trade_date
+            SELECT
+                fa.*,
+                m.close, m.prev_close, m.open_interest AS open_int,
+                m.change_in_oi AS chng_in_oi, m.underlying_price AS underlying,
+                m.volume,
+                i.lot_size
+            FROM futures_analytics fa
+            JOIN instruments i
+                ON i.instrument_type = fa.instrument_type
+               AND i.ticker          = fa.ticker
+               AND i.expiry          = fa.expiry
+            JOIN market_data_daily m
+                ON m.instrument_key = i.instrument_key
+               AND m.trade_date     = fa.trade_date
+            WHERE fa.instrument_type = ? AND fa.ticker = ? AND fa.expiry = CAST(? AS DATE)
+            ORDER BY fa.trade_date
             """,
             [instr, ticker, expiry],
         ).df()
@@ -787,7 +792,7 @@ def get_eq_tickers() -> list[str]:
             """
             SELECT DISTINCT ticker
             FROM instruments
-            WHERE instrument_type = 'EQ' AND is_active = TRUE
+            WHERE instrument_type = 'EQ'
             ORDER BY ticker
             """
         ).fetchall()

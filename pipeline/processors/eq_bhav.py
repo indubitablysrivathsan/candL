@@ -51,8 +51,6 @@ def process(trade_date: str):
         "strike":           None,
         "option_type":      None,
         "lot_size":         None,
-        "underlying_symbol":df["SYMBOL"].str.strip(),
-        "is_active":        True,
     }).drop_duplicates("instrument_key")
 
     mdd = pd.DataFrame({

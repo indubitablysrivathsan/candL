@@ -6,7 +6,6 @@ import duckdb
 _INSTR_STR_COLS = [
     "exchange", "segment", "instrument_type", "ticker",
     "instrument_name", "isin", "series", "option_type",
-    "underlying_symbol",
 ]
 
 def upsert_instruments(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
@@ -30,9 +29,7 @@ def upsert_instruments(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
             instrument_name   = excluded.instrument_name,
             isin              = excluded.isin,
             lot_size          = excluded.lot_size,
-            underlying_symbol = excluded.underlying_symbol,
             actual_expiry     = excluded.actual_expiry,
-            is_active         = TRUE
     """)
     conn.unregister("_instr_stage")
 

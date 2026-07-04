@@ -53,8 +53,6 @@ def process(trade_date: str):
         "strike":           None,
         "option_type":      None,
         "lot_size":         pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64"),
-        "underlying_symbol":df["TckrSymb"].str.strip(),
-        "is_active":        True,
     }).drop_duplicates("instrument_key")
 
     mdd = pd.DataFrame({

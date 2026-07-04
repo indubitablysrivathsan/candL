@@ -66,17 +66,16 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
         "instrument_key", "Sgmt", "FinInstrmTp", "FinInstrmId",
         "TckrSymb", "FinInstrmNm", "ISIN", "SctySrs",
         "expiry_d", "act_exp_d", "strike_f", "OptnTp",
-        "lot_i", "TckrSymb",
+        "lot_i",
     ]].drop_duplicates("instrument_key").copy()
 
     instr.columns = [
         "instrument_key", "segment", "instrument_type", "instrument_id",
         "ticker", "instrument_name", "isin", "series",
         "expiry", "actual_expiry", "strike", "option_type",
-        "lot_size", "underlying_symbol",
+        "lot_size",
     ]
     instr.insert(1, "exchange", "NSE")
-    instr["is_active"] = True
     return df, instr
 
 
@@ -117,7 +116,8 @@ def _process_futures(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
             AVG(TRY_CAST(UndrlygPric    AS DOUBLE)) AS underlying,
             SUM(TRY_CAST(ChngInOpnIntrst AS DOUBLE)) AS chng_in_oi,
             SUM(TRY_CAST(TtlTradgVol    AS DOUBLE)) AS volume,
-            SUM(TRY_CAST(OpnIntrst      AS DOUBLE)) AS open_int
+            SUM(TRY_CAST(OpnIntrst      AS DOUBLE)) AS open_int,
+            MAX(TRY_CAST(NewBrdLotQty   AS DOUBLE)) AS lot_size
         FROM _fut_stage
         GROUP BY FinInstrmTp, TckrSymb, TRY_CAST(XpryDt AS DATE)
     """).df()
@@ -131,14 +131,15 @@ def _process_futures(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
     for _, r in agg.iterrows():
         close, prev_close = r["close"], r["prev_close"]
         underlying = r["underlying"]
-        chng_in_oi, open_int, volume = r["chng_in_oi"], r["open_int"], r["volume"]
+        chng_in_oi, open_int, volume, lot_size = r["chng_in_oi"], r["open_int"], r["volume"], r["lot_size"]
         expiry = r["expiry"]
         dte = max((pd.to_datetime(expiry) - trade_dt).days, 0)
         chng_price    = close - prev_close if (close and prev_close) else None
         prev_oi       = open_int - chng_in_oi if (open_int and chng_in_oi) else None
         basis         = close - underlying if (close and underlying) else None
         coc           = (basis / underlying) * (365 / dte) if (underlying and dte) else None
-        choivr        = chng_in_oi / volume if volume else None
+        actual_volume = volume * lot_size if (volume and lot_size) else None
+        choivr        = chng_in_oi / actual_volume if actual_volume else None
         quadrant      = _QUADRANT[(chng_in_oi >= 0, chng_price >= 0)] if (chng_in_oi is not None and chng_price is not None) else None
         chng_price_p  = (chng_price / prev_close * 100) if prev_close else None
         chng_oi_p     = (chng_in_oi / prev_oi * 100) if prev_oi else None
@@ -146,43 +147,18 @@ def _process_futures(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
         rows.append((
             str(r["instrument_type"]), str(r["ticker"]),
             expiry, pd.to_datetime(trade_date).date(),
-            close, prev_close, chng_price, chng_price_p,
-            chng_in_oi, chng_oi_p, open_int, underlying,
-            quadrant, basis, coc, choivr, dte, volume
+            chng_price, chng_price_p, chng_oi_p,
+            quadrant, basis, coc, choivr, dte,
         ))
 
     conn.executemany("""
-        INSERT INTO futures_analytics (
-            instrument_type,
-            ticker,
-            expiry,
-            trade_date,
-            close,
-            prev_close,
-            chng_in_price,
-            chng_price_per,
-            chng_in_oi,
-            chng_oi_per,
-            open_int,
-            underlying,
-            quadrant,
-            basis,
-            cost_of_carry,
-            choi_volume_ratio,
-            days_to_expiry,
-            volume
-        )
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO futures_analytics VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
-            close=excluded.close, prev_close=excluded.prev_close,
             chng_in_price=excluded.chng_in_price, chng_price_per=excluded.chng_price_per,
-            chng_in_oi=excluded.chng_in_oi, chng_oi_per=excluded.chng_oi_per,
-            open_int=excluded.open_int, volume=excluded.volume, underlying=excluded.underlying,
-            quadrant=excluded.quadrant, basis=excluded.basis,
-            cost_of_carry=excluded.cost_of_carry, choi_volume_ratio=excluded.choi_volume_ratio,
-            days_to_expiry=excluded.days_to_expiry
+            chng_oi_per=excluded.chng_oi_per, quadrant=excluded.quadrant,
+            basis=excluded.basis, cost_of_carry=excluded.cost_of_carry,
+            choi_volume_ratio=excluded.choi_volume_ratio, days_to_expiry=excluded.days_to_expiry
     """, rows)
-
 
 # ── options analytics ─────────────────────────────────────────────────────────
 
