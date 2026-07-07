@@ -7,3 +7,4 @@ numpy
 pandas
 requests
 pytest
+httpx2
