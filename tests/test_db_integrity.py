@@ -16,6 +16,7 @@ import duckdb
 import pytest
 
 from tests.conftest import DATE_ROLLOVER
+from pipeline.processors.keys import make_instrument_key
 
 
 # ── constraint enforcement ────────────────────────────────────────────────────
@@ -56,28 +57,39 @@ def test_futures_analytics_primary_key_rejects_raw_duplicate_insert(tmp_db):
         conn.close()
 
 
-def test_instruments_unique_index_rejects_duplicate_identity(tmp_db):
-    """
-    idx_instr_identity is a UNIQUE INDEX (not the PK, which is
-    instrument_key) over (instrument_type, ticker, expiry, strike,
-    option_type, series). Two different instrument_keys with an identical
-    identity tuple must be rejected.
-    """
+def test_make_instrument_key_produces_primary_key_identity(tmp_db):
     import api.db as db
+
+    key = make_instrument_key(
+        instrument_type="STF",
+        ticker="TESTCO",
+        expiry="2026-07-30",
+        strike=None,
+        option_type=None,
+        series="XX",
+    )
 
     conn = db.get_conn()
     try:
         conn.execute("""
             INSERT INTO instruments VALUES
-            (111, 'NSE', 'FO', 'STF', 1, 'TESTCO', 'TESTCO-FUT', NULL, 'XX',
-             '2026-07-30', '2026-07-30', NULL, NULL, 100)
-        """)
+            (?, 'NSE', 'FO', 'STF', 1,
+             'TESTCO', 'TESTCO-FUT',
+             NULL, 'XX',
+             '2026-07-30', '2026-07-30',
+             NULL, NULL, 100)
+        """, [key])
+
         with pytest.raises(duckdb.ConstraintException):
             conn.execute("""
                 INSERT INTO instruments VALUES
-                (222, 'NSE', 'FO', 'STF', 2, 'TESTCO', 'TESTCO-FUT-DUP', NULL, 'XX',
-                 '2026-07-30', '2026-07-30', NULL, NULL, 100)
-            """)
+                (?, 'NSE', 'FO', 'STF', 2,
+                 'TESTCO', 'TESTCO-FUT-DUP',
+                 NULL, 'XX',
+                 '2026-07-30', '2026-07-30',
+                 NULL, NULL, 100)
+            """, [key])
+
     finally:
         conn.close()
 

@@ -10,6 +10,9 @@ pytest ^
     test_manifest_transitions.py ^
     test_processor_idempotency.py ^
     test_atomicity_rollback.py ^
+    test_db_integrity.py ^
+    test_schema_validation.py ^
+    test_api_responses.py ^
     -v
 
 pause
