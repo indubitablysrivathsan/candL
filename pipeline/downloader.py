@@ -5,9 +5,14 @@ import pandas as pd
 from typing import Any
 import requests
 import zipfile
+import gzip
 import io
 
-from config import FO_RAW_ROOT, EQ_BHAV_ROOT, CM_BHAV_ROOT, FII_STATS_ROOT, PART_OI_ROOT, PART_VOL_ROOT, FO_VOLT_ROOT, MKT_ACT_ROOT, NSE_BASE_URL
+from config import (
+    FO_RAW_ROOT, FO_LEGACY_RAW_ROOT, EQ_BHAV_ROOT, CM_BHAV_ROOT, CM_BHAV_LEGACY_ROOT,
+    FII_STATS_ROOT, PART_OI_ROOT, PART_VOL_ROOT, FO_VOLT_ROOT, MKT_ACT_ROOT,
+    FO_CONTRACT_ROOT, CM_SECURITY_ROOT, NSE_BASE_URL, NSE_HIST_BASE_URL
+)
 
 HEADERS = {
     "User-Agent": (
@@ -20,6 +25,14 @@ HEADERS = {
 
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
+
+NEW_NSE_SCHEMA_DATE = datetime(2024, 7, 21).date()
+
+# ── Schema switch ─────────────────────────────────────────────────────────────
+
+def use_new_schema(trade_date: str) -> bool:
+    return datetime.strptime(trade_date, "%Y-%m-%d").date() >= NEW_NSE_SCHEMA_DATE
+
 
 # ── Validators ───────────────────────────────────────────────────────────────
 
@@ -58,6 +71,26 @@ def validate_fo_bhav(csv_bytes: bytes, expected_date: str) -> bool:
 
     return actual == expected_date
 
+def validate_fo_bhav_legacy(csv_bytes: bytes, expected_date: str) -> bool:
+    df = pd.read_csv(StringIO(csv_bytes.decode("utf-8")))
+    df.columns = df.columns.str.strip()
+    actual = pd.to_datetime(
+        df["TIMESTAMP"].iloc[0],
+        format="%d-%b-%Y"
+    ).strftime("%Y-%m-%d")
+
+    return actual == expected_date
+
+def validate_cm_bhav_legacy(csv_bytes: bytes, expected_date: str) -> bool:
+    df = pd.read_csv(StringIO(csv_bytes.decode("utf-8")))
+    df.columns = df.columns.str.strip()
+    actual = pd.to_datetime(
+        df["TIMESTAMP"].iloc[0],
+        format="%d-%b-%Y"
+    ).strftime("%Y-%m-%d")
+
+    return actual == expected_date
+
 def validate_fo_volt(content: bytes, expected_date: str) -> bool:
     df = pd.read_csv(StringIO(content.decode("utf-8")))
     df.columns = df.columns.str.strip()
@@ -82,9 +115,15 @@ def validate_or_market_closed(
 # ── URL builders ──────────────────────────────────────────────────────────────
 
 def build_fo_url(trade_date: str) -> str:
-    """2026-05-27 → .../BhavCopy_NSE_FO_0_0_0_20260527_F_0000.csv.zip"""
-    compact = trade_date.replace("-", "")
-    return f"{NSE_BASE_URL}/content/fo/BhavCopy_NSE_FO_0_0_0_{compact}_F_0000.csv.zip"
+    """2026-05-27 → .../BhavCopy_NSE_FO_0_0_0_20260527_F_0000.csv.zip
+    pre-2024-07-21 → .../DERIVATIVES/2022/JAN/fo06JAN2022bhav.csv.zip"""
+    if use_new_schema(trade_date):
+        compact = trade_date.replace("-", "")
+        return f"{NSE_BASE_URL}/content/fo/BhavCopy_NSE_FO_0_0_0_{compact}_F_0000.csv.zip"
+
+    dt = datetime.strptime(trade_date, "%Y-%m-%d")
+    ddmonyyyy = dt.strftime("%d%b%Y").upper()
+    return f"{NSE_HIST_BASE_URL}/DERIVATIVES/{dt.strftime('%Y')}/{dt.strftime('%b').upper()}/fo{ddmonyyyy}bhav.csv.zip"
 
 def build_eq_bhav_url(trade_date: str) -> str:
     """2026-05-27 → .../sec_bhavdata_full_27052026.csv"""
@@ -92,9 +131,15 @@ def build_eq_bhav_url(trade_date: str) -> str:
     return f"{NSE_BASE_URL}/products/content/sec_bhavdata_full_{dmy}.csv"
 
 def build_cm_bhav_url(trade_date: str) -> str:
-    """2026-05-27 → .../BhavCopy_NSE_CM_0_0_0_20260527_F_0000.csv.zip"""
-    compact = trade_date.replace("-", "")
-    return f"{NSE_BASE_URL}/content/cm/BhavCopy_NSE_CM_0_0_0_{compact}_F_0000.csv.zip"
+    """2026-05-27 → .../BhavCopy_NSE_CM_0_0_0_20260527_F_0000.csv.zip
+    pre-2024-07-21 → .../EQUITIES/2024/JUN/cm21JUN2024bhav.csv.zip"""
+    if use_new_schema(trade_date):
+        compact = trade_date.replace("-", "")
+        return f"{NSE_BASE_URL}/content/cm/BhavCopy_NSE_CM_0_0_0_{compact}_F_0000.csv.zip"
+
+    dt = datetime.strptime(trade_date, "%Y-%m-%d")
+    ddmonyyyy = dt.strftime("%d%b%Y").upper()
+    return f"{NSE_HIST_BASE_URL}/EQUITIES/{dt.strftime('%Y')}/{dt.strftime('%b').upper()}/cm{ddmonyyyy}bhav.csv.zip"
 
 def build_fii_url(trade_date: str) -> str:
     """2026-05-27 → .../fii_stats_27-May-2026.xls"""
@@ -118,6 +163,16 @@ def build_mkt_act_url(trade_date: str) -> str:
     ddmmyy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%y")
     return f"{NSE_BASE_URL}/archives/equities/mkt/MA{ddmmyy}.csv"
 
+def build_fo_contract_url(trade_date: str) -> str:
+    """2026-07-10 → .../NSE_FO_contract_10072026.csv.gz"""
+    dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
+    return f"{NSE_BASE_URL}/content/fo/NSE_FO_contract_{dmy}.csv.gz"
+
+def build_cm_security_url(trade_date: str) -> str:
+    """2026-07-09 → .../NSE_CM_security_09072026.csv.gz"""
+    dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
+    return f"{NSE_BASE_URL}/content/cm/NSE_CM_security_{dmy}.csv.gz"
+
 
 # ── output path builder ───────────────────────────────────────────────────────
 
@@ -140,6 +195,10 @@ def _extract_csv_from_zip(content: bytes) -> bytes:
         if not csv_files:
             raise ValueError("No CSV found inside ZIP")
         return zf.read(csv_files[0])
+
+
+def _extract_csv_from_gz(content: bytes) -> bytes:
+    return gzip.decompress(content)
 
 
 def _is_today(trade_date: str) -> bool:
@@ -174,7 +233,8 @@ def download_fo_bhav(trade_date: str) -> str:
     content, status = _fetch(build_fo_url(trade_date), trade_date)
     if status == "complete":
         csv_bytes = _extract_csv_from_zip(content)
-        _output_path(FO_RAW_ROOT, trade_date).write_bytes(csv_bytes)
+        root = FO_RAW_ROOT if use_new_schema(trade_date) else FO_LEGACY_RAW_ROOT
+        _output_path(root, trade_date).write_bytes(csv_bytes)
     return status
 
 
@@ -199,7 +259,8 @@ def download_cm_bhav(trade_date: str) -> str:
     content, status = _fetch(build_cm_bhav_url(trade_date), trade_date)
     if status == "complete":
         csv_bytes = _extract_csv_from_zip(content)
-        _output_path(CM_BHAV_ROOT, trade_date).write_bytes(csv_bytes)
+        root = CM_BHAV_ROOT if use_new_schema(trade_date) else CM_BHAV_LEGACY_ROOT
+        _output_path(root, trade_date).write_bytes(csv_bytes)
     return status
 
 
@@ -235,6 +296,22 @@ def download_mkt_act(trade_date: str) -> str:
     content, status = _fetch(build_mkt_act_url(trade_date), trade_date)
     if status == "complete":
         _output_path(MKT_ACT_ROOT, trade_date).write_bytes(content)
+    return status
+
+
+def download_fo_contracts(trade_date: str) -> str:
+    content, status = _fetch(build_fo_contract_url(trade_date), trade_date)
+    if status == "complete":
+        csv_bytes = _extract_csv_from_gz(content)
+        _output_path(FO_CONTRACT_ROOT, trade_date).write_bytes(csv_bytes)
+    return status
+
+
+def download_cm_security(trade_date: str) -> str:
+    content, status = _fetch(build_cm_security_url(trade_date), trade_date)
+    if status == "complete":
+        csv_bytes = _extract_csv_from_gz(content)
+        _output_path(CM_SECURITY_ROOT, trade_date).write_bytes(csv_bytes)
     return status
 
 
@@ -282,5 +359,15 @@ DOWNLOAD_REGISTRY: dict[str, dict[str, Any]] = {
         "download": download_mkt_act,
         "manifest_col": "mkt_act_dl",
         "root": MKT_ACT_ROOT,
+    },
+    "fo_contracts": {
+        "download": download_fo_contracts,
+        "manifest_col": "fo_contracts_dl",
+        "root": FO_CONTRACT_ROOT,
+    },
+    "cm_security": {
+        "download": download_cm_security,
+        "manifest_col": "cm_security_dl",
+        "root": CM_SECURITY_ROOT,
     },
 }

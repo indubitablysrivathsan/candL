@@ -52,30 +52,92 @@ def get_conn(read_only: bool = False) -> duckdb.DuckDBPyConnection:
 # ── Schema bootstrap ──────────────────────────────────────────────────────────
  
 DDL = """
--- ── F&O (existing) ────────────────────────────────────────────────────────────
- 
+-- ── Core identity ────────────────────────────────────────────────────────────
+
 CREATE TABLE IF NOT EXISTS instruments (
     instrument_key      BIGINT PRIMARY KEY,
 
-    exchange            VARCHAR,
-    segment             VARCHAR,
+    exchange             VARCHAR,
+    segment              VARCHAR,     -- 'FO' / 'CM'
 
-    instrument_type     VARCHAR,
-    instrument_id       BIGINT,
+    instrument_id        BIGINT,
+    instrument_type      VARCHAR,     -- 'STO','IDO','STF','IDF','EQ','BE', etc.
+    fin_instrm_tp        VARCHAR,     -- FinInstrmTp — authoritative source for instrument_type derivation
 
-    ticker              VARCHAR,
-    instrument_name     VARCHAR,
+    ticker               VARCHAR,
+    instrument_name      VARCHAR,
 
-    isin                VARCHAR,
-    series              VARCHAR,
+    isin                  VARCHAR,
+    series                VARCHAR,
 
-    expiry              DATE,
-    actual_expiry       DATE,
+    expiry                DATE,
+    strike                DOUBLE,
+    option_type           VARCHAR
+);
 
-    strike              DOUBLE,
-    option_type         VARCHAR,
+-- ── F&O daily contract terms ────────────────────────────────────────────────
 
-    lot_size            INTEGER,
+CREATE TABLE IF NOT EXISTS instrument_contract_daily (
+    trade_date           DATE   NOT NULL,
+    instrument_key       BIGINT NOT NULL,
+
+    lot_size              INTEGER,
+    min_lot                INTEGER,
+
+    margin_pct            DOUBLE,
+    base_price             DOUBLE,
+    min_price               DOUBLE,
+    max_price               DOUBLE,
+
+    settlement_method     VARCHAR,   -- 'C' cash / 'P' physical
+    exercise_style          VARCHAR,   -- 'E' european / 'A' american
+
+    max_single_txn_qty      BIGINT,    -- MaxTradQty
+
+    admission_date          DATE,      -- AdmssnDt
+    removal_date             DATE,      -- RmvlDt
+    readmission_date         DATE,      -- RadmssnDt
+
+    PRIMARY KEY (trade_date, instrument_key)
+);
+
+-- ── Corporate actions (sparse — only rows where an actual event exists) ─────
+
+CREATE TABLE IF NOT EXISTS corporate_actions (
+    isin                     VARCHAR,
+    ticker                     VARCHAR,
+    event_type                   VARCHAR,   -- split/bonus/rights/dividend/merger
+    ratio_numerator                DOUBLE,
+    ratio_denominator                DOUBLE,
+    ex_date                             DATE,
+    record_date                           DATE,
+    purpose_raw                             VARCHAR,
+
+    PRIMARY KEY (isin, ex_date)
+);
+
+-- ── CM daily security terms ─────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS security_master_daily (
+    trade_date            DATE   NOT NULL,
+    instrument_key        BIGINT NOT NULL,
+
+    lot_size                INTEGER,
+    tick_size                DOUBLE,
+    min_price                 DOUBLE,
+    max_price                 DOUBLE,
+
+    settlement_type          VARCHAR,
+    par_value                  DOUBLE,
+    issued_capital             DOUBLE,
+    max_trade_pct               DOUBLE,
+
+    listing_date                DATE,
+    record_date                  DATE,
+    removal_date                  DATE,
+    readmission_date              DATE,
+
+    PRIMARY KEY (trade_date, instrument_key)
 );
 
 CREATE TABLE IF NOT EXISTS market_data_daily (
@@ -194,7 +256,6 @@ CREATE TABLE IF NOT EXISTS options_analytics (
     pe_oi           DOUBLE,
     ce_oi           DOUBLE,
     pcr             DOUBLE,
-    underlying      DOUBLE,
     max_pain        DOUBLE,
     PRIMARY KEY (instrument_type, ticker, expiry, trade_date)
 );
@@ -246,7 +307,22 @@ CREATE INDEX IF NOT EXISTS idx_instr_expiry
 ON instruments (expiry);
 CREATE INDEX IF NOT EXISTS idx_instr_type
 ON instruments (instrument_type);
+CREATE INDEX IF NOT EXISTS idx_instr_segment
+ON instruments (segment);
+CREATE INDEX IF NOT EXISTS idx_instr_fininstrmtp
+ON instruments (fin_instrm_tp);
 
+-- instrument_contract_daily
+CREATE INDEX IF NOT EXISTS idx_contract_daily_instr     ON instrument_contract_daily (instrument_key);
+CREATE INDEX IF NOT EXISTS idx_contract_daily_admission ON instrument_contract_daily (admission_date);
+
+-- corporate_actions
+CREATE INDEX IF NOT EXISTS idx_corp_actions_isin    ON corporate_actions (isin);
+CREATE INDEX IF NOT EXISTS idx_corp_actions_exdate  ON corporate_actions (ex_date);
+
+-- security_master_daily
+CREATE INDEX IF NOT EXISTS idx_sec_master_instr    ON security_master_daily (instrument_key);
+CREATE INDEX IF NOT EXISTS idx_sec_master_listing  ON security_master_daily (listing_date);
 
 -- market_data_daily
 CREATE INDEX IF NOT EXISTS idx_market_instr_date
@@ -1777,76 +1853,6 @@ def get_security_snapshot(
     if not df.empty:
         df["trade_date"] = pd.to_datetime(df["trade_date"])
     return df.replace([np.nan, np.inf, -np.inf], None)
- 
- 
-# ─────────────────────────────────────────────────────────────────────────────
-# RESEARCH HELPERS — Signal construction
-# ─────────────────────────────────────────────────────────────────────────────
- 
-def get_fii_vs_nifty(
-    start_date: str,
-    end_date: str,
-) -> pd.DataFrame:
-    """
-    Combines FII net index futures OI with Nifty 50 daily returns.
-    Ready for lagged-correlation research.
- 
-    Returns columns:
-        trade_date
-        fii_net_oi          (long - short contracts, INDEX FUTURES)
-        nifty_close
-        nifty_return_pct    (daily pct change)
-    """
-    conn = get_conn(read_only=True)
-    try:
-        fii = conn.execute(
-            """
-            SELECT
-                trade_date,
-                SUM(CASE WHEN direction = 'long'  THEN contracts ELSE 0 END)
-                - SUM(CASE WHEN direction = 'short' THEN contracts ELSE 0 END)
-                    AS fii_net_oi
-            FROM participant_activity
-            WHERE metric_type = 'OI'
-              AND asset_class = 'INDEX'
-              AND participant_type = 'FII'
-              AND option_side = 'NA'
-              AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-            GROUP BY trade_date
-            ORDER BY trade_date
-            """,
-            [start_date, end_date],
-        ).df()
- 
-        nifty = conn.execute(
-            """
-            SELECT
-                trade_date,
-                close AS nifty_close,
-                ROUND(
-                    (close - prev_close) / NULLIF(prev_close, 0) * 100,
-                    4
-                ) AS nifty_return_pct
-            FROM market_activity_index
-            WHERE index_name = 'Nifty 50'
-              AND trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
-            ORDER BY trade_date
-            """,
-            [start_date, end_date],
-        ).df()
-    finally:
-        conn.close()
- 
-    if fii.empty or nifty.empty:
-        return pd.DataFrame()
- 
-    fii["trade_date"] = pd.to_datetime(fii["trade_date"])
-    nifty["trade_date"] = pd.to_datetime(nifty["trade_date"])
- 
-    merged = pd.merge(fii, nifty, on="trade_date", how="inner")
-    merged["fii_net_oi_lag1"] = merged["fii_net_oi"].shift(1)
-    merged["nifty_return_next"] = merged["nifty_return_pct"].shift(-1)
-    return merged.replace([np.nan, np.inf, -np.inf], None)
 
 
 # ── Processing state checks ───────────────────────────────────────────────────

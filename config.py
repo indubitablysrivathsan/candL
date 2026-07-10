@@ -23,26 +23,32 @@ DATA_ROOT = PROJECT_ROOT / "data"
 # ─── RAW DATA ─────────────────────────────────────────────────────────────────
 RAW_ROOT         = PROJECT_ROOT / "raw"
 
-FO_RAW_ROOT      = RAW_ROOT / "fo"
-EQ_BHAV_ROOT     = RAW_ROOT / "eq_bhav"
-CM_BHAV_ROOT     = RAW_ROOT / "cm_bhav"
-FII_STATS_ROOT   = RAW_ROOT / "fii_stats"
-PART_OI_ROOT     = RAW_ROOT / "part_oi"
-PART_VOL_ROOT    = RAW_ROOT / "part_vol"
-FO_VOLT_ROOT     = RAW_ROOT / "fo_volt"
-MKT_ACT_ROOT     = RAW_ROOT / "mkt_act"
+FO_RAW_ROOT       = RAW_ROOT / "fo"
+FO_LEGACY_RAW_ROOT = RAW_ROOT / "fo_legacy"
+EQ_BHAV_ROOT      = RAW_ROOT / "eq_bhav"
+CM_BHAV_ROOT      = RAW_ROOT / "cm_bhav"
+CM_BHAV_LEGACY_ROOT = RAW_ROOT / "cm_bhav_legacy"
+FII_STATS_ROOT    = RAW_ROOT / "fii_stats"
+PART_OI_ROOT      = RAW_ROOT / "part_oi"
+PART_VOL_ROOT     = RAW_ROOT / "part_vol"
+FO_VOLT_ROOT      = RAW_ROOT / "fo_volt"
+MKT_ACT_ROOT      = RAW_ROOT / "mkt_act"
 
-MANIFEST_PATH    = RAW_ROOT / "manifest.csv"
+FO_CONTRACT_ROOT  = RAW_ROOT / "fo_contracts"
+CM_SECURITY_ROOT  = RAW_ROOT / "cm_security"
+
+MANIFEST_PATH     = RAW_ROOT / "manifest.csv"
 
 # ─── RESEARCH ─────────────────────────────────────────────────────────────────
 RESEARCH_ROOT    = PROJECT_ROOT / "research"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
 SYNC_ON_STARTUP = os.getenv("SYNC_ON_STARTUP", "True").lower() == "true"
-SYNC_START_DATE = "2024-06-21"
+SYNC_START_DATE = "2026-07-09"
 
 # ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
 NSE_BASE_URL = "https://nsearchives.nseindia.com"
+NSE_HIST_BASE_URL = "https://archives.nseindia.com/content/historical"
 
 # ─── PROCESSING ───────────────────────────────────────────────────────────────
 AUTO_PROCESS_AFTER_DOWNLOAD = False
