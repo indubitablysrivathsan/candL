@@ -8,15 +8,15 @@ import pandas as pd
 import duckdb
 from pathlib import Path
 
-from config import FO_CONTRACT_RAW_ROOT, NSE_DB_PATH
-from api.db import get_conn, is_processed, mark_processed
+from config import FO_CONTRACT_ROOT, NSE_DB_PATH
+from api.db import get_conn, is_processed
 from .keys import make_instrument_key
 from .common import upsert_instruments
 
 
 def _raw_path(trade_date: str) -> Path:
     dt = pd.to_datetime(trade_date)
-    return Path(FO_CONTRACT_RAW_ROOT) / dt.strftime("%Y") / dt.strftime("%m") / f"{trade_date}.csv"
+    return Path(FO_CONTRACT_ROOT) / dt.strftime("%Y") / dt.strftime("%m") / f"{trade_date}.csv"
 
 
 def _load(trade_date: str) -> pd.DataFrame:
@@ -68,13 +68,12 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
     ]
     instr.insert(1, "exchange", "NSE")
     instr.insert(2, "segment", "FO")
-    instr["fin_instrm_tp"] = instr["instrument_type"]
     instr["actual_expiry"] = None  # not present in contract master
 
     # reorder to match instruments table exactly
     instr = instr[[
         "instrument_key", "exchange", "segment", "instrument_id",
-        "instrument_type", "fin_instrm_tp", "ticker", "instrument_name",
+        "instrument_type", "ticker", "instrument_name",
         "isin", "series", "expiry", "actual_expiry", "strike", "option_type",
         "lot_size",
     ]]
@@ -84,7 +83,7 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
 # ── instrument_contract_daily ──────────────────────────────────────────────────
 
 def _build_contract_daily(df: pd.DataFrame, trade_date: str) -> pd.DataFrame:
-    d = pd.DataFrame()
+    d = pd.DataFrame(index=df.index) 
     d["trade_date"]          = pd.to_datetime(trade_date).date()
     d["instrument_key"]      = df["instrument_key"]
 
@@ -190,7 +189,6 @@ def process(trade_date: str):
         upsert_instruments(conn, instr)
         _upsert_contract_daily(conn, contract_daily)
         _upsert_corp_actions(conn, corp_actions)
-        mark_processed(trade_date, "FO_CONTRACT")
         conn.execute("COMMIT")
         print(f"[fo_contract] {trade_date} — {len(contract_daily)} contract rows, {len(corp_actions)} corp actions")
     except Exception:

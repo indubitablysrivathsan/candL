@@ -43,18 +43,14 @@ def _load(trade_date: str) -> pd.DataFrame:
 def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["expiry_d"] = pd.to_datetime(
-        df["XpryDt"],
-        format="%Y-%m-%d",
-        errors="coerce"
+        df["XpryDt"], format="%Y-%m-%d", errors="coerce"
     ).dt.date
 
     df["act_exp_d"] = pd.to_datetime(
-        df["FininstrmActlXpryDt"],
-        format="%Y-%m-%d",
-        errors="coerce"
+        df["FininstrmActlXpryDt"], format="%Y-%m-%d", errors="coerce"
     ).dt.date
-    df["strike_f"]  = pd.to_numeric(df["StrkPric"], errors="coerce")
-    df["lot_i"]     = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
+    df["strike_f"] = pd.to_numeric(df["StrkPric"], errors="coerce")
+    df["lot_i"]    = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
 
     df["instrument_key"] = df.apply(lambda r: make_instrument_key(
         r["FinInstrmTp"], r["TckrSymb"],
@@ -63,19 +59,26 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
     ), axis=1)
 
     instr = df[[
-        "instrument_key", "Sgmt", "FinInstrmTp", "FinInstrmId",
+        "instrument_key", "Sgmt", "FinInstrmId", "FinInstrmTp",
         "TckrSymb", "FinInstrmNm", "ISIN", "SctySrs",
-        "expiry_d", "act_exp_d", "strike_f", "OptnTp",
-        "lot_i",
+        "expiry_d", "strike_f", "OptnTp",
     ]].drop_duplicates("instrument_key").copy()
 
     instr.columns = [
-        "instrument_key", "segment", "instrument_type", "instrument_id",
+        "instrument_key", "segment", "instrument_id", "instrument_type",
         "ticker", "instrument_name", "isin", "series",
-        "expiry", "actual_expiry", "strike", "option_type",
-        "lot_size",
+        "expiry", "strike", "option_type",
     ]
     instr.insert(1, "exchange", "NSE")
+
+    instr["instrument_id"] = pd.to_numeric(instr["instrument_id"], errors="coerce").astype("Int64")
+
+    # column order MUST match `instruments` table exactly — upsert is positional
+    instr = instr[[
+        "instrument_key", "exchange", "segment", "instrument_id",
+        "instrument_type", "ticker", "instrument_name",
+        "isin", "series", "expiry", "strike", "option_type",
+    ]]
     return df, instr
 
 
@@ -188,9 +191,8 @@ def _process_options(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
             FinInstrmTp AS instrument_type, TckrSymb AS ticker,
             TRY_CAST(XpryDt AS DATE) AS expiry,
             TRY_CAST(TradDt AS DATE) AS trade_date,
-            AVG(TRY_CAST(UndrlygPric AS DOUBLE)) AS underlying,
             SUM(CASE WHEN OptnTp='PE' THEN TRY_CAST(OpnIntrst AS DOUBLE) ELSE 0 END) AS pe_oi,
-            SUM(CASE WHEN OptnTp='CE' THEN TRY_CAST(OpnIntrst AS DOUBLE) ELSE 0 END) AS ce_oi
+            SUM(CASE WHEN OptnTp='CE' THEN TRY_CAST(OpnIntrst AS DOUBLE) ELSE 0 END) AS ce_oi,
         FROM _opt_stage
         GROUP BY FinInstrmTp, TckrSymb, TRY_CAST(XpryDt AS DATE), TRY_CAST(TradDt AS DATE)
     """).df()
@@ -220,15 +222,15 @@ def _process_options(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
         rows.append((
             str(r["instrument_type"]), str(r["ticker"]),
             r["expiry"], r["trade_date"],
-            r["pe_oi"], r["ce_oi"], r["pcr"], r["underlying"],
+            r["pe_oi"], r["ce_oi"], r["pcr"],
             None if (isinstance(mp, float) and np.isnan(mp)) else mp,
         ))
 
     conn.executemany("""
-        INSERT INTO options_analytics VALUES (?,?,?,?,?,?,?,?,?)
+        INSERT INTO options_analytics VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
             pe_oi=excluded.pe_oi, ce_oi=excluded.ce_oi, pcr=excluded.pcr,
-            underlying=excluded.underlying, max_pain=excluded.max_pain
+            max_pain=excluded.max_pain
     """, rows)
 
 

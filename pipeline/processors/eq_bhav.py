@@ -40,17 +40,15 @@ def process(trade_date: str):
         "instrument_key":   df["instrument_key"],
         "exchange":         "NSE",
         "segment":          "CM",
-        "instrument_type":  "EQ",
         "instrument_id":    None,
+        "instrument_type":  "STK",
         "ticker":           df["SYMBOL"].str.strip(),
         "instrument_name":  df["SYMBOL"].str.strip(),
         "isin":             None,
         "series":           df["SERIES"].str.strip(),
         "expiry":           None,
-        "actual_expiry":    None,
         "strike":           None,
         "option_type":      None,
-        "lot_size":         None,
     }).drop_duplicates("instrument_key")
 
     mdd = pd.DataFrame({

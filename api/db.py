@@ -61,8 +61,7 @@ CREATE TABLE IF NOT EXISTS instruments (
     segment              VARCHAR,     -- 'FO' / 'CM'
 
     instrument_id        BIGINT,
-    instrument_type      VARCHAR,     -- 'STO','IDO','STF','IDF','EQ','BE', etc.
-    fin_instrm_tp        VARCHAR,     -- FinInstrmTp — authoritative source for instrument_type derivation
+    instrument_type      VARCHAR,     -- 'STO','IDO','STF','IDF',
 
     ticker               VARCHAR,
     instrument_name      VARCHAR,
@@ -309,8 +308,6 @@ CREATE INDEX IF NOT EXISTS idx_instr_type
 ON instruments (instrument_type);
 CREATE INDEX IF NOT EXISTS idx_instr_segment
 ON instruments (segment);
-CREATE INDEX IF NOT EXISTS idx_instr_fininstrmtp
-ON instruments (fin_instrm_tp);
 
 -- instrument_contract_daily
 CREATE INDEX IF NOT EXISTS idx_contract_daily_instr     ON instrument_contract_daily (instrument_key);
@@ -1868,7 +1865,7 @@ _PROCESS_CHECK = {
 
     # Normalized tables — check via segment/instrument_type on market_data_daily
     "eq_bhav": ("market_data_daily JOIN instruments USING (instrument_key)",
-                "instruments.instrument_type = 'EQ' AND market_data_daily.trade_date = CAST(? AS DATE)",
+                "instruments.instrument_type = 'STK' AND market_data_daily.trade_date = CAST(? AS DATE)",
                 lambda d: [d]),
     "cm_bhav": ("market_data_daily JOIN instruments USING (instrument_key)",
                 "instruments.segment = 'CM' AND instruments.instrument_type != 'EQ' AND market_data_daily.trade_date = CAST(? AS DATE)",
@@ -1880,6 +1877,10 @@ _PROCESS_CHECK = {
     "part_vol": ("participant_activity",     "metric_type = 'VOL' AND trade_date = CAST(? AS DATE)", lambda d: [d]),
     "fo_volt":  ("fo_volatility",            "trade_date = CAST(? AS DATE)", lambda d: [d]),
     "mkt_act":  ("market_activity_summary",  "trade_date = CAST(? AS DATE)", lambda d: [d]),
+
+    # Contract / security masters
+    "FO_CONTRACT": ("instrument_contract_daily", "trade_date = CAST(? AS DATE)", lambda d: [d]),
+    "CM_SECURITY": ("security_master_daily",      "trade_date = CAST(? AS DATE)", lambda d: [d]),
 }
 
 

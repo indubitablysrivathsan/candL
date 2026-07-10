@@ -19,13 +19,15 @@ from config import SYNC_START_DATE
 
 # (processor_key, dl_col, pr_col, is_processed_check_keys)
 _PIPELINE = [
-    ("fo",          "fo_dl",      ["stf_pr", "idf_pr", "sto_pr", "ido_pr"],     ["STF", "IDF", "STO", "IDO"]),
-    ("eq_bhav",     "eq_bhav_dl", ["eq_bhav_pr"], ["eq_bhav"]),
-    ("cm_bhav",     "cm_bhav_dl", ["cm_bhav_pr"], ["cm_bhav"]),
-    ("fii",         "fii_dl",     ["fii_pr"],     ["fii"]),
-    ("participant", "part_oi_dl", ["part_oi_pr"], ["part_oi", "part_vol"]),
-    ("fo_volt",     "fo_volt_dl", ["fo_volt_pr"], ["fo_volt"]),
-    ("mkt_act",     "mkt_act_dl", ["mkt_act_pr"], ["mkt_act"]),
+    ("fo",           "fo_dl",           ["stf_pr", "idf_pr", "sto_pr", "ido_pr"], ["STF", "IDF", "STO", "IDO"]),
+    ("eq_bhav",      "eq_bhav_dl",      ["eq_bhav_pr"],      ["eq_bhav"]),
+    ("cm_bhav",      "cm_bhav_dl",      ["cm_bhav_pr"],      ["cm_bhav"]),
+    ("fii",          "fii_dl",          ["fii_pr"],          ["fii"]),
+    ("participant",  "part_oi_dl",      ["part_oi_pr"],      ["part_oi", "part_vol"]),
+    ("fo_volt",      "fo_volt_dl",      ["fo_volt_pr"],      ["fo_volt"]),
+    ("mkt_act",      "mkt_act_dl",      ["mkt_act_pr"],      ["mkt_act"]),
+    ("fo_contracts", "fo_contracts_dl", ["fo_contracts_pr"], ["FO_CONTRACT"]),
+    ("cm_security",  "cm_security_dl",  ["cm_security_pr"],  ["CM_SECURITY"]),
 ]
 
 # processor keys that also require a second dl flag before processing

@@ -44,7 +44,7 @@ RESEARCH_ROOT    = PROJECT_ROOT / "research"
 
 # ─── STARTUP SYNC ─────────────────────────────────────────────────────────────
 SYNC_ON_STARTUP = os.getenv("SYNC_ON_STARTUP", "True").lower() == "true"
-SYNC_START_DATE = "2026-07-09"
+SYNC_START_DATE = "2026-07-10"
 
 # ─── DOWNLOAD ─────────────────────────────────────────────────────────────────
 NSE_BASE_URL = "https://nsearchives.nseindia.com"

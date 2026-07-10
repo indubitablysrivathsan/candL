@@ -25,6 +25,8 @@ COLUMNS = [
     "part_vol_dl",
     "fo_volt_dl",
     "mkt_act_dl",
+    "fo_contracts_dl",
+    "cm_security_dl",
 
     # New process flags
     "eq_bhav_pr",
@@ -34,6 +36,8 @@ COLUMNS = [
     "part_vol_pr",
     "fo_volt_pr",
     "mkt_act_pr",
+    "fo_contracts_pr",
+    "cm_security_pr",
 ]
 
 _FLAG_COLS = [c for c in COLUMNS if c not in ("trade_date", "status")]
@@ -148,13 +152,15 @@ def mark_failed(trade_date: str):
 
 # ── download flag setters ─────────────────────────────────────────────────────
 
-def mark_eq_bhav_downloaded(trade_date: str):   _set_flag(trade_date, "eq_bhav_dl")
-def mark_cm_bhav_downloaded(trade_date: str):   _set_flag(trade_date, "cm_bhav_dl")
-def mark_fii_downloaded(trade_date: str):       _set_flag(trade_date, "fii_dl")
-def mark_part_oi_downloaded(trade_date: str):   _set_flag(trade_date, "part_oi_dl")
-def mark_part_vol_downloaded(trade_date: str):  _set_flag(trade_date, "part_vol_dl")
-def mark_fo_volt_downloaded(trade_date: str):   _set_flag(trade_date, "fo_volt_dl")
-def mark_mkt_act_downloaded(trade_date: str):   _set_flag(trade_date, "mkt_act_dl")
+def mark_eq_bhav_downloaded(trade_date: str):     _set_flag(trade_date, "eq_bhav_dl")
+def mark_cm_bhav_downloaded(trade_date: str):     _set_flag(trade_date, "cm_bhav_dl")
+def mark_fii_downloaded(trade_date: str):         _set_flag(trade_date, "fii_dl")
+def mark_part_oi_downloaded(trade_date: str):     _set_flag(trade_date, "part_oi_dl")
+def mark_part_vol_downloaded(trade_date: str):    _set_flag(trade_date, "part_vol_dl")
+def mark_fo_volt_downloaded(trade_date: str):     _set_flag(trade_date, "fo_volt_dl")
+def mark_mkt_act_downloaded(trade_date: str):     _set_flag(trade_date, "mkt_act_dl")
+def mark_fo_contracts_downloaded(trade_date: str): _set_flag(trade_date, "fo_contracts_dl")
+def mark_cm_security_downloaded(trade_date: str):  _set_flag(trade_date, "cm_security_dl")
 
 
 # ── process flag setters ──────────────────────────────────────────────────────
@@ -166,13 +172,15 @@ def mark_stock_futures_processed(trade_date: str):  _set_flag(trade_date, "stf_p
 def mark_index_futures_processed(trade_date: str):  _set_flag(trade_date, "idf_pr")
 
 # New
-def mark_eq_bhav_processed(trade_date: str):    _set_flag(trade_date, "eq_bhav_pr")
-def mark_cm_bhav_processed(trade_date: str):    _set_flag(trade_date, "cm_bhav_pr")
-def mark_fii_processed(trade_date: str):        _set_flag(trade_date, "fii_pr")
-def mark_part_oi_processed(trade_date: str):    _set_flag(trade_date, "part_oi_pr")
-def mark_part_vol_processed(trade_date: str):   _set_flag(trade_date, "part_vol_pr")
-def mark_fo_volt_processed(trade_date: str):    _set_flag(trade_date, "fo_volt_pr")
-def mark_mkt_act_processed(trade_date: str):    _set_flag(trade_date, "mkt_act_pr")
+def mark_eq_bhav_processed(trade_date: str):      _set_flag(trade_date, "eq_bhav_pr")
+def mark_cm_bhav_processed(trade_date: str):      _set_flag(trade_date, "cm_bhav_pr")
+def mark_fii_processed(trade_date: str):          _set_flag(trade_date, "fii_pr")
+def mark_part_oi_processed(trade_date: str):      _set_flag(trade_date, "part_oi_pr")
+def mark_part_vol_processed(trade_date: str):     _set_flag(trade_date, "part_vol_pr")
+def mark_fo_volt_processed(trade_date: str):      _set_flag(trade_date, "fo_volt_pr")
+def mark_mkt_act_processed(trade_date: str):      _set_flag(trade_date, "mkt_act_pr")
+def mark_fo_contracts_processed(trade_date: str): _set_flag(trade_date, "fo_contracts_pr")
+def mark_cm_security_processed(trade_date: str):  _set_flag(trade_date, "cm_security_pr")
 
 
 # ── unprocessed date getters ──────────────────────────────────────────────────
@@ -188,10 +196,12 @@ def get_stock_futures_unprocessed_dates():  return _unprocessed("fo_dl", "stf_pr
 def get_index_futures_unprocessed_dates():  return _unprocessed("fo_dl", "idf_pr")
 
 # New
-def get_eq_bhav_unprocessed_dates():    return _unprocessed("eq_bhav_dl",  "eq_bhav_pr")
-def get_cm_bhav_unprocessed_dates():    return _unprocessed("cm_bhav_dl",  "cm_bhav_pr")
-def get_fii_unprocessed_dates():        return _unprocessed("fii_dl",      "fii_pr")
-def get_part_oi_unprocessed_dates():    return _unprocessed("part_oi_dl",  "part_oi_pr")
-def get_part_vol_unprocessed_dates():   return _unprocessed("part_vol_dl", "part_vol_pr")
-def get_fo_volt_unprocessed_dates():    return _unprocessed("fo_volt_dl",  "fo_volt_pr")
-def get_mkt_act_unprocessed_dates():    return _unprocessed("mkt_act_dl",  "mkt_act_pr")
+def get_eq_bhav_unprocessed_dates():        return _unprocessed("eq_bhav_dl",      "eq_bhav_pr")
+def get_cm_bhav_unprocessed_dates():        return _unprocessed("cm_bhav_dl",      "cm_bhav_pr")
+def get_fii_unprocessed_dates():            return _unprocessed("fii_dl",          "fii_pr")
+def get_part_oi_unprocessed_dates():        return _unprocessed("part_oi_dl",      "part_oi_pr")
+def get_part_vol_unprocessed_dates():       return _unprocessed("part_vol_dl",     "part_vol_pr")
+def get_fo_volt_unprocessed_dates():        return _unprocessed("fo_volt_dl",      "fo_volt_pr")
+def get_mkt_act_unprocessed_dates():        return _unprocessed("mkt_act_dl",      "mkt_act_pr")
+def get_fo_contracts_unprocessed_dates():   return _unprocessed("fo_contracts_dl", "fo_contracts_pr")
+def get_cm_security_unprocessed_dates():    return _unprocessed("cm_security_dl",  "cm_security_pr")

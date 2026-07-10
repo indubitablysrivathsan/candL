@@ -9,11 +9,6 @@ _INSTR_STR_COLS = [
 ]
 
 def upsert_instruments(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
-    """
-    df must have columns matching instruments schema.
-    Uses vectorized INSERT via registered DataFrame.
-    """
-
     df = df.copy()
     for col in _INSTR_STR_COLS:
         if col in df.columns:
@@ -23,13 +18,19 @@ def upsert_instruments(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
     conn.register("_instr_stage", df)
 
     conn.execute("""
-        INSERT INTO instruments
-        SELECT * FROM _instr_stage
+        INSERT INTO instruments (
+            instrument_key, exchange, segment, instrument_id,
+            instrument_type, ticker, instrument_name,
+            isin, series, expiry, strike, option_type
+        )
+        SELECT
+            instrument_key, exchange, segment, instrument_id,
+            instrument_type, ticker, instrument_name,
+            isin, series, expiry, strike, option_type
+        FROM _instr_stage
         ON CONFLICT (instrument_key) DO UPDATE SET
-            instrument_name   = excluded.instrument_name,
-            isin              = excluded.isin,
-            lot_size          = excluded.lot_size,
-            actual_expiry     = excluded.actual_expiry,
+            instrument_name = excluded.instrument_name,
+            isin            = excluded.isin
     """)
     conn.unregister("_instr_stage")
 
