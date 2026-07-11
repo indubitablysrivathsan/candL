@@ -88,19 +88,13 @@ def _build_security_master(df: pd.DataFrame, trade_date: str) -> pd.DataFrame:
     d["instrument_key"]  = df["instrument_key"]
 
     d["lot_size"]          = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
-    d["tick_size"]           = pd.to_numeric(df["TickSz"], errors="coerce")
-    d["min_price"]             = pd.to_numeric(df["MinPric"], errors="coerce")
-    d["max_price"]              = pd.to_numeric(df["MaxPric"], errors="coerce")
 
-    d["settlement_type"]         = df["SttlmTp"].astype("string")
     d["par_value"]                 = pd.to_numeric(df["ParVal"], errors="coerce")
     d["issued_capital"]              = pd.to_numeric(df["IssdCptl"], errors="coerce")
     d["max_trade_pct"]                 = _clean_sentinel(df["MaxTradQtyPctg"])
 
     d["listing_date"]                    = _epoch_to_date(df["ListgDt"])
     d["record_date"]                       = _epoch_to_date(df["RcrdDt"])
-    d["removal_date"]                        = _epoch_to_date(df["RmvlDt"])
-    d["readmission_date"]                      = _epoch_to_date(df["RadmssnDt"])
 
     d = d.drop_duplicates(subset=["trade_date", "instrument_key"])
     return d
@@ -113,17 +107,11 @@ def _upsert_security_master(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
         SELECT * FROM _secmaster_stage
         ON CONFLICT (trade_date, instrument_key) DO UPDATE SET
             lot_size          = excluded.lot_size,
-            tick_size          = excluded.tick_size,
-            min_price           = excluded.min_price,
-            max_price            = excluded.max_price,
-            settlement_type       = excluded.settlement_type,
             par_value               = excluded.par_value,
             issued_capital           = excluded.issued_capital,
             max_trade_pct             = excluded.max_trade_pct,
             listing_date               = excluded.listing_date,
             record_date                  = excluded.record_date,
-            removal_date                   = excluded.removal_date,
-            readmission_date                 = excluded.readmission_date
     """)
     conn.unregister("_secmaster_stage")
 

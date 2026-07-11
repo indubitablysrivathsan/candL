@@ -94,8 +94,6 @@ CREATE TABLE IF NOT EXISTS instrument_contract_daily (
     max_single_txn_qty      BIGINT,    -- MaxTradQty
 
     admission_date          DATE,      -- AdmssnDt
-    removal_date             DATE,      -- RmvlDt
-    readmission_date         DATE,      -- RadmssnDt
 
     PRIMARY KEY (trade_date, instrument_key)
 );
@@ -122,19 +120,13 @@ CREATE TABLE IF NOT EXISTS security_master_daily (
     instrument_key        BIGINT NOT NULL,
 
     lot_size                INTEGER,
-    tick_size                DOUBLE,
-    min_price                 DOUBLE,
-    max_price                 DOUBLE,
 
-    settlement_type          VARCHAR,
     par_value                  DOUBLE,
     issued_capital             DOUBLE,
     max_trade_pct               DOUBLE,
 
     listing_date                DATE,
     record_date                  DATE,
-    removal_date                  DATE,
-    readmission_date              DATE,
 
     PRIMARY KEY (trade_date, instrument_key)
 );

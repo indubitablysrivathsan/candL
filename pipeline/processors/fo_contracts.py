@@ -101,8 +101,6 @@ def _build_contract_daily(df: pd.DataFrame, trade_date: str) -> pd.DataFrame:
     d["max_single_txn_qty"]         = _clean_sentinel(df["MaxTradQty"]).astype("Int64")
 
     d["admission_date"]              = _epoch_to_date(df["AdmssnDt"])
-    d["removal_date"]                 = _epoch_to_date(df["RmvlDt"])
-    d["readmission_date"]              = _epoch_to_date(df["RadmssnDt"])
 
     d = d.drop_duplicates(subset=["trade_date", "instrument_key"])
     return d
@@ -124,8 +122,6 @@ def _upsert_contract_daily(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
             exercise_style             = excluded.exercise_style,
             max_single_txn_qty          = excluded.max_single_txn_qty,
             admission_date                = excluded.admission_date,
-            removal_date                   = excluded.removal_date,
-            readmission_date                = excluded.readmission_date
     """)
     conn.unregister("_contract_stage")
 
