@@ -1,6 +1,12 @@
 """
 FO bhavcopy processor
 → instruments, market_data_daily, options_analytics, futures_analytics
+
+NOTE: SctySrs is not reliable for F&O contracts (mostly blank/'XX'), unlike
+CM where it's meaningful (EQ, BE, SM, etc.). `series` is therefore always
+written as NULL for F&O instruments and is NOT part of the identity key —
+this must stay consistent with fo_contracts.py, which also passes None for
+series when generating instrument_key.
 """
 
 import numpy as np
@@ -38,10 +44,38 @@ def _load(trade_date: str) -> pd.DataFrame:
     return df
 
 
+def _drop_blank_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drops placeholder/stale rows — identified by blank TckrSymb and blank
+    FinInstrmNm together. Mirrors the guard in fo_contracts.py.
+    """
+    df = df.copy()
+    df["TckrSymb"]    = df["TckrSymb"].astype("string").str.strip()
+    df["FinInstrmNm"] = df["FinInstrmNm"].astype("string").str.strip()
+
+    mask = (df["TckrSymb"].notna() & (df["TckrSymb"] != "")) | \
+           (df["FinInstrmNm"].notna() & (df["FinInstrmNm"] != ""))
+
+    dropped = len(df) - mask.sum()
+    if dropped:
+        print(f"[fo] dropping {dropped} blank/placeholder rows")
+
+    return df[mask].copy()
+
+
 # ── instrument key generation ─────────────────────────────────────────────────
 
 def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
+    df = _drop_blank_rows(df)
+
+    empty_instr_cols = [
+        "instrument_key", "exchange", "segment", "instrument_id",
+        "instrument_type", "ticker", "instrument_name",
+        "isin", "series", "expiry", "strike", "option_type",
+    ]
+    if df.empty:
+        return df, pd.DataFrame(columns=empty_instr_cols)
+
     df["expiry_d"] = pd.to_datetime(
         df["XpryDt"], format="%Y-%m-%d", errors="coerce"
     ).dt.date
@@ -52,33 +86,32 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
     df["strike_f"] = pd.to_numeric(df["StrkPric"], errors="coerce")
     df["lot_i"]    = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
 
+    # series is not part of the identity key for F&O — SctySrs is unreliable
+    # and must stay consistent with fo_contracts.py, which also passes None.
     df["instrument_key"] = df.apply(lambda r: make_instrument_key(
         r["FinInstrmTp"], r["TckrSymb"],
         r["expiry_d"], r["strike_f"],
-        r.get("OptnTp"), r.get("SctySrs"),
+        r.get("OptnTp"), None,
     ), axis=1)
 
     instr = df[[
         "instrument_key", "Sgmt", "FinInstrmId", "FinInstrmTp",
-        "TckrSymb", "FinInstrmNm", "ISIN", "SctySrs",
+        "TckrSymb", "FinInstrmNm", "ISIN",
         "expiry_d", "strike_f", "OptnTp",
     ]].drop_duplicates("instrument_key").copy()
 
     instr.columns = [
         "instrument_key", "segment", "instrument_id", "instrument_type",
-        "ticker", "instrument_name", "isin", "series",
+        "ticker", "instrument_name", "isin",
         "expiry", "strike", "option_type",
     ]
     instr.insert(1, "exchange", "NSE")
+    instr["series"] = None  # not meaningful for F&O — always NULL
 
     instr["instrument_id"] = pd.to_numeric(instr["instrument_id"], errors="coerce").astype("Int64")
 
     # column order MUST match `instruments` table exactly — upsert is positional
-    instr = instr[[
-        "instrument_key", "exchange", "segment", "instrument_id",
-        "instrument_type", "ticker", "instrument_name",
-        "isin", "series", "expiry", "strike", "option_type",
-    ]]
+    instr = instr[empty_instr_cols]
     return df, instr
 
 
@@ -247,21 +280,23 @@ def process(trade_date: str):
     fut_raw = raw[raw["FinInstrmTp"].isin(_FUT)].copy()
     opt_raw = raw[raw["FinInstrmTp"].isin(_OPT)].copy()
 
-    # instrument keys
+    # instrument keys (blank/placeholder rows filtered inside _build_instruments)
     fut_raw, fut_instr = _build_instruments(fut_raw)
     opt_raw, opt_instr = _build_instruments(opt_raw)
     all_instr = pd.concat([fut_instr, opt_instr]).drop_duplicates("instrument_key")
 
-    fut_mdd = _build_market_data(fut_raw)
-    opt_mdd = _build_market_data(opt_raw)
+    fut_mdd = _build_market_data(fut_raw) if not fut_raw.empty else pd.DataFrame()
+    opt_mdd = _build_market_data(opt_raw) if not opt_raw.empty else pd.DataFrame()
     all_mdd = pd.concat([fut_mdd, opt_mdd])
 
     conn = get_conn()
     try:
         conn.execute("BEGIN")
 
-        upsert_instruments(conn, all_instr)
-        upsert_market_data(conn, all_mdd)
+        if not all_instr.empty:
+            upsert_instruments(conn, all_instr)
+        if not all_mdd.empty:
+            upsert_market_data(conn, all_mdd)
 
         if not fut_raw.empty:
             _process_futures(conn, fut_raw, trade_date)

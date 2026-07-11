@@ -1,15 +1,17 @@
 """
 eq_bhav processor — sec_bhavdata_full_DDMMYYYY.csv
-→ instruments + market_data_daily
+Enrichment pass only: adds avg_price / delivery_qty / delivery_pct
+onto rows that cm_bhav already inserted. Does NOT touch instruments,
+does NOT insert new market_data_daily rows.
 """
 
 import pandas as pd
 from pathlib import Path
 
-from config import EQ_BHAV_ROOT, NSE_DB_PATH
+from config import EQ_BHAV_ROOT
 from api.db import get_conn, is_processed
 from .keys import make_instrument_key
-from .common import upsert_instruments, upsert_market_data
+from .common import upsert_delivery_stats
 
 
 def _raw_path(trade_date: str) -> Path:
@@ -29,56 +31,26 @@ def process(trade_date: str):
     df = pd.read_csv(p, low_memory=False)
     df.columns = df.columns.str.strip()
 
-    # Date from column, not filename
     trade_dt = pd.to_datetime(df["DATE1"].iloc[0], dayfirst=True).date()
 
     df["instrument_key"] = df.apply(lambda r: make_instrument_key(
-        "EQ", r["SYMBOL"].strip(), None, None, None, r["SERIES"].strip()
+        "STK", r["SYMBOL"].strip(), None, None, None, r["SERIES"].strip()
     ), axis=1)
 
-    instr = pd.DataFrame({
-        "instrument_key":   df["instrument_key"],
-        "exchange":         "NSE",
-        "segment":          "CM",
-        "instrument_id":    None,
-        "instrument_type":  "STK",
-        "ticker":           df["SYMBOL"].str.strip(),
-        "instrument_name":  df["SYMBOL"].str.strip(),
-        "isin":             None,
-        "series":           df["SERIES"].str.strip(),
-        "expiry":           None,
-        "strike":           None,
-        "option_type":      None,
+    deliv = pd.DataFrame({
+        "trade_date":      trade_dt,
+        "instrument_key":  df["instrument_key"],
+        "avg_price":       pd.to_numeric(df["AVG_PRICE"],    errors="coerce"),
+        "delivery_qty":    pd.to_numeric(df["DELIV_QTY"],    errors="coerce").astype("Int64"),
+        "delivery_pct":    pd.to_numeric(df["DELIV_PER"],    errors="coerce"),
     }).drop_duplicates("instrument_key")
-
-    mdd = pd.DataFrame({
-        "trade_date":       trade_dt,
-        "instrument_key":   df["instrument_key"],
-        "open":             pd.to_numeric(df["OPEN_PRICE"],   errors="coerce"),
-        "high":             pd.to_numeric(df["HIGH_PRICE"],   errors="coerce"),
-        "low":              pd.to_numeric(df["LOW_PRICE"],    errors="coerce"),
-        "close":            pd.to_numeric(df["CLOSE_PRICE"],  errors="coerce"),
-        "last":             pd.to_numeric(df["LAST_PRICE"],   errors="coerce"),
-        "prev_close":       pd.to_numeric(df["PREV_CLOSE"],   errors="coerce"),
-        "avg_price":        pd.to_numeric(df["AVG_PRICE"],    errors="coerce"),
-        "volume":           pd.to_numeric(df["TTL_TRD_QNTY"], errors="coerce").astype("Int64"),
-        "turnover":         pd.to_numeric(df["TURNOVER_LACS"],errors="coerce"),
-        "trade_count":      pd.to_numeric(df["NO_OF_TRADES"], errors="coerce").astype("Int64"),
-        "open_interest":    None,
-        "change_in_oi":     None,
-        "settlement_price": None,
-        "underlying_price": None,
-        "delivery_qty":     pd.to_numeric(df["DELIV_QTY"],    errors="coerce").astype("Int64"),
-        "delivery_pct":     pd.to_numeric(df["DELIV_PER"],    errors="coerce"),
-    })
 
     conn = get_conn()
     try:
         conn.execute("BEGIN")
-        upsert_instruments(conn, instr)
-        upsert_market_data(conn, mdd)
+        upsert_delivery_stats(conn, deliv)
         conn.execute("COMMIT")
-        print(f"[eq_bhav] {trade_date} — {len(df)} rows")
+        print(f"[eq_bhav] {trade_date} — {len(deliv)} delivery rows patched")
     except Exception:
         conn.execute("ROLLBACK")
         raise

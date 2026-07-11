@@ -866,7 +866,8 @@ def get_eq_tickers() -> list[str]:
             """
             SELECT DISTINCT ticker
             FROM instruments
-            WHERE instrument_type = 'EQ'
+            WHERE instrument_type = 'STK'
+            AND series = 'EQ'
             ORDER BY ticker
             """
         ).fetchall()
@@ -1849,6 +1850,9 @@ def get_security_snapshot(
 # Replaces old _PROCESS_CHECK dict — new tables, new keys.
 
 _PROCESS_CHECK = {
+
+    # Contracts
+    "FO_CONTRACT": ("instrument_contract_daily", "trade_date = CAST(? AS DATE)", lambda d: [d]),
     # F&O analytics (unchanged keys, unchanged tables)
     "STF": ("futures_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["STF", d]),
     "IDF": ("futures_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["IDF", d]),
@@ -1856,12 +1860,17 @@ _PROCESS_CHECK = {
     "IDO": ("options_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["IDO", d]),
 
     # Normalized tables — check via segment/instrument_type on market_data_daily
-    "eq_bhav": ("market_data_daily JOIN instruments USING (instrument_key)",
-                "instruments.instrument_type = 'STK' AND market_data_daily.trade_date = CAST(? AS DATE)",
-                lambda d: [d]),
+
+    # Securities
+    "CM_SECURITY": ("security_master_daily",      "trade_date = CAST(? AS DATE)", lambda d: [d]),
+    
     "cm_bhav": ("market_data_daily JOIN instruments USING (instrument_key)",
-                "instruments.segment = 'CM' AND instruments.instrument_type != 'EQ' AND market_data_daily.trade_date = CAST(? AS DATE)",
-                lambda d: [d]),
+            "instruments.segment = 'CM' AND instruments.isin IS NOT NULL AND market_data_daily.trade_date = CAST(? AS DATE)",
+            lambda d: [d]),
+
+    "eq_bhav": ("market_data_daily",
+            "avg_price IS NOT NULL AND trade_date = CAST(? AS DATE)",
+            lambda d: [d]),
 
     # Standalone tables
     "fii":      ("fii_stats",                "trade_date = CAST(? AS DATE)", lambda d: [d]),
@@ -1869,10 +1878,6 @@ _PROCESS_CHECK = {
     "part_vol": ("participant_activity",     "metric_type = 'VOL' AND trade_date = CAST(? AS DATE)", lambda d: [d]),
     "fo_volt":  ("fo_volatility",            "trade_date = CAST(? AS DATE)", lambda d: [d]),
     "mkt_act":  ("market_activity_summary",  "trade_date = CAST(? AS DATE)", lambda d: [d]),
-
-    # Contract / security masters
-    "FO_CONTRACT": ("instrument_contract_daily", "trade_date = CAST(? AS DATE)", lambda d: [d]),
-    "CM_SECURITY": ("security_master_daily",      "trade_date = CAST(? AS DATE)", lambda d: [d]),
 }
 
 

@@ -2,6 +2,12 @@
 fo_contracts.py
 FO contract master processor (legacy / pre-UDIFF format)
 → instruments (upsert), instrument_contract_daily, corporate_actions
+
+NOTE: SrsId is not reliable for F&O contracts (mostly blank/garbage — 'XX'
+or empty), unlike CM where SctySrs/SrsId is meaningful (EQ, BE, SM, etc.).
+`series` is therefore always written as NULL for F&O instruments and is
+NOT part of the instrument_key — this must stay consistent with fo.py,
+which independently derives F&O instrument_keys from the daily bhavcopy.
 """
 
 import pandas as pd
@@ -41,42 +47,72 @@ def _clean_sentinel(series: pd.Series) -> pd.Series:
     return s.where(s != 999_999_999, None)
 
 
+def _drop_blank_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drops placeholder/stale contract rows — identified by blank TckrSymb
+    and blank FinInstrmNm together. These are not real tradeable
+    instruments (seen in legacy contract master exports as leftover
+    decommissioned/never-listed contract IDs).
+    """
+    df = df.copy()
+    df["TckrSymb"]    = df["TckrSymb"].astype("string").str.strip()
+    df["FinInstrmNm"] = df["FinInstrmNm"].astype("string").str.strip()
+
+    mask = (df["TckrSymb"].notna() & (df["TckrSymb"] != "")) | \
+           (df["FinInstrmNm"].notna() & (df["FinInstrmNm"] != ""))
+
+    dropped = len(df) - mask.sum()
+    if dropped:
+        print(f"[fo_contract] dropping {dropped} blank/placeholder rows")
+
+    return df[mask].copy()
+
+
 # ── instrument identity ────────────────────────────────────────────────────────
 
 def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
+    df = _drop_blank_rows(df)
+
+    empty_instr_cols = [
+        "instrument_key", "exchange", "segment", "instrument_id",
+        "instrument_type", "ticker", "instrument_name",
+        "isin", "series", "expiry", "actual_expiry", "strike", "option_type",
+        "lot_size",
+    ]
+    if df.empty:
+        return df, pd.DataFrame(columns=empty_instr_cols)
+
     df["expiry_d"]  = _epoch_to_date(df["XpryDt"])
     df["strike_f"]  = pd.to_numeric(df["StrkPric"], errors="coerce")
     df["lot_i"]     = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
 
+    # series is not part of the identity key for F&O — SrsId is unreliable
+    # (mostly 'XX' or blank) and must stay consistent with fo.py, which
+    # also passes None for series when generating instrument_key.
     df["instrument_key"] = df.apply(lambda r: make_instrument_key(
         r["FinInstrmTp"], r["TckrSymb"],
         r["expiry_d"], r["strike_f"],
-        r.get("OptnTp"), r.get("SrsId"),
+        r.get("OptnTp"), None,
     ), axis=1)
 
     instr = df[[
         "instrument_key", "FinInstrmTp", "FinInstrmId",
-        "TckrSymb", "FinInstrmNm", "ISIN", "SrsId",
+        "TckrSymb", "FinInstrmNm", "ISIN",
         "expiry_d", "strike_f", "OptnTp", "lot_i",
     ]].drop_duplicates("instrument_key").copy()
 
     instr.columns = [
         "instrument_key", "instrument_type", "instrument_id",
-        "ticker", "instrument_name", "isin", "series",
+        "ticker", "instrument_name", "isin",
         "expiry", "strike", "option_type", "lot_size",
     ]
     instr.insert(1, "exchange", "NSE")
     instr.insert(2, "segment", "FO")
-    instr["actual_expiry"] = None  # not present in contract master
+    instr["series"] = None          # not meaningful for F&O — always NULL
+    instr["actual_expiry"] = None   # not present in contract master
 
     # reorder to match instruments table exactly
-    instr = instr[[
-        "instrument_key", "exchange", "segment", "instrument_id",
-        "instrument_type", "ticker", "instrument_name",
-        "isin", "series", "expiry", "actual_expiry", "strike", "option_type",
-        "lot_size",
-    ]]
+    instr = instr[empty_instr_cols]
     return df, instr
 
 
@@ -176,6 +212,11 @@ def process(trade_date: str):
 
     raw = _load(trade_date)
     raw, instr = _build_instruments(raw)
+
+    if raw.empty:
+        print(f"[fo_contract] {trade_date} — 0 usable rows after filtering, nothing to process")
+        return
+
     contract_daily = _build_contract_daily(raw, trade_date)
     corp_actions = _build_corp_actions(raw)
 

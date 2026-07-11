@@ -10,34 +10,48 @@ COLUMNS = [
     "trade_date",
     "status",
 
-    # F&O bhavcopy (existing, renamed fo → fo_dl)
-    "fo_dl",
-    "sto_pr",          # stock options processed
-    "ido_pr",          # index options processed
-    "stf_pr",          # stock futures processed
-    "idf_pr",          # index futures processed
-
-    # New download flags
-    "eq_bhav_dl",
-    "cm_bhav_dl",
-    "fii_dl",
-    "part_oi_dl",
-    "part_vol_dl",
-    "fo_volt_dl",
-    "mkt_act_dl",
+    # FO Contracts
     "fo_contracts_dl",
-    "cm_security_dl",
-
-    # New process flags
-    "eq_bhav_pr",
-    "cm_bhav_pr",
-    "fii_pr",
-    "part_oi_pr",
-    "part_vol_pr",
-    "fo_volt_pr",
-    "mkt_act_pr",
     "fo_contracts_pr",
+
+    # F&O Bhav
+    "fo_dl",
+    "sto_pr",
+    "ido_pr",
+    "stf_pr",
+    "idf_pr",
+
+    # CM Security
+    "cm_security_dl",
     "cm_security_pr",
+
+    # CM Bhav
+    "cm_bhav_dl",
+    "cm_bhav_pr",
+
+    # EQ Bhav
+    "eq_bhav_dl",
+    "eq_bhav_pr",
+
+    # FII
+    "fii_dl",
+    "fii_pr",
+
+    # Participant OI
+    "part_oi_dl",
+    "part_oi_pr",
+
+    # Participant Volume
+    "part_vol_dl",
+    "part_vol_pr",
+
+    # FO Volatility
+    "fo_volt_dl",
+    "fo_volt_pr",
+
+    # Market Activity
+    "mkt_act_dl",
+    "mkt_act_pr",
 ]
 
 _FLAG_COLS = [c for c in COLUMNS if c not in ("trade_date", "status")]

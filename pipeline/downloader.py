@@ -26,7 +26,7 @@ HEADERS = {
 SESSION = requests.Session()
 SESSION.headers.update(HEADERS)
 
-NEW_NSE_SCHEMA_DATE = datetime(2024, 7, 21).date()
+NEW_NSE_SCHEMA_DATE = datetime(2024, 7, 24).date()
 
 # ── Schema switch ─────────────────────────────────────────────────────────────
 

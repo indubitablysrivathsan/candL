@@ -42,17 +42,15 @@ def process(trade_date: str):
         "instrument_key":   df["instrument_key"],
         "exchange":         "NSE",
         "segment":          "CM",
-        "instrument_type":  df["itype"],
         "instrument_id":    pd.to_numeric(df["FinInstrmId"], errors="coerce").astype("Int64"),
+        "instrument_type":  df["itype"],
         "ticker":           df["TckrSymb"].str.strip(),
         "instrument_name":  df["FinInstrmNm"].str.strip(),
         "isin":             df["ISIN"].str.strip(),
         "series":           df["series_"],
         "expiry":           None,
-        "actual_expiry":    None,
         "strike":           None,
         "option_type":      None,
-        "lot_size":         pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64"),
     }).drop_duplicates("instrument_key")
 
     mdd = pd.DataFrame({

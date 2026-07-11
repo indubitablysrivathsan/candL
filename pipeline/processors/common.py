@@ -60,3 +60,23 @@ def upsert_market_data(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
             delivery_pct     = excluded.delivery_pct
     """)
     conn.unregister("_mdd_stage")
+
+def upsert_delivery_stats(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
+    """
+    Patches only avg_price / delivery_qty / delivery_pct onto existing
+    market_data_daily rows. Does NOT insert new rows — if a
+    (trade_date, instrument_key) pair doesn't already exist, it's silently
+    skipped (that instrument's base row must come from cm_bhav first).
+    """
+    conn.register("_deliv_stage", df)
+    conn.execute("""
+        UPDATE market_data_daily AS m
+        SET
+            avg_price     = s.avg_price,
+            delivery_qty  = s.delivery_qty,
+            delivery_pct  = s.delivery_pct
+        FROM _deliv_stage AS s
+        WHERE m.trade_date = s.trade_date
+          AND m.instrument_key = s.instrument_key
+    """)
+    conn.unregister("_deliv_stage")
