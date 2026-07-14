@@ -31,14 +31,58 @@ def _load(trade_date: str) -> pd.DataFrame:
         raise FileNotFoundError(p)
     df = pd.read_csv(p, low_memory=False)
     df.columns = df.columns.str.strip()
+
+    # Legacy contract master ships mislabeled headers:
+    #   actual "FinInstrmTp" column is named "FinInstrmNm"
+    #   actual "FinInstrmNm" column is named "StockNm"
+    df = df.drop(columns=["FinInstrmTp"], errors="ignore").rename(columns={
+        "FinInstrmNm": "FinInstrmTp",
+        "StockNm":     "FinInstrmNm",
+    })
+
     return df
 
+_LEGACY_INSTR_MAP = {
+    "OPTSTK": "STO",
+    "OPTIDX": "IDO",
+    "FUTSTK": "STF",
+    "FUTIDX": "IDF",
+}
+_OPTION_TYPES = {"STO", "IDO"}
+
+_NORMALIZED_INSTR_TYPES = set(_LEGACY_INSTR_MAP.values())  # {"STO","IDO","STF","IDF"}
+
+def _normalize_instr_type(series: pd.Series) -> pd.Series:
+    """Map legacy raw codes (OPTSTK/OPTIDX/FUTSTK/FUTIDX) -> normalized codes.
+
+    Idempotent by design: if called again on values that are already
+    normalized (e.g. because an upstream step re-runs this on a frame
+    that was already processed), those values pass through unchanged
+    instead of being flagged as unmapped and dropped.
+    """
+    s = series.astype("string").str.strip().str.upper()
+    already_normalized = s.isin(_NORMALIZED_INSTR_TYPES)
+    mapped = s.map(_LEGACY_INSTR_MAP)
+    mapped = mapped.where(~already_normalized, s)
+    unknown = s[mapped.isna() & s.notna()].unique()
+    if len(unknown):
+        print(f"[fo_contract] WARNING unmapped FinInstrmTp values: {unknown}")
+    return mapped
+
+# Empirically, contract master timestamps are offset by 10 years
+# relative to the corresponding F&O Bhavcopy.
+_EPOCH_10Y_OFFSET = int(
+    pd.Timestamp("2026-01-01").timestamp()
+    - pd.Timestamp("2016-01-01").timestamp()
+    - 86400
+)
 
 def _epoch_to_date(series: pd.Series) -> pd.Series:
-    """Legacy contract master date fields are epoch seconds; 0 means null."""
+    """Decode legacy contract master epoch fields (0 means null)."""
     s = pd.to_numeric(series, errors="coerce")
-    s = s.where(s > 0, None)
-    return pd.to_datetime(s, unit="s", errors="coerce").dt.date
+    s = s.where(s > 0)
+
+    return pd.to_datetime(s + _EPOCH_10Y_OFFSET, unit="s", errors="coerce").dt.date
 
 
 def _clean_sentinel(series: pd.Series) -> pd.Series:
@@ -47,31 +91,38 @@ def _clean_sentinel(series: pd.Series) -> pd.Series:
     return s.where(s != 999_999_999, None)
 
 
-def _drop_blank_rows(df: pd.DataFrame) -> pd.DataFrame:
+def _drop_invalid_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     """
-    Drops placeholder/stale contract rows — identified by blank TckrSymb
-    and blank FinInstrmNm together. These are not real tradeable
-    instruments (seen in legacy contract master exports as leftover
-    decommissioned/never-listed contract IDs).
+    Drops invalid contract rows.
+
+    Removes:
+    - Placeholder/stale rows with both TckrSymb and FinInstrmNm blank.
+    - Rows with negative strike prices.
     """
     df = df.copy()
-    df["TckrSymb"]    = df["TckrSymb"].astype("string").str.strip()
+
+    df["TckrSymb"] = df["TckrSymb"].astype("string").str.strip()
     df["FinInstrmNm"] = df["FinInstrmNm"].astype("string").str.strip()
+    df["StrkPric"] = pd.to_numeric(df["StrkPric"], errors="coerce")
 
-    mask = (df["TckrSymb"].notna() & (df["TckrSymb"] != "")) | \
-           (df["FinInstrmNm"].notna() & (df["FinInstrmNm"] != ""))
-
+    valid_symbol = (
+        (df["TckrSymb"].notna() & (df["TckrSymb"] != "")) |
+        (df["FinInstrmNm"].notna() & (df["FinInstrmNm"] != ""))
+    )
+    # -1 is NSE's sentinel for "strike not applicable" on futures rows
+    # (every FUTSTK/FUTIDX row ships StrkPric=-1), not a genuine invalid
+    # negative strike. Only reject strikes that are negative and not
+    # this sentinel.
+    valid_strike = df["StrkPric"].isna() | (df["StrkPric"] == -1) | (df["StrkPric"] >= 0)
+    mask = valid_symbol & valid_strike
     dropped = len(df) - mask.sum()
-    if dropped:
-        print(f"[fo_contract] dropping {dropped} blank/placeholder rows")
 
-    return df[mask].copy()
-
+    return df[mask].copy(), dropped
 
 # ── instrument identity ────────────────────────────────────────────────────────
 
 def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
-    df = _drop_blank_rows(df)
+    df, dropped = _drop_invalid_rows(df)
 
     empty_instr_cols = [
         "instrument_key", "exchange", "segment", "instrument_id",
@@ -80,11 +131,34 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
         "lot_size",
     ]
     if df.empty:
-        return df, pd.DataFrame(columns=empty_instr_cols)
+        return df, pd.DataFrame(columns=empty_instr_cols), dropped
 
     df["expiry_d"]  = _epoch_to_date(df["XpryDt"])
-    df["strike_f"]  = pd.to_numeric(df["StrkPric"], errors="coerce")
-    df["lot_i"]     = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
+
+    # NOTE: normalize exactly once. Calling this twice re-maps already-
+    # normalized values ("STO"/"IDO"/"STF"/"IDF") against the raw-value
+    # map above, which doesn't recognize them, flags them as "unmapped",
+    # and drops every row.
+    df["FinInstrmTp"] = _normalize_instr_type(df["FinInstrmTp"])
+    df = df[df["FinInstrmTp"].notna()].copy()
+
+    is_option = df["FinInstrmTp"].isin(_OPTION_TYPES)
+
+    # StrkPric/OptnTp are only meaningful for options. For futures NSE ships
+    # these blank, which pandas turns into NaN / <NA> — NOT the same value
+    # as the plain `None` that fo.py passes for futures when it builds
+    # instrument_key from the daily bhavcopy. If NaN/<NA> leaks into
+    # make_instrument_key() for futures here, the resulting key hashes
+    # differently from fo.py's key for the same contract, so futures
+    # silently fail to join. Force futures to real `None` explicitly so
+    # both processors derive identical instrument_keys.
+    df["strike_f"] = (pd.to_numeric(df["StrkPric"], errors="coerce") / 100).where(is_option)
+    df["strike_f"] = df["strike_f"].where(df["strike_f"].notna(), None)
+
+    df["OptnTp"] = df["OptnTp"].astype("string").where(is_option)
+    df["OptnTp"] = df["OptnTp"].where(df["OptnTp"].notna(), None)
+
+    df["lot_i"] = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
 
     # series is not part of the identity key for F&O — SrsId is unreliable
     # (mostly 'XX' or blank) and must stay consistent with fo.py, which
@@ -92,7 +166,7 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
     df["instrument_key"] = df.apply(lambda r: make_instrument_key(
         r["FinInstrmTp"], r["TckrSymb"],
         r["expiry_d"], r["strike_f"],
-        r.get("OptnTp"), None,
+        r["OptnTp"], None,
     ), axis=1)
 
     instr = df[[
@@ -113,30 +187,30 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
 
     # reorder to match instruments table exactly
     instr = instr[empty_instr_cols]
-    return df, instr
+    return df, instr, dropped
 
 
 # ── instrument_contract_daily ──────────────────────────────────────────────────
 
 def _build_contract_daily(df: pd.DataFrame, trade_date: str) -> pd.DataFrame:
     d = pd.DataFrame(index=df.index) 
-    d["trade_date"]          = pd.to_datetime(trade_date).date()
-    d["instrument_key"]      = df["instrument_key"]
+    d["trade_date"]             = pd.to_datetime(trade_date).date()
+    d["instrument_key"]         = df["instrument_key"]
 
-    d["lot_size"]            = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
-    d["min_lot"]              = pd.to_numeric(df["MinLot"], errors="coerce").astype("Int64")
+    d["lot_size"]               = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
+    d["min_lot"]                = pd.to_numeric(df["MinLot"], errors="coerce").astype("Int64")
 
-    d["margin_pct"]           = pd.to_numeric(df["MrgnPctg"], errors="coerce")
-    d["base_price"]            = pd.to_numeric(df["BasePric"], errors="coerce")
-    d["min_price"]              = pd.to_numeric(df["MinPric"], errors="coerce")
-    d["max_price"]                = pd.to_numeric(df["MaxPric"], errors="coerce")
+    d["margin_pct"]             = pd.to_numeric(df["MrgnPctg"], errors="coerce") / 100
+    d["base_price"]             = pd.to_numeric(df["BasePric"], errors="coerce") / 100
+    d["min_price"]              = pd.to_numeric(df["MinPric"], errors="coerce") / 100
+    d["max_price"]              = pd.to_numeric(df["MaxPric"], errors="coerce") / 100
 
-    d["settlement_method"]         = df["SttlmMtd"].astype("string")
-    d["exercise_style"]             = df["OptnExrcStyle"].astype("string")
+    d["settlement_method"]      = df["SttlmMtd"].astype("string")
+    d["exercise_style"]         = df["OptnExrcStyle"].astype("string")
 
-    d["max_single_txn_qty"]         = _clean_sentinel(df["MaxTradQty"]).astype("Int64")
+    d["max_single_txn_qty"]     = _clean_sentinel(df["MaxTradQty"]).astype("Int64")
 
-    d["admission_date"]              = _epoch_to_date(df["AdmssnDt"])
+    d["admission_date"]         = _epoch_to_date(df["AdmssnDt"])
 
     d = d.drop_duplicates(subset=["trade_date", "instrument_key"])
     return d
@@ -211,7 +285,7 @@ def process(trade_date: str):
         return
 
     raw = _load(trade_date)
-    raw, instr = _build_instruments(raw)
+    raw, instr, dropped = _build_instruments(raw)
 
     if raw.empty:
         print(f"[fo_contract] {trade_date} — 0 usable rows after filtering, nothing to process")
@@ -227,7 +301,7 @@ def process(trade_date: str):
         _upsert_contract_daily(conn, contract_daily)
         _upsert_corp_actions(conn, corp_actions)
         conn.execute("COMMIT")
-        print(f"[fo_contract] {trade_date} — {len(contract_daily)} contract rows, {len(corp_actions)} corp actions")
+        print(f"[fo_contract] {trade_date} — {len(contract_daily)} contract rows, {len(corp_actions)} corp actions, {dropped} invalid rows dropped")
     except Exception:
         conn.execute("ROLLBACK")
         raise
