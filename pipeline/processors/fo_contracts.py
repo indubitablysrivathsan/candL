@@ -8,6 +8,16 @@ or empty), unlike CM where SctySrs/SrsId is meaningful (EQ, BE, SM, etc.).
 `series` is therefore always written as NULL for F&O instruments and is
 NOT part of the instrument_key — this must stay consistent with fo.py,
 which independently derives F&O instrument_keys from the daily bhavcopy.
+
+NOTE: this file is forward-looking. A contract master dated `file_date`
+describes the F&O contract universe effective on the NEXT trading
+session — contracts expiring on `file_date` are already absent from it.
+`file_date` (the publication date, used to locate the file on disk) is
+therefore kept separate from `trade_date` (the effective session the
+snapshot applies to, written into instrument_contract_daily). The
+caller (startup_sync.py) resolves trade_date from the manifest rather
+than assuming file_date + 1 calendar day, so weekends/holidays/gaps in
+the trading calendar are handled correctly.
 """
 
 import pandas as pd
@@ -20,13 +30,13 @@ from .keys import make_instrument_key
 from .common import upsert_instruments
 
 
-def _raw_path(trade_date: str) -> Path:
-    dt = pd.to_datetime(trade_date)
-    return Path(FO_CONTRACT_ROOT) / dt.strftime("%Y") / dt.strftime("%m") / f"{trade_date}.csv"
+def _raw_path(file_date: str) -> Path:
+    dt = pd.to_datetime(file_date)
+    return Path(FO_CONTRACT_ROOT) / dt.strftime("%Y") / dt.strftime("%m") / f"{file_date}.csv"
 
 
-def _load(trade_date: str) -> pd.DataFrame:
-    p = _raw_path(trade_date)
+def _load(file_date: str) -> pd.DataFrame:
+    p = _raw_path(file_date)
     if not p.exists():
         raise FileNotFoundError(p)
     df = pd.read_csv(p, low_memory=False)
@@ -192,8 +202,13 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── instrument_contract_daily ──────────────────────────────────────────────────
 
-def _build_contract_daily(df: pd.DataFrame, trade_date: str) -> pd.DataFrame:
-    d = pd.DataFrame(index=df.index) 
+def _build_contract_daily(df: pd.DataFrame, file_date: str, trade_date: str) -> pd.DataFrame:
+    """
+    `trade_date` here is the EFFECTIVE session (next trading day after
+    file_date), resolved by the caller — never file_date itself.
+    """
+    d = pd.DataFrame(index=df.index)
+    d["file_date"]              = pd.to_datetime(file_date).date()
     d["trade_date"]             = pd.to_datetime(trade_date).date()
     d["instrument_key"]         = df["instrument_key"]
 
@@ -231,7 +246,7 @@ def _upsert_contract_daily(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
             settlement_method         = excluded.settlement_method,
             exercise_style             = excluded.exercise_style,
             max_single_txn_qty          = excluded.max_single_txn_qty,
-            admission_date                = excluded.admission_date,
+            admission_date                = excluded.admission_date
     """)
     conn.unregister("_contract_stage")
 
@@ -279,19 +294,29 @@ def _upsert_corp_actions(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
 
 # ── entry point ─────────────────────────────────────────────────────────────────
 
-def process(trade_date: str):
+def process(file_date: str, trade_date: str):
+    """
+    file_date  — date in the downloaded filename (publication date); used
+                 to locate the raw file on disk.
+    trade_date — the confirmed next trading day this snapshot is effective
+                 for; resolved by the caller (startup_sync.py) from the
+                 manifest via get_next_confirmed_trading_date, NOT by
+                 assuming file_date + 1 calendar day. This is what gets
+                 written to instrument_contract_daily and checked against
+                 is_processed.
+    """
     if is_processed(trade_date, "FO_CONTRACT"):
-        print(f"[fo_contract] {trade_date} already processed, skipping")
+        print(f"[fo_contract] {trade_date} (file {file_date}) already processed, skipping")
         return
 
-    raw = _load(trade_date)
+    raw = _load(file_date)
     raw, instr, dropped = _build_instruments(raw)
 
     if raw.empty:
-        print(f"[fo_contract] {trade_date} — 0 usable rows after filtering, nothing to process")
+        print(f"[fo_contract] {trade_date} (file {file_date}) — 0 usable rows after filtering, nothing to process")
         return
 
-    contract_daily = _build_contract_daily(raw, trade_date)
+    contract_daily = _build_contract_daily(raw, file_date, trade_date)
     corp_actions = _build_corp_actions(raw)
 
     conn = get_conn()
@@ -301,7 +326,8 @@ def process(trade_date: str):
         _upsert_contract_daily(conn, contract_daily)
         _upsert_corp_actions(conn, corp_actions)
         conn.execute("COMMIT")
-        print(f"[fo_contract] {trade_date} — {len(contract_daily)} contract rows, {len(corp_actions)} corp actions, {dropped} invalid rows dropped")
+        print(f"[fo_contract] file={file_date} → trade_date={trade_date} — "
+              f"{len(contract_daily)} contract rows, {len(corp_actions)} corp actions, {dropped} invalid rows dropped")
     except Exception:
         conn.execute("ROLLBACK")
         raise

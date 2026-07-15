@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS instruments (
 -- ── F&O daily contract terms ────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS instrument_contract_daily (
+    file_date           DATE   NOT NULL,
     trade_date           DATE   NOT NULL,
     instrument_key       BIGINT NOT NULL,
 
@@ -116,6 +117,7 @@ CREATE TABLE IF NOT EXISTS corporate_actions (
 -- ── CM daily security terms ─────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS security_master_daily (
+    file_date           DATE   NOT NULL,
     trade_date            DATE   NOT NULL,
     instrument_key        BIGINT NOT NULL,
 

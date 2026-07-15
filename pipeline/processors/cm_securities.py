@@ -2,6 +2,15 @@
 cm_securities.py
 CM security master processor
 → instruments (upsert), security_master_daily, corporate_actions
+
+NOTE: this file is forward-looking, same as fo_contracts.py. A security
+master dated `file_date` describes the CM security universe effective
+on the NEXT trading session. `file_date` (publication date, used to
+locate the file on disk) is kept separate from `trade_date` (the
+effective session the snapshot applies to, written into
+security_master_daily). The caller (startup_sync.py) resolves
+trade_date from the manifest rather than assuming file_date + 1
+calendar day, so weekends/holidays/gaps are handled correctly.
 """
 
 import pandas as pd
@@ -14,13 +23,13 @@ from .keys import make_instrument_key
 from .common import upsert_instruments
 
 
-def _raw_path(trade_date: str) -> Path:
-    dt = pd.to_datetime(trade_date)
-    return Path(CM_SECURITY_ROOT) / dt.strftime("%Y") / dt.strftime("%m") / f"{trade_date}.csv"
+def _raw_path(file_date: str) -> Path:
+    dt = pd.to_datetime(file_date)
+    return Path(CM_SECURITY_ROOT) / dt.strftime("%Y") / dt.strftime("%m") / f"{file_date}.csv"
 
 
-def _load(trade_date: str) -> pd.DataFrame:
-    p = _raw_path(trade_date)
+def _load(file_date: str) -> pd.DataFrame:
+    p = _raw_path(file_date)
     if not p.exists():
         raise FileNotFoundError(p)
     df = pd.read_csv(p, low_memory=False)
@@ -28,11 +37,21 @@ def _load(trade_date: str) -> pd.DataFrame:
     return df
 
 
+# Empirically, cm securities timestamps are offset by 10 years
+# relative to the corresponding F&O Bhavcopy.
+_EPOCH_10Y_OFFSET = int(
+    pd.Timestamp("2026-01-01").timestamp()
+    - pd.Timestamp("2016-01-01").timestamp()
+    - 86400
+)
+
 def _epoch_to_date(series: pd.Series) -> pd.Series:
-    """Legacy CM security master date fields are epoch seconds; 0 means null."""
+    """Decode legacy contract master epoch fields (0 means null)."""
     s = pd.to_numeric(series, errors="coerce")
-    s = s.where(s > 0, None)
-    return pd.to_datetime(s, unit="s", errors="coerce").dt.date
+    s = s.where(s > 0)
+
+    return pd.to_datetime(s + _EPOCH_10Y_OFFSET, unit="s", errors="coerce").dt.date
+
 
 
 def _clean_sentinel(series: pd.Series) -> pd.Series:
@@ -82,8 +101,13 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── security_master_daily ──────────────────────────────────────────────────────
 
-def _build_security_master(df: pd.DataFrame, trade_date: str) -> pd.DataFrame:
-    d = pd.DataFrame(index=df.index) 
+def _build_security_master(df: pd.DataFrame, file_date: str, trade_date: str) -> pd.DataFrame:
+    """
+    `trade_date` here is the EFFECTIVE session (next trading day after
+    file_date), resolved by the caller — never file_date itself.
+    """
+    d = pd.DataFrame(index=df.index)
+    d["file_date"]      = pd.to_datetime(file_date).date()
     d["trade_date"]      = pd.to_datetime(trade_date).date()
     d["instrument_key"]  = df["instrument_key"]
 
@@ -111,7 +135,7 @@ def _upsert_security_master(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
             issued_capital           = excluded.issued_capital,
             max_trade_pct             = excluded.max_trade_pct,
             listing_date               = excluded.listing_date,
-            record_date                  = excluded.record_date,
+            record_date                  = excluded.record_date
     """)
     conn.unregister("_secmaster_stage")
 
@@ -177,14 +201,24 @@ def _upsert_corp_actions(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
 
 # ── entry point ─────────────────────────────────────────────────────────────────
 
-def process(trade_date: str):
+def process(file_date: str, trade_date: str):
+    """
+    file_date  — date in the downloaded filename (publication date); used
+                 to locate the raw file on disk.
+    trade_date — the confirmed next trading day this snapshot is effective
+                 for; resolved by the caller (startup_sync.py) from the
+                 manifest via get_next_confirmed_trading_date, NOT by
+                 assuming file_date + 1 calendar day. This is what gets
+                 written to security_master_daily and checked against
+                 is_processed.
+    """
     if is_processed(trade_date, "CM_SECURITY"):
-        print(f"[cm_security] {trade_date} already processed, skipping")
+        print(f"[cm_security] {trade_date} (file {file_date}) already processed, skipping")
         return
 
-    raw = _load(trade_date)
+    raw = _load(file_date)
     raw, instr = _build_instruments(raw)
-    sec_master = _build_security_master(raw, trade_date)
+    sec_master = _build_security_master(raw, file_date, trade_date)
     corp_actions = _build_corp_actions(raw)
 
     conn = get_conn()
@@ -194,7 +228,8 @@ def process(trade_date: str):
         _upsert_security_master(conn, sec_master)
         _upsert_corp_actions(conn, corp_actions)
         conn.execute("COMMIT")
-        print(f"[cm_security] {trade_date} — {len(sec_master)} security rows, {len(corp_actions)} corp actions")
+        print(f"[cm_security] file={file_date} → trade_date={trade_date} — "
+              f"{len(sec_master)} security rows, {len(corp_actions)} corp actions")
     except Exception:
         conn.execute("ROLLBACK")
         raise

@@ -46,3 +46,17 @@ def get_missing_dates(manifest_df, start_date: str, end_date: str):
         d for d in expected
         if d not in existing or d in failed or d in partial
     ]
+
+def get_next_confirmed_trading_date(manifest_df, file_date: str):
+    """
+    Returns the earliest trade_date in the manifest strictly after
+    file_date that has confirmed market data (fo_dl or eq_bhav_dl == 1).
+    Returns None if no later confirmed date exists yet — meaning
+    file_date is still the 'latest' file and its effective trade_date
+    (file_date + 1 trading day) is unconfirmed.
+    """
+    later = manifest_df[manifest_df["trade_date"] > file_date]
+    confirmed = later[(later["fo_dl"] == 1) | (later["eq_bhav_dl"] == 1)]
+    if confirmed.empty:
+        return None
+    return confirmed["trade_date"].min()
