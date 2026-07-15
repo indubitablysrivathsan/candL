@@ -3,60 +3,65 @@ import pandas as pd
 
 from config import MANIFEST_PATH
 
-# Download flags  → 1 = file on disk
-# Process flags   → 1 = ingested into DB
+# Flag values, applies uniformly to all *_pr and *_dl columns:
+#   0 = not processed yet, check every startup
+#   1 = successfully processed
+#   2 = deferred — the trading date this row depends on isn't available yet.
+#       Only meaningful for *_pr columns. Not sticky: re-derived from the
+#       manifest's actual date range on every startup, so it clears itself
+#       automatically once the needed date shows up (new download at either
+#       end of the range) — no special "wake up and recheck" logic needed.
+#
+# For FO Contracts / CM Security: the manifest row is keyed by the file's
+# OWN date (its filename date), same as fo_contracts_dl/cm_security_dl.
+# Processing writes to the DB under the NEXT trading date (resolved via
+# trading_dates.get_next_trading_date), but the pr flag lives on the file's
+# own row — deferred (2) at the newest row until a later date is downloaded.
+#
+# For all other files: keyed by their own trade_date as usual, deferred (2)
+# at the earliest row until an earlier date is backfilled (no prior day's
+# master data to depend on).
 
 COLUMNS = [
     "trade_date",
     "status",
 
-    # FO Contracts
     "fo_contracts_dl",
     "fo_contracts_pr",
 
-    # F&O Bhav
     "fo_dl",
     "sto_pr",
     "ido_pr",
     "stf_pr",
     "idf_pr",
 
-    # CM Security
     "cm_security_dl",
     "cm_security_pr",
 
-    # CM Bhav
     "cm_bhav_dl",
     "cm_bhav_pr",
 
-    # EQ Bhav
     "eq_bhav_dl",
     "eq_bhav_pr",
 
-    # FII
     "fii_dl",
     "fii_pr",
 
-    # Participant OI
     "part_oi_dl",
     "part_oi_pr",
 
-    # Participant Volume
     "part_vol_dl",
     "part_vol_pr",
 
-    # FO Volatility
     "fo_volt_dl",
     "fo_volt_pr",
 
-    # Market Activity
     "mkt_act_dl",
     "mkt_act_pr",
 ]
 
 _FLAG_COLS = [c for c in COLUMNS if c not in ("trade_date", "status")]
 
-# ── old column name → new column name (for auto-upgrade) ──────────────────────
 _RENAMES = {
     "fo": "fo_dl",
 }
@@ -80,15 +85,12 @@ def load_manifest() -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=COLUMNS)
 
-    # Rename legacy columns (fo → fo_dl)
     df = df.rename(columns=_RENAMES)
 
-    # Add any missing columns introduced in newer schema
     for col in COLUMNS:
         if col not in df.columns:
             df[col] = "" if col in ("trade_date", "status") else 0
 
-    # Coerce all flag columns to int8
     for col in _FLAG_COLS:
         df[col] = (
             pd.to_numeric(df[col], errors="coerce")
@@ -117,10 +119,6 @@ def get_status(trade_date: str):
 
 
 def _upsert(trade_date: str, status: str, **flag_updates):
-    """
-    Insert or update a manifest row.
-    Pass flag columns as kwargs, e.g. fo_dl=1, eq_bhav_dl=1.
-    """
     df = load_manifest()
 
     if trade_date not in df["trade_date"].values:
@@ -138,6 +136,7 @@ def _upsert(trade_date: str, status: str, **flag_updates):
 
 
 def _set_flag(trade_date: str, col: str, val: int = 1):
+    """val can be 0, 1, or 2 (deferred) — see module docstring."""
     df = load_manifest()
 
     if trade_date not in df["trade_date"].values:
@@ -177,39 +176,38 @@ def mark_fo_contracts_downloaded(trade_date: str): _set_flag(trade_date, "fo_con
 def mark_cm_security_downloaded(trade_date: str):  _set_flag(trade_date, "cm_security_dl")
 
 
-# ── process flag setters ──────────────────────────────────────────────────────
+# ── process flag setters (val=1 success, val=2 deferred) ──────────────────────
 
-# FO (existing)
-def mark_stock_options_processed(trade_date: str):  _set_flag(trade_date, "sto_pr")
-def mark_index_options_processed(trade_date: str):  _set_flag(trade_date, "ido_pr")
-def mark_stock_futures_processed(trade_date: str):  _set_flag(trade_date, "stf_pr")
-def mark_index_futures_processed(trade_date: str):  _set_flag(trade_date, "idf_pr")
+def mark_stock_options_processed(trade_date: str, val: int = 1):  _set_flag(trade_date, "sto_pr", val)
+def mark_index_options_processed(trade_date: str, val: int = 1):  _set_flag(trade_date, "ido_pr", val)
+def mark_stock_futures_processed(trade_date: str, val: int = 1):  _set_flag(trade_date, "stf_pr", val)
+def mark_index_futures_processed(trade_date: str, val: int = 1):  _set_flag(trade_date, "idf_pr", val)
 
-# New
-def mark_eq_bhav_processed(trade_date: str):      _set_flag(trade_date, "eq_bhav_pr")
-def mark_cm_bhav_processed(trade_date: str):      _set_flag(trade_date, "cm_bhav_pr")
-def mark_fii_processed(trade_date: str):          _set_flag(trade_date, "fii_pr")
-def mark_part_oi_processed(trade_date: str):      _set_flag(trade_date, "part_oi_pr")
-def mark_part_vol_processed(trade_date: str):     _set_flag(trade_date, "part_vol_pr")
-def mark_fo_volt_processed(trade_date: str):      _set_flag(trade_date, "fo_volt_pr")
-def mark_mkt_act_processed(trade_date: str):      _set_flag(trade_date, "mkt_act_pr")
-def mark_fo_contracts_processed(trade_date: str): _set_flag(trade_date, "fo_contracts_pr")
-def mark_cm_security_processed(trade_date: str):  _set_flag(trade_date, "cm_security_pr")
+def mark_eq_bhav_processed(trade_date: str, val: int = 1):      _set_flag(trade_date, "eq_bhav_pr", val)
+def mark_cm_bhav_processed(trade_date: str, val: int = 1):      _set_flag(trade_date, "cm_bhav_pr", val)
+def mark_fii_processed(trade_date: str, val: int = 1):          _set_flag(trade_date, "fii_pr", val)
+def mark_part_oi_processed(trade_date: str, val: int = 1):      _set_flag(trade_date, "part_oi_pr", val)
+def mark_part_vol_processed(trade_date: str, val: int = 1):     _set_flag(trade_date, "part_vol_pr", val)
+def mark_fo_volt_processed(trade_date: str, val: int = 1):      _set_flag(trade_date, "fo_volt_pr", val)
+def mark_mkt_act_processed(trade_date: str, val: int = 1):      _set_flag(trade_date, "mkt_act_pr", val)
+
+# Masters — flag lives on the FILE's own row (file_date), val=2 means
+# deferred (its confirming next-date isn't downloaded yet).
+def mark_fo_contracts_processed(file_date: str, val: int = 1):  _set_flag(file_date, "fo_contracts_pr", val)
+def mark_cm_security_processed(file_date: str, val: int = 1):   _set_flag(file_date, "cm_security_pr", val)
 
 
-# ── unprocessed date getters ──────────────────────────────────────────────────
+# ── unprocessed date getters (0 and 2 both need rechecking each run) ──────────
 
 def _unprocessed(dl_col: str, pr_col: str) -> list[str]:
     df = load_manifest()
     return df[(df[dl_col] == 1) & (df[pr_col] != 1)]["trade_date"].tolist()
 
-# FO (existing)
 def get_stock_options_unprocessed_dates():  return _unprocessed("fo_dl", "sto_pr")
 def get_index_options_unprocessed_dates():  return _unprocessed("fo_dl", "ido_pr")
 def get_stock_futures_unprocessed_dates():  return _unprocessed("fo_dl", "stf_pr")
 def get_index_futures_unprocessed_dates():  return _unprocessed("fo_dl", "idf_pr")
 
-# New
 def get_eq_bhav_unprocessed_dates():        return _unprocessed("eq_bhav_dl",      "eq_bhav_pr")
 def get_cm_bhav_unprocessed_dates():        return _unprocessed("cm_bhav_dl",      "cm_bhav_pr")
 def get_fii_unprocessed_dates():            return _unprocessed("fii_dl",          "fii_pr")
@@ -217,5 +215,6 @@ def get_part_oi_unprocessed_dates():        return _unprocessed("part_oi_dl",   
 def get_part_vol_unprocessed_dates():       return _unprocessed("part_vol_dl",     "part_vol_pr")
 def get_fo_volt_unprocessed_dates():        return _unprocessed("fo_volt_dl",      "fo_volt_pr")
 def get_mkt_act_unprocessed_dates():        return _unprocessed("mkt_act_dl",      "mkt_act_pr")
+
 def get_fo_contracts_unprocessed_dates():   return _unprocessed("fo_contracts_dl", "fo_contracts_pr")
 def get_cm_security_unprocessed_dates():    return _unprocessed("cm_security_dl",  "cm_security_pr")

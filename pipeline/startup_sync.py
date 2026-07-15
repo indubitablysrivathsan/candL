@@ -12,13 +12,23 @@ holidays, processing of a master file dated D is deferred until a
 later manifest row confirms the next real trading session (i.e. that
 row's fo_dl/eq_bhav_dl flags are set). That confirmed date becomes the
 trade_date written to the DB — see trading_dates.get_next_confirmed_trading_date.
+
+For master processors, two columns are tracked per master (see manifest.py):
+  - <key>_pr        : gating flag — "this trade_date has confirmed master data".
+                       Non-master processors check ONLY this column.
+  - <key>_file_pr    : "the FILE dated D has been consumed" — prevents
+                       reprocessing the same file every run. Independent of
+                       whether the file's OWN trade_date is itself confirmed.
+These are allowed to disagree on the same row (e.g. file 13-07 can be
+consumed/file_pr=1 while trade_date 13-07 itself is never confirmed/pr=0,
+because the file that would confirm it, dated 12-07, predates SYNC_START_DATE).
 """
 
 from datetime import datetime
 import pandas as pd
 
 from api.db import init_db, is_processed
-from pipeline.trading_dates import get_missing_dates, get_next_confirmed_trading_date
+from pipeline.trading_dates import get_missing_dates, get_next_confirmed_trading_date, get_previous_trading_date
 from pipeline.manifest import load_manifest, save_manifest, COLUMNS, _FLAG_COLS
 from pipeline.downloader import DOWNLOAD_REGISTRY
 from pipeline.processors import REGISTRY as PROCESSOR_REGISTRY
@@ -28,8 +38,8 @@ from config import SYNC_START_DATE
 # (processor_key, dl_col, pr_col, is_processed_check_keys)
 _PIPELINE = [
     ("fo_contracts", "fo_contracts_dl", ["fo_contracts_pr"], ["FO_CONTRACT"]),
-    ("fo",           "fo_dl",           ["stf_pr", "idf_pr", "sto_pr", "ido_pr"], ["STF", "IDF", "STO", "IDO"]),
     ("cm_security",  "cm_security_dl",  ["cm_security_pr"],  ["CM_SECURITY"]),
+    ("fo",           "fo_dl",           ["stf_pr", "idf_pr", "sto_pr", "ido_pr"], ["STF", "IDF", "STO", "IDO"]),
     ("cm_bhav",      "cm_bhav_dl",      ["cm_bhav_pr"],      ["cm_bhav"]),
     ("eq_bhav",      "eq_bhav_dl",      ["eq_bhav_pr"],      ["eq_bhav"]),
     ("fii",          "fii_dl",          ["fii_pr"],          ["fii"]),
@@ -47,6 +57,13 @@ _EXTRA_PR = {"participant": "part_vol_pr"}
 # not the trade_date the snapshot is effective for. These are gated on
 # get_next_confirmed_trading_date and call their processor with both dates.
 _MASTER_KEYS = {"fo_contracts", "cm_security"}
+
+# master key -> column tracking "the FILE dated D has been consumed"
+# (distinct from <key>_pr, which is the gating flag on the *effective* date)
+_MASTER_FILE_PR = {
+    "fo_contracts": "fo_contracts_file_pr",
+    "cm_security":  "cm_security_file_pr",
+}
 
 
 def _flag(manifest: pd.DataFrame, trade_date: str, col: str) -> int:
@@ -78,7 +95,6 @@ def run_startup_sync():
     manifest = load_manifest()
     today    = datetime.today().strftime("%Y-%m-%d")
     missing  = get_missing_dates(manifest, SYNC_START_DATE, today)
-    first_cutoff_date = min(missing) if missing else None
 
     # ── Phase 1: Download ─────────────────────────────────────────────────────
     print(f"Found {len(missing)} missing dates.\n" if missing else "✓ No missing dates.\n")
@@ -143,28 +159,21 @@ def run_startup_sync():
         extra_dl = _EXTRA_DL.get(proc_key)
         extra_pr = _EXTRA_PR.get(proc_key)
         is_master = proc_key in _MASTER_KEYS
+        pr_col = pr_cols[0]
 
         candidates = manifest[
             (manifest[dl_col] == 1) &
-            (manifest[pr_cols[0]] != 1) &
+            (manifest[pr_col] != 1) &
             (manifest["status"] != "market_closed")
         ]["trade_date"].tolist()
-
-        # Non-master processors must not run on the very first date of this
-        # sync's cutoff range — its FO Contract / CM Security master (for
-        # the prior session) hasn't been processed/joined yet.
-        if not is_master and first_cutoff_date is not None:
-            candidates = [d for d in candidates if d != first_cutoff_date]
 
         if extra_dl:
             candidates = [d for d in candidates if _flag(manifest, d, extra_dl) == 1]
 
-        # For master files, `trade_date` in the row is actually the file's
-        # publication date. Resolve the real effective trade_date from a
-        # later confirmed manifest row, and drop any candidate whose next
-        # trading day isn't confirmed yet (i.e. the most recent file we have).
-        effective_date = {}
         if is_master:
+            # candidates here are FILE dates. Each needs its confirming next
+            # trading date to exist before it can be written to the DB.
+            effective_date = {}
             kept = []
             for file_date in candidates:
                 eff = get_next_confirmed_trading_date(manifest, file_date)
@@ -172,7 +181,22 @@ def run_startup_sync():
                     effective_date[file_date] = eff
                     kept.append(file_date)
                 else:
-                    print(f"[{proc_key}] {file_date} — next trading day not yet confirmed, deferring")
+                    manifest = _set(manifest, file_date, **{pr_col: 2})
+            candidates = kept
+        else:
+            # candidates here are the file's own trade_date. Need the PREVIOUS
+            # trading date's masters to already be processed.
+            kept = []
+            for d in candidates:
+                prev = get_previous_trading_date(manifest, d)
+                if (
+                    prev is not None
+                    and _flag(manifest, prev, "fo_contracts_pr") == 1
+                    and _flag(manifest, prev, "cm_security_pr") == 1
+                ):
+                    kept.append(d)
+                else:
+                    manifest = _set(manifest, d, **{pr_col: 2})
             candidates = kept
 
         for trade_date in sorted(candidates):
@@ -181,10 +205,8 @@ def run_startup_sync():
             if _all_processed(check_date, check_keys):
                 print(f"[{proc_key}] {trade_date} — already in DB, syncing manifest flag")
                 updates = {col: 1 for col in pr_cols}
-
                 if extra_pr:
                     updates[extra_pr] = 1
-
                 manifest = _set(manifest, trade_date, **updates)
                 continue
             try:

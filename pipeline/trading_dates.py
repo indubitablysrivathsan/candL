@@ -60,3 +60,12 @@ def get_next_confirmed_trading_date(manifest_df, file_date: str):
     if confirmed.empty:
         return None
     return confirmed["trade_date"].min()
+
+def get_previous_trading_date(manifest: pd.DataFrame, trade_date: str) -> str | None:
+    """Latest trade_date strictly before `trade_date` with a real (non
+    market-closed) session — used to check the prior day's masters are done."""
+    earlier = manifest[
+        (manifest["trade_date"] < trade_date) &
+        (manifest["status"] != "market_closed")
+    ].sort_values("trade_date")
+    return None if earlier.empty else earlier.iloc[-1]["trade_date"]
