@@ -64,18 +64,20 @@ def _clean_sentinel(series: pd.Series) -> pd.Series:
 
 def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    df = df[~df["FinInstrmNm"].fillna("").str.contains("NSETEST", case=False, regex=False)].copy()
     df["lot_i"] = pd.to_numeric(df["NewBrdLotQty"], errors="coerce").astype("Int64")
+    df["itype"]   = df["FinInstrmTp"].fillna("STK").str.strip()
 
     # equities have no expiry/strike/option_type — key collapses to
     # (instrument_type, ticker, "", "", "", series)
     df["instrument_key"] = df.apply(lambda r: make_instrument_key(
-        r["FinInstrmTp"], r["TckrSymb"],
+        r["itype"], r["TckrSymb"],
         None, None,
         None, r.get("SctySrs"),
     ), axis=1)
 
     instr = df[[
-        "instrument_key", "FinInstrmTp", "FinInstrmId",
+        "instrument_key", "itype", "FinInstrmId",
         "TckrSymb", "FinInstrmNm", "ISIN", "SctySrs", "lot_i",
     ]].drop_duplicates("instrument_key").copy()
 
