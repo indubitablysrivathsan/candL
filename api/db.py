@@ -878,20 +878,26 @@ def get_futures_cycle_history(
 # ─────────────────────────────────────────────────────────────────────────────
  
 def get_eq_tickers() -> list[str]:
-    """All active EQ tickers."""
+    """All active EQ tickers with market data."""
     conn = get_conn(read_only=True)
     try:
         rows = conn.execute(
             """
-            SELECT DISTINCT ticker
-            FROM instruments
-            WHERE instrument_type = 'STK'
-            AND series = 'EQ'
-            ORDER BY ticker
+            SELECT i.ticker
+            FROM instruments i
+            WHERE i.instrument_type = 'STK'
+              AND i.series = 'EQ'
+              AND EXISTS (
+                  SELECT 1
+                  FROM market_data_daily m
+                  WHERE m.instrument_key = i.instrument_key
+              )
+            ORDER BY i.ticker
             """
         ).fetchall()
     finally:
         conn.close()
+
     return [r[0] for r in rows]
  
  

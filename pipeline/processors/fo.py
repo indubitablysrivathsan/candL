@@ -7,6 +7,20 @@ CM where it's meaningful (EQ, BE, SM, etc.). `series` is therefore always
 written as NULL for F&O instruments and is NOT part of the identity key —
 this must stay consistent with fo_contracts.py, which also passes None for
 series when generating instrument_key.
+
+── Compute/write split ──────────────────────────────────────────────────────
+This module is used two ways:
+
+1. Sequential (unchanged behavior): `process(trade_date)` — does everything
+   in one call, one connection, one transaction. Used by startup_sync.py
+   for live daily updates. Nothing about this path has changed.
+
+2. Parallel backfill: worker processes call `compute(trade_date)` — pure
+   pandas/numpy/in-memory-duckdb work, NO connection to the real DB file,
+   returns a dict of DataFrames/row-lists. A single writer process then
+   calls `write(conn, result, trade_date)` inside its own transaction.
+   `process()` is implemented as `write(conn, compute(trade_date), trade_date)`
+   internally, so both paths run identical logic — no drift between them.
 """
 
 import numpy as np
@@ -138,29 +152,39 @@ def _build_market_data(df: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
-# ── futures analytics ─────────────────────────────────────────────────────────
+# ── futures analytics: compute half (pure — safe in worker process) ──────────
 
-def _process_futures(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_date: str):
-    conn.register("_fut_stage", df)
-    agg = conn.execute("""
-        SELECT
-            FinInstrmTp AS instrument_type,
-            TckrSymb    AS ticker,
-            TRY_CAST(XpryDt AS DATE) AS expiry,
-            AVG(TRY_CAST(ClsPric        AS DOUBLE)) AS close,
-            AVG(TRY_CAST(PrvsClsgPric   AS DOUBLE)) AS prev_close,
-            AVG(TRY_CAST(UndrlygPric    AS DOUBLE)) AS underlying,
-            SUM(TRY_CAST(ChngInOpnIntrst AS DOUBLE)) AS chng_in_oi,
-            SUM(TRY_CAST(TtlTradgVol    AS DOUBLE)) AS volume,
-            SUM(TRY_CAST(OpnIntrst      AS DOUBLE)) AS open_int,
-            MAX(TRY_CAST(NewBrdLotQty   AS DOUBLE)) AS lot_size
-        FROM _fut_stage
-        GROUP BY FinInstrmTp, TckrSymb, TRY_CAST(XpryDt AS DATE)
-    """).df()
-    conn.unregister("_fut_stage")
+def _compute_futures_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
+    """Builds futures_analytics rows. Uses an in-memory DuckDB connection only
+    (for the groupby aggregation) — never touches the real DB file. Safe to
+    call from a ProcessPoolExecutor worker."""
+    if df.empty:
+        return []
+
+    mem = duckdb.connect(":memory:")
+    try:
+        mem.register("_fut_stage", df)
+        agg = mem.execute("""
+            SELECT
+                FinInstrmTp AS instrument_type,
+                TckrSymb    AS ticker,
+                TRY_CAST(XpryDt AS DATE) AS expiry,
+                AVG(TRY_CAST(ClsPric        AS DOUBLE)) AS close,
+                AVG(TRY_CAST(PrvsClsgPric   AS DOUBLE)) AS prev_close,
+                AVG(TRY_CAST(UndrlygPric    AS DOUBLE)) AS underlying,
+                SUM(TRY_CAST(ChngInOpnIntrst AS DOUBLE)) AS chng_in_oi,
+                SUM(TRY_CAST(TtlTradgVol    AS DOUBLE)) AS volume,
+                SUM(TRY_CAST(OpnIntrst      AS DOUBLE)) AS open_int,
+                MAX(TRY_CAST(NewBrdLotQty   AS DOUBLE)) AS lot_size
+            FROM _fut_stage
+            GROUP BY FinInstrmTp, TckrSymb, TRY_CAST(XpryDt AS DATE)
+        """).df()
+        mem.unregister("_fut_stage")
+    finally:
+        mem.close()
 
     if agg.empty:
-        return
+        return []
 
     trade_dt = pd.to_datetime(trade_date)
     rows = []
@@ -186,7 +210,14 @@ def _process_futures(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
             chng_price, chng_price_p, chng_oi_p,
             quadrant, basis, coc, choivr, dte,
         ))
+    return rows
 
+
+# ── futures analytics: write half (must run on the single writer conn) ──────
+
+def _write_futures_rows(conn: duckdb.DuckDBPyConnection, rows: list[tuple]):
+    if not rows:
+        return
     conn.executemany("""
         INSERT INTO futures_analytics VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
@@ -196,7 +227,8 @@ def _process_futures(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
             choi_volume_ratio=excluded.choi_volume_ratio, days_to_expiry=excluded.days_to_expiry
     """, rows)
 
-# ── options analytics ─────────────────────────────────────────────────────────
+
+# ── options analytics: max pain (unchanged from original) ───────────────────
 
 def _max_pain(df: pd.DataFrame) -> dict:
     results = {}
@@ -217,31 +249,43 @@ def _max_pain(df: pd.DataFrame) -> dict:
     return results
 
 
-def _process_options(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_date: str):
-    conn.register("_opt_stage", df)
-    pcr_df = conn.execute("""
-        SELECT
-            FinInstrmTp AS instrument_type, TckrSymb AS ticker,
-            TRY_CAST(XpryDt AS DATE) AS expiry,
-            TRY_CAST(TradDt AS DATE) AS trade_date,
-            SUM(CASE WHEN OptnTp='PE' THEN TRY_CAST(OpnIntrst AS DOUBLE) ELSE 0 END) AS pe_oi,
-            SUM(CASE WHEN OptnTp='CE' THEN TRY_CAST(OpnIntrst AS DOUBLE) ELSE 0 END) AS ce_oi,
-        FROM _opt_stage
-        GROUP BY FinInstrmTp, TckrSymb, TRY_CAST(XpryDt AS DATE), TRY_CAST(TradDt AS DATE)
-    """).df()
+# ── options analytics: compute half (pure — safe in worker process) ─────────
 
-    mp_df = conn.execute("""
-        SELECT FinInstrmTp, TckrSymb, XpryDt,
-               TRY_CAST(StrkPric  AS DOUBLE) AS StrkPric,
-               OptnTp,
-               TRY_CAST(OpnIntrst AS DOUBLE) AS OpnIntrst
-        FROM _opt_stage
-        WHERE StrkPric IS NOT NULL AND OpnIntrst IS NOT NULL
-    """).df()
-    conn.unregister("_opt_stage")
+def _compute_options_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
+    """Builds options_analytics rows. Uses an in-memory DuckDB connection only
+    for the PCR aggregation — never touches the real DB file. Safe to call
+    from a ProcessPoolExecutor worker."""
+    if df.empty:
+        return []
+
+    mem = duckdb.connect(":memory:")
+    try:
+        mem.register("_opt_stage", df)
+        pcr_df = mem.execute("""
+            SELECT
+                FinInstrmTp AS instrument_type, TckrSymb AS ticker,
+                TRY_CAST(XpryDt AS DATE) AS expiry,
+                TRY_CAST(TradDt AS DATE) AS trade_date,
+                SUM(CASE WHEN OptnTp='PE' THEN TRY_CAST(OpnIntrst AS DOUBLE) ELSE 0 END) AS pe_oi,
+                SUM(CASE WHEN OptnTp='CE' THEN TRY_CAST(OpnIntrst AS DOUBLE) ELSE 0 END) AS ce_oi,
+            FROM _opt_stage
+            GROUP BY FinInstrmTp, TckrSymb, TRY_CAST(XpryDt AS DATE), TRY_CAST(TradDt AS DATE)
+        """).df()
+
+        mp_df = mem.execute("""
+            SELECT FinInstrmTp, TckrSymb, XpryDt,
+                   TRY_CAST(StrkPric  AS DOUBLE) AS StrkPric,
+                   OptnTp,
+                   TRY_CAST(OpnIntrst AS DOUBLE) AS OpnIntrst
+            FROM _opt_stage
+            WHERE StrkPric IS NOT NULL AND OpnIntrst IS NOT NULL
+        """).df()
+        mem.unregister("_opt_stage")
+    finally:
+        mem.close()
 
     if pcr_df.empty:
-        return
+        return []
 
     pcr_df["pcr"] = pcr_df.apply(
         lambda r: r["pe_oi"] / r["ce_oi"] if r["ce_oi"] else np.nan, axis=1
@@ -258,7 +302,14 @@ def _process_options(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
             r["pe_oi"], r["ce_oi"], r["pcr"],
             None if (isinstance(mp, float) and np.isnan(mp)) else mp,
         ))
+    return rows
 
+
+# ── options analytics: write half (must run on the single writer conn) ──────
+
+def _write_options_rows(conn: duckdb.DuckDBPyConnection, rows: list[tuple]):
+    if not rows:
+        return
     conn.executemany("""
         INSERT INTO options_analytics VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
@@ -267,13 +318,14 @@ def _process_options(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame, trade_da
     """, rows)
 
 
-# ── entry point ───────────────────────────────────────────────────────────────
+# ── top-level compute (worker-safe: no real DB connection anywhere) ─────────
 
-def process(trade_date: str):
-    if is_processed(trade_date, "STF") and is_processed(trade_date, "STO"):
-        print(f"[fo] {trade_date} already processed, skipping")
-        return
-
+def compute(trade_date: str) -> dict:
+    """
+    Pure compute for one trade_date. No connection to the real DB file —
+    safe to run inside a ProcessPoolExecutor worker. Returns everything
+    `write()` needs to persist the result.
+    """
     raw = _load(trade_date)
     raw.columns = raw.columns.str.strip()
 
@@ -289,23 +341,51 @@ def process(trade_date: str):
     opt_mdd = _build_market_data(opt_raw) if not opt_raw.empty else pd.DataFrame()
     all_mdd = pd.concat([fut_mdd, opt_mdd])
 
+    fut_rows = _compute_futures_rows(fut_raw, trade_date) if not fut_raw.empty else []
+    opt_rows = _compute_options_rows(opt_raw, trade_date) if not opt_raw.empty else []
+
+    return {
+        "trade_date":   trade_date,
+        "instruments":  all_instr,
+        "market_data":  all_mdd,
+        "futures_rows": fut_rows,
+        "options_rows": opt_rows,
+        "fut_row_count": len(fut_raw),
+        "opt_row_count": len(opt_raw),
+    }
+
+
+# ── top-level write (must run on the single writer connection) ──────────────
+
+def write(conn: duckdb.DuckDBPyConnection, result: dict, trade_date: str):
+    """
+    Persists a `compute()` result. Caller owns the transaction (BEGIN/COMMIT/
+    ROLLBACK) — this function just issues the inserts, same as the original
+    inline logic in process().
+    """
+    if not result["instruments"].empty:
+        upsert_instruments(conn, result["instruments"])
+    if not result["market_data"].empty:
+        upsert_market_data(conn, result["market_data"])
+    _write_futures_rows(conn, result["futures_rows"])
+    _write_options_rows(conn, result["options_rows"])
+    print(f"[fo] {trade_date} — {result['fut_row_count']} fut rows, {result['opt_row_count']} opt rows")
+
+
+# ── entry point (sequential — unchanged behavior for startup_sync.py) ───────
+
+def process(trade_date: str):
+    if is_processed(trade_date, "STF") and is_processed(trade_date, "STO"):
+        print(f"[fo] {trade_date} already processed, skipping")
+        return
+
+    result = compute(trade_date)
+
     conn = get_conn()
     try:
         conn.execute("BEGIN")
-
-        if not all_instr.empty:
-            upsert_instruments(conn, all_instr)
-        if not all_mdd.empty:
-            upsert_market_data(conn, all_mdd)
-
-        if not fut_raw.empty:
-            _process_futures(conn, fut_raw, trade_date)
-
-        if not opt_raw.empty:
-            _process_options(conn, opt_raw, trade_date)
-
+        write(conn, result, trade_date)
         conn.execute("COMMIT")
-        print(f"[fo] {trade_date} — {len(fut_raw)} fut rows, {len(opt_raw)} opt rows")
     except Exception:
         conn.execute("ROLLBACK")
         raise

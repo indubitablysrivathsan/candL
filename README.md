@@ -28,20 +28,132 @@ A startup sync runs automatically on launch. It checks which dates are missing, 
 ## Architecture
 
 ```
-candL/
-├── api/                    # FastAPI backend
-│   ├── routes/             # One router per domain
-│   └── db.py               # DuckDB connection layer
-├── pipeline/
-│   ├── downloader.py       # NSE archive fetchers + validators
-│   ├── manifest.py         # Per-date download/process state tracking
-│   ├── processors/         # Raw file → structured DB ingestion
-│   ├── startup_sync.py     # Orchestrates the full sync pipeline
-│   └── trading_dates.py    # Determines which dates need syncing
-├── frontend/               # React + Vite + Recharts
-│   └── src/pages/          # Options, Futures, Stocks, Market, Participants, FII
+candL
+├── api
+│   ├── db.py
+│   ├── main.py
+│   ├── main_parallel.py
+│   ├── schemas.py
+│   └── routes
+│       ├── discovery.py
+│       ├── fii.py
+│       ├── futures.py
+│       ├── market.py
+│       ├── options.py
+│       ├── participant.py
+│       └── stocks.py
+│
+├── frontend
+│   ├── index.html
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── postcss.config.js
+│   ├── public
+│   │   ├── candL.png
+│   │   ├── candL.svg
+│   │   └── readme
+│   │       ├── fii_explorer.webp
+│   │       ├── fii_overview.webp
+│   │       ├── futures_analytics.webp
+│   │       ├── futures_screener.webp
+│   │       ├── market_breadth.webp
+│   │       ├── market_fii.webp
+│   │       ├── market_indices.webp
+│   │       ├── market_indices_candlestick.webp
+│   │       ├── market_topstocks.webp
+│   │       ├── market_volatility.webp
+│   │       ├── options_oi.webp
+│   │       ├── options_oicharts.webp
+│   │       ├── options_snapshot.webp
+│   │       ├── options_timeseries.webp
+│   │       ├── participants_analysis.webp
+│   │       ├── participants_netoi.webp
+│   │       ├── participants_overview.webp
+│   │       ├── stocks_delivery.webp
+│   │       ├── stocks_ohlcv.webp
+│   │       └── stocks_screener.webp
+│   │
+│   ├── src
+│   │   ├── App.jsx
+│   │   ├── api
+│   │   │   └── client.js
+│   │   │
+│   │   ├── components
+│   │   │   ├── charts
+│   │   │   │   ├── CandlestickChart.jsx
+│   │   │   │   ├── DailyChangeChart.jsx
+│   │   │   │   ├── Indicators.jsx
+│   │   │   │   ├── OIChart.jsx
+│   │   │   │   ├── PCRChart.jsx
+│   │   │   │   ├── StrikeBarChart.jsx
+│   │   │   │   ├── TickerAnalysisTable.jsx
+│   │   │   │   └── TimeSeriesChart.jsx
+│   │   │   │
+│   │   │   ├── layout
+│   │   │   │   └── Navbar.jsx
+│   │   │   │
+│   │   │   └── shared
+│   │   │       ├── DateSlider.jsx
+│   │   │       ├── LoadingSpinner.jsx
+│   │   │       └── MetricCard.jsx
+│   │   │
+│   │   ├── index.css
+│   │   ├── main.jsx
+│   │   └── pages
+│   │       ├── FII.jsx
+│   │       ├── Futures.jsx
+│   │       ├── Market.jsx
+│   │       ├── Options.jsx
+│   │       ├── Participants.jsx
+│   │       └── Stocks.jsx
+│   │
+│   ├── tailwind.config.js
+│   └── vite.config.js
+│
+├── pipeline
+│   ├── downloader.py
+│   ├── manifest.py
+│   ├── parallel_backfill.py
+│   ├── parallel_startup_sync.py
+│   ├── processors
+│   │   ├── __init__.py
+│   │   ├── cm_bhav.py
+│   │   ├── cm_securities.py
+│   │   ├── common.py
+│   │   ├── eq_bhav.py
+│   │   ├── fii.py
+│   │   ├── fo.py
+│   │   ├── fo_contracts.py
+│   │   ├── fo_legacy.py
+│   │   ├── fo_volt.py
+│   │   ├── keys.py
+│   │   ├── mkt_act.py
+│   │   └── participant.py
+│   │
+│   ├── startup_sync.py
+│   └── trading_dates.py
+│
+├── tests
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── fixtures
+│   ├── run_pipeline_tests.bat
+│   ├── test_00_conftest_sanity.py
+│   ├── test_api_responses.py
+│   ├── test_atomicity_rollback.py
+│   ├── test_db_integrity.py
+│   ├── test_manifest_transitions.py
+│   ├── test_processor_idempotency.py
+│   └── test_schema_validation.py
+│
+├── data
+│   └── nse.db              # DuckDB
+│
 ├── config.py               # Central configuration (edit before first run)
-└── data/nse.db             # DuckDB — created automatically
+├── requirements.txt
+├── README.md
+├── run.bat
+└── run_parallel.bat
 ```
 
 **Data flow:**
