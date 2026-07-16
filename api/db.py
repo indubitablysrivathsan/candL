@@ -2,19 +2,30 @@
 NSE Platform — DuckDB query layer
 ===================================
 Single DB file: data/nse.db
- 
+
 Tables
 ------
-  fo_data             — raw F&O tick data for all instrument types
-  options_analytics   — computed per (instrument_type, ticker, expiry, trade_date)
-  futures_analytics   — computed per (instrument_type, ticker, expiry, trade_date)
-  eq_bhav             — equity bhavcopy (OHLC + delivery data)
-  cm_bhav             — CM segment bhavcopy (new NSE format)
-  fii_stats           — FII derivatives statistics
-  participant_oi      — participant-wise open interest
-  participant_vol     — participant-wise trading volume
-  fo_volatility       — F&O underlying + futures volatility (EWMA)
-  market_activity     — market activity report (index summary)
+  instruments                 — master identity for all instrument types (F&O + CM)
+  instrument_contract_daily   — daily F&O contract terms (lot_size, margin, price bands), keyed by trade_date
+  security_master_daily       — daily CM security terms (lot_size, par value, issued capital), keyed by trade_date
+  corporate_actions           — splits/bonus/rights/dividends/mergers (sparse, informational only — not queried)
+  market_data_daily           — OHLCV + OI + delivery data for all instrument_keys (F&O and CM)
+  options_analytics           — computed per (instrument_type, ticker, expiry, trade_date)
+  futures_analytics           — computed per (instrument_type, ticker, expiry, trade_date)
+  participant_activity        — participant-wise OI/volume by direction and option_side
+  fii_stats                   — FII derivatives statistics
+  fo_volatility                — F&O underlying + futures volatility (EWMA)
+  market_activity_summary     — market-wide daily totals (traded value, qty, trades, market cap)
+  market_activity_index       — daily OHLC for named indices
+  market_activity_breadth     — advances/declines/unchanged + price-band hits
+
+Notes
+-----
+  lot_size lives on instrument_contract_daily (F&O) / security_master_daily (CM),
+  not on instruments — always join on (instrument_key, trade_date) to fetch it.
+
+  Stock equities are identified via instruments.instrument_type = 'STK'
+  AND instruments.series = 'EQ' (not instrument_type = 'EQ').
 """
 import numpy as np
 import pandas as pd
@@ -510,9 +521,12 @@ def get_options_data(
                 m.volume            AS TtlTradgVol,
                 m.turnover          AS TtlTrfVal,
                 m.trade_count       AS TtlNbOfTxsExctd,
-                i.lot_size          AS NewBrdLotQty
+                c.lot_size          AS NewBrdLotQty
             FROM market_data_daily m
             JOIN instruments i USING (instrument_key)
+            LEFT JOIN instrument_contract_daily c
+                ON c.instrument_key = m.instrument_key
+               AND c.trade_date     = m.trade_date
             WHERE i.instrument_type = ?
               AND i.ticker = ?
               AND i.expiry = CAST(? AS DATE)
@@ -751,6 +765,9 @@ _FUT_JOIN = """
     JOIN market_data_daily m
         ON m.instrument_key = i.instrument_key
        AND m.trade_date     = fa.trade_date
+    LEFT JOIN instrument_contract_daily c
+        ON c.instrument_key = i.instrument_key
+       AND c.trade_date     = fa.trade_date
 """
 
 _FUT_SELECT = """
@@ -758,7 +775,7 @@ _FUT_SELECT = """
     m.close, m.prev_close, m.open_interest AS open_int,
     m.change_in_oi AS chng_in_oi, m.underlying_price AS underlying,
     m.volume,
-    i.lot_size
+    c.lot_size
 """
 
 
@@ -910,7 +927,8 @@ def get_eq_ohlc(
                 m.delivery_pct
             FROM market_data_daily m
             JOIN instruments i USING (instrument_key)
-            WHERE i.instrument_type = 'EQ'
+            WHERE i.instrument_type = 'STK'
+              AND i.series = 'EQ'
               AND i.ticker = ?
               AND m.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             ORDER BY m.trade_date
@@ -957,7 +975,8 @@ def get_eq_snapshot(trade_date: str, limit: int = 200) -> pd.DataFrame:
                 ) AS pct_change
             FROM market_data_daily m
             JOIN instruments i USING (instrument_key)
-            WHERE i.instrument_type = 'EQ'
+            WHERE i.instrument_type = 'STK'
+              AND i.series = 'EQ'
               AND m.trade_date = CAST(? AS DATE)
               AND m.close IS NOT NULL
               AND m.prev_close IS NOT NULL
@@ -1000,7 +1019,8 @@ def get_eq_delivery_leaders(trade_date: str, top_n: int = 50) -> pd.DataFrame:
                 m.delivery_pct
             FROM market_data_daily m
             JOIN instruments i USING (instrument_key)
-            WHERE i.instrument_type = 'EQ'
+            WHERE i.instrument_type = 'STK'
+              AND i.series = 'EQ'
               AND m.trade_date = CAST(? AS DATE)
               AND m.delivery_pct IS NOT NULL
             ORDER BY m.delivery_pct DESC NULLS LAST
@@ -1022,7 +1042,8 @@ def get_eq_available_dates() -> list[str]:
             SELECT DISTINCT CAST(m.trade_date AS VARCHAR) AS td
             FROM market_data_daily m
             JOIN instruments i USING (instrument_key)
-            WHERE i.instrument_type = 'EQ'
+            WHERE i.instrument_type = 'STK'
+              AND i.series = 'EQ'
             ORDER BY td
             """
         ).fetchall()
@@ -1700,7 +1721,7 @@ def get_top_stocks(
             JOIN instruments i ON i.instrument_key = mdd.instrument_key
             WHERE mdd.trade_date = CAST(? AS DATE)
               AND i.series = ?
-              AND i.instrument_type = 'EQ'
+              AND i.instrument_type = 'STK'
             ORDER BY mdd.turnover DESC NULLS LAST
             LIMIT ?
         """, [trade_date, series, limit]).df()
@@ -1738,7 +1759,7 @@ def get_top_gainers_losers(
             JOIN instruments i ON i.instrument_key = mdd.instrument_key
             WHERE mdd.trade_date = CAST(? AS DATE)
               AND i.series = ?
-              AND i.instrument_type = 'EQ'
+              AND i.instrument_type = 'STK'
               AND mdd.turnover >= ?
               AND mdd.prev_close > 0
         """, [trade_date, series, min_turnover]).df()
@@ -1789,7 +1810,7 @@ def get_security_daily(
             JOIN instruments i ON i.instrument_key = mdd.instrument_key
             WHERE i.ticker = ?
               AND i.series = ?
-              AND i.instrument_type = 'EQ'
+              AND i.instrument_type = 'STK'
               AND mdd.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             ORDER BY mdd.trade_date
         """, [symbol.upper(), series.upper(), start_date, end_date]).df()
@@ -1836,7 +1857,7 @@ def get_security_snapshot(
             JOIN instruments i ON i.instrument_key = mdd.instrument_key
             WHERE mdd.trade_date = CAST(? AS DATE)
               AND i.series = ?
-              AND i.instrument_type = 'EQ'
+              AND i.instrument_type = 'STK'
               {turnover_clause}
             ORDER BY mdd.turnover DESC NULLS LAST
         """, params).df()
