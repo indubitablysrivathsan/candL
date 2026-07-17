@@ -682,49 +682,42 @@ def get_chart_scale(
     col = METRIC_COL.get(metric)
     if col is None:
         return {"y_min": 0.0, "y_max": 1.0, "x_min": 0.0, "x_max": 0.0, "strike_gap": 50.0}
- 
+
     instr = _instr(asset_type)
     conn = get_conn(read_only=True)
     try:
-        # ── Y scale: min/max values within the requested date range only ──
-        # (so the y-axis is still scaled to what the user is actually viewing)
-        y_row = conn.execute(
+        # Only consider strikes/values that actually had non-null, non-zero
+        # activity within the requested date range — this drops strikes that
+        # never traded instead of pulling every strike ever listed.
+        row = conn.execute(
             f"""
-            SELECT MIN({col}), MAX({col})
+            SELECT MIN(i.strike), MAX(i.strike), MIN({col}), MAX({col})
             FROM market_data_daily m
             JOIN instruments i USING (instrument_key)
             WHERE i.instrument_type = ?
               AND i.ticker = ?
               AND i.expiry = CAST(? AS DATE)
               AND m.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+              AND {col} IS NOT NULL
               AND {col} != 0
             """,
             [instr, ticker, expiry, start_date, end_date],
         ).fetchone()
- 
-        # ── X scale: ALL strikes ever recorded for this ticker+expiry ────
-        # Deliberately ignores start_date/end_date so the strike window is
-        # identical no matter which date slice the user is viewing.
-        x_row = conn.execute(
-            """
-            SELECT MIN(i.strike), MAX(i.strike)
-            FROM instruments i
-            WHERE i.instrument_type = ?
-              AND i.ticker = ?
-              AND i.expiry = CAST(? AS DATE)
-            """,
-            [instr, ticker, expiry],
-        ).fetchone()
- 
-        # ── Strike gap: most common gap across ALL dates ──────────────────
+
+        # Strike gap computed over the SAME filtered set of strikes, so a
+        # strike with no real activity in range can't skew the spacing.
         gap_row = conn.execute(
-            """
+            f"""
             WITH strikes AS (
                 SELECT DISTINCT i.strike AS s
-                FROM instruments i
+                FROM market_data_daily m
+                JOIN instruments i USING (instrument_key)
                 WHERE i.instrument_type = ?
                   AND i.ticker = ?
                   AND i.expiry = CAST(? AS DATE)
+                  AND m.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                  AND {col} IS NOT NULL
+                  AND {col} != 0
                 ORDER BY s
             ),
             diffs AS (
@@ -733,21 +726,34 @@ def get_chart_scale(
             SELECT gap FROM diffs WHERE gap > 0
             GROUP BY gap ORDER BY COUNT(*) DESC LIMIT 1
             """,
-            [instr, ticker, expiry],
+            [instr, ticker, expiry, start_date, end_date],
         ).fetchone()
     finally:
         conn.close()
- 
-    y_raw_min  = float(y_row[0]) if y_row and y_row[0] is not None else 0.0
-    y_raw_max  = float(y_row[1]) if y_row and y_row[1] is not None else 1.0
-    x_min      = float(x_row[0]) if x_row and x_row[0] is not None else 0.0
-    x_max      = float(x_row[1]) if x_row and x_row[1] is not None else 0.0
+
+    x_min = float(row[0]) if row and row[0] is not None else 0.0
+    x_max = float(row[1]) if row and row[1] is not None else 0.0
+    y_raw_min = float(row[2]) if row and row[2] is not None else 0.0
+    y_raw_max = float(row[3]) if row and row[3] is not None else 1.0
     strike_gap = float(gap_row[0]) if gap_row and gap_row[0] else 50.0
- 
-    y_pad = max(abs(y_raw_min), abs(y_raw_max)) * 0.08
+
+    # Padding proportional to the ACTUAL range of the data, not to the
+    # larger of |min| / |max| — that old formula blew up the padding
+    # whenever the series sat mostly on one side of zero (e.g. OI, which
+    # is always >= 0), making the chart look squashed.
+    y_range = y_raw_max - y_raw_min
+    y_pad = y_range * 0.08 if y_range > 0 else max(abs(y_raw_max), 1.0) * 0.08
+
+    y_min = y_raw_min - y_pad
+    y_max = y_raw_max + y_pad
+
+    # OI and volume are never negative — don't let padding push y_min below 0.
+    if metric in ("oi", "vol"):
+        y_min = max(0.0, y_min)
+
     return {
-        "y_min":      y_raw_min - y_pad,
-        "y_max":      y_raw_max + y_pad,
+        "y_min":      y_min,
+        "y_max":      y_max,
         "x_min":      x_min,
         "x_max":      x_max,
         "strike_gap": strike_gap,

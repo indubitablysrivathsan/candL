@@ -101,6 +101,7 @@ def validate_fo_volt(content: bytes, expected_date: str) -> bool:
 
     return actual == expected_date
 
+
 def validate_or_market_closed(
     valid: bool,
     trade_date: str
@@ -110,6 +111,28 @@ def validate_or_market_closed(
         return "complete"
 
     return "market_closed"
+
+
+# ── Weekend staleness guard (fo_contracts / cm_security) ──────────────────────
+# These two endpoints don't 404 on non-trading days — they silently re-serve
+# the last trading day's file with a 200. On weekdays that's rarely an issue,
+# but on Sat/Sun there is no fresh file at all, so a "successful" download is
+# actually stale data from the preceding Friday. Guard against this by
+# confirming the requested trade_date literally appears in the file content
+# before accepting it as complete; only applied on weekends to avoid false
+# negatives on legitimate trading days.
+
+def _is_weekend(trade_date: str) -> bool:
+    return datetime.strptime(trade_date, "%Y-%m-%d").weekday() >= 5
+
+
+def _content_matches_date(content: bytes, trade_date: str) -> bool:
+    dt = datetime.strptime(trade_date, "%Y-%m-%d")
+    text = content.decode("utf-8", errors="ignore")
+    return any(
+        dt.strftime(fmt) in text
+        for fmt in ("%d-%m-%Y", "%d%m%Y", "%Y%m%d", "%Y-%m-%d")
+    )
 
 
 # ── URL builders ──────────────────────────────────────────────────────────────
@@ -301,18 +324,38 @@ def download_mkt_act(trade_date: str) -> str:
 
 def download_fo_contracts(trade_date: str) -> str:
     content, status = _fetch(build_fo_contract_url(trade_date), trade_date)
-    if status == "complete":
-        csv_bytes = _extract_csv_from_gz(content)
-        _output_path(FO_CONTRACT_ROOT, trade_date).write_bytes(csv_bytes)
-    return status
+    if status != "complete":
+        return status
+
+    csv_bytes = _extract_csv_from_gz(content)
+
+    if _is_weekend(trade_date) and not _content_matches_date(csv_bytes, trade_date):
+        print(
+            f"[fo_contracts] stale weekend file detected "
+            f"(requested={trade_date})"
+        )
+        return "market_closed"
+
+    _output_path(FO_CONTRACT_ROOT, trade_date).write_bytes(csv_bytes)
+    return "complete"
 
 
 def download_cm_security(trade_date: str) -> str:
     content, status = _fetch(build_cm_security_url(trade_date), trade_date)
-    if status == "complete":
-        csv_bytes = _extract_csv_from_gz(content)
-        _output_path(CM_SECURITY_ROOT, trade_date).write_bytes(csv_bytes)
-    return status
+    if status != "complete":
+        return status
+
+    csv_bytes = _extract_csv_from_gz(content)
+
+    if _is_weekend(trade_date) and not _content_matches_date(csv_bytes, trade_date):
+        print(
+            f"[cm_security] stale weekend file detected "
+            f"(requested={trade_date})"
+        )
+        return "market_closed"
+
+    _output_path(CM_SECURITY_ROOT, trade_date).write_bytes(csv_bytes)
+    return "complete"
 
 
 # ── coordinator ───────────────────────────────────────────────────────────────

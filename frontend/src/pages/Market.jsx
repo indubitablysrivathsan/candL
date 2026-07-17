@@ -430,6 +430,9 @@ function IndexHistory({ marketDates }) {
   const [endDate, setEndDate]       = useState('');
   const [data, setData]             = useState([]);
   const [loading, setLoading]       = useState(false);
+  const [showCandles,  setShowCandles]  = useState(true);
+  const [showAvg,      setShowAvg]      = useState(false);
+  const [indicators,   setIndicators]   = useState([]); // [{id, type, params, color}]
 
   // Load index names once
   useEffect(() => {
@@ -499,6 +502,10 @@ function IndexHistory({ marketDates }) {
             showCandles={true}
             showAvg={false}
             formatCurrency={formatCurrency}
+            onShowCandlesChange={setShowCandles}
+            onShowAvgChange={setShowAvg}
+            indicators={indicators}
+            onIndicatorsChange={setIndicators}
           />
 
           {/* ── CHANGED: DailyChangeChart asset for pct change ── */}
