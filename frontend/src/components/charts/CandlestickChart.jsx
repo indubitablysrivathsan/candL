@@ -641,15 +641,10 @@ export default function CandlestickChart({
     const chart = chartRef.current;
     if (!chart || !data?.length) return;
 
-    // Build lookup map for tooltip enrichment
     const map = {};
     data.forEach((row) => { map[row.trade_date] = row; });
     dataMapRef.current = map;
 
-    // lightweight-charts supports per-bar color/borderColor/wickColor.
-    // Color  = close vs prev_close: green if up, red if down
-    // Fill   = close vs open:       hollow (transparent) if close>=open, filled if close<open
-    // This gives all 4 combinations: hollow-green, filled-green, hollow-red, filled-red
     const ohlc = data
       .filter((r) => r.open != null && r.high != null && r.low != null && r.close != null)
       .map((r) => {
@@ -657,14 +652,10 @@ export default function CandlestickChart({
         const accentColor = sentiment ? T.green : T.red;
         const isHollow    = r.close >= r.open;
         return {
-          time:        r.trade_date,
-          open:        r.open,
-          high:        r.high,
-          low:         r.low,
-          close:       r.close,
-          color:       isHollow ? 'transparent' : accentColor,
+          time: r.trade_date, open: r.open, high: r.high, low: r.low, close: r.close,
+          color: isHollow ? 'transparent' : accentColor,
           borderColor: accentColor,
-          wickColor:   accentColor,
+          wickColor: accentColor,
         };
       })
       .sort((a, b) => (a.time < b.time ? -1 : 1));
@@ -674,50 +665,34 @@ export default function CandlestickChart({
       .map((r) => ({ time: r.trade_date, value: r.avg_price }))
       .sort((a, b) => (a.time < b.time ? -1 : 1));
 
-    // ── Candle series (always pane 0) ───────────────────────────────
-    if (candleRef.current) {
-      chart.removeSeries(candleRef.current);
-      candleRef.current = null;
-    }
-
-    if (showCandles && ohlc.length) {
-      const series = chart.addSeries(CandlestickSeries, {
-        // Per-bar color/borderColor/wickColor is set on each data point above.
-        // These defaults are fallbacks only (should never show).
-        upColor:          'transparent',
-        downColor:        T.red,
-        borderUpColor:    T.green,
-        borderDownColor:  T.red,
-        wickUpColor:      T.green,
-        wickDownColor:    T.red,
-        priceFormat: {
-          type:      'price',
-          precision: 2,
-          minMove:   0.01,
-        },
-      }, 0);
-      series.setData(ohlc);
-      candleRef.current = series;
-    }
-
-    // ── Avg price line (pane 0, overlaid on candles) ────────────────
-    if (avgRef.current) {
-      chart.removeSeries(avgRef.current);
-      avgRef.current = null;
-    }
-
-    if (showAvg && lineData.length) {
-      const series = chart.addSeries(LineSeries, {
-        color:           T.amber,
-        lineWidth:       1,
-        lineStyle:       LineStyle.Dashed,
-        crosshairMarkerVisible: true,
-        crosshairMarkerRadius:  3,
+    // Create candle series ONCE, keep it alive, just update data + visibility
+    if (!candleRef.current) {
+      candleRef.current = chart.addSeries(CandlestickSeries, {
+        upColor: 'transparent',
+        downColor: T.red,
+        borderUpColor: T.green,
+        borderDownColor: T.red,
+        wickUpColor: T.green,
+        wickDownColor: T.red,
         priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
       }, 0);
-      series.setData(lineData);
-      avgRef.current = series;
     }
+    candleRef.current.setData(ohlc);
+    candleRef.current.applyOptions({ visible: showCandles });
+
+    // Same for avg line
+    if (!avgRef.current) {
+      avgRef.current = chart.addSeries(LineSeries, {
+        color: T.amber,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        crosshairMarkerVisible: true,
+        crosshairMarkerRadius: 3,
+        priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      }, 0);
+    }
+    avgRef.current.setData(lineData);
+    avgRef.current.applyOptions({ visible: showAvg });
 
     chart.timeScale().fitContent();
   }, [data, showCandles, showAvg]);

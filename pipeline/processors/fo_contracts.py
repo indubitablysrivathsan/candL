@@ -110,6 +110,7 @@ def _drop_invalid_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     - Rows with negative strike prices.
     """
     df = df.copy()
+    df = df[~df["FinInstrmNm"].fillna("").str.contains("NSETEST", case=False, regex=False)].copy()
 
     df["TckrSymb"] = df["TckrSymb"].astype("string").str.strip()
     df["FinInstrmNm"] = df["FinInstrmNm"].astype("string").str.strip()
