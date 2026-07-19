@@ -771,7 +771,7 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <MetricStrip items={[
-        { title: 'Underlying',    value: formatCurrency(snapshotData?.underlying, 2),                                    accent: T.blue  },
+        { title: 'Underlying',    value: formatCurrency(snapshotData?.underlying_price, 2),                                    accent: T.blue  },
         { title: 'Max Pain',      value: formatCurrency(snapshotData?.max_pain, 2),                                      accent: T.purple   },
         { title: 'PCR',           value: snapshotData?.pcr != null ? Number(snapshotData.pcr).toFixed(3) : '--',         accent: snapshotData?.pcr >= 1 ? T.green : T.red },
         { title: 'CE | PE Total', value: `${formatNumber(totals.ceTotal)} | ${formatNumber(totals.peTotal)}`,            accent: T.textHi },
@@ -1117,7 +1117,7 @@ export default function Options({ assetType = 'stock_options' }) {
                   const headers = ['Ticker', 'Underlying', 'Max Pain', 'PCR', 'CE', 'PE'];
                   const csv = [
                     headers.join(','),
-                    ...snapshotRows.map((r) => [r.ticker, r.underlying, r.max_pain, r.pcr, r.ce, r.pe].join(',')),
+                    ...snapshotRows.map((r) => [r.ticker, r.underlying_price, r.max_pain, r.pcr, r.ce, r.pe].join(',')),
                   ].join('\n');
                   downloadCsv(csv, `${selectedExpiries[0]}_${startDate}_daily_expiry_snapshot.csv`);
                 }}
@@ -1142,7 +1142,7 @@ export default function Options({ assetType = 'stock_options' }) {
                     {snapshotRows.map((row) => (
                       <TerminalTr key={row.ticker}>
                         <TerminalTd accent={T.amber} bold>{row.ticker}</TerminalTd>
-                        <TerminalTd accent={T.textHi}>{formatCurrency(row.underlying, 2)}</TerminalTd>
+                        <TerminalTd accent={T.textHi}>{formatCurrency(row.underlying_price, 2)}</TerminalTd>
                         <TerminalTd accent={T.pink}>{formatCurrency(row.max_pain, 2)}</TerminalTd>
                         <TerminalTd accent={row.pcr >= 1 ? T.green : T.red}>
                           {row.pcr != null ? Number(row.pcr).toFixed(3) : '--'}

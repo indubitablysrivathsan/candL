@@ -548,20 +548,44 @@ def get_options_analytics(
     end_date: str | None = None,
 ) -> pd.DataFrame:
     instr = _instr(asset_type)
-    where = "WHERE instrument_type = ? AND ticker = ? AND expiry = CAST(? AS DATE)"
+
+    where = """
+        WHERE a.instrument_type = ?
+          AND a.ticker = ?
+          AND a.expiry = CAST(? AS DATE)
+    """
     params = [instr, ticker, expiry]
 
     if start_date:
-        where += " AND trade_date >= CAST(? AS DATE)"
+        where += " AND a.trade_date >= CAST(? AS DATE)"
         params.append(start_date)
+
     if end_date:
-        where += " AND trade_date <= CAST(? AS DATE)"
+        where += " AND a.trade_date <= CAST(? AS DATE)"
         params.append(end_date)
 
     conn = get_conn(read_only=True)
     try:
         df = conn.execute(
-            f"SELECT * FROM options_analytics {where} ORDER BY trade_date",
+            f"""
+            SELECT
+                a.*,
+                (
+                    SELECT m.underlying_price
+                    FROM market_data_daily m
+                    JOIN instruments i
+                      ON i.instrument_key = m.instrument_key
+                    WHERE i.instrument_type = a.instrument_type
+                      AND i.ticker = a.ticker
+                      AND i.expiry = a.expiry
+                      AND m.trade_date = a.trade_date
+                      AND m.underlying_price IS NOT NULL
+                    LIMIT 1
+                ) AS underlying_price
+            FROM options_analytics a
+            {where}
+            ORDER BY a.trade_date
+            """,
             params,
         ).df()
     finally:
@@ -569,6 +593,7 @@ def get_options_analytics(
 
     if not df.empty:
         df["trade_date"] = pd.to_datetime(df["trade_date"])
+
     return df
 
 
@@ -650,13 +675,40 @@ def get_daily_expiry_snapshot(
     try:
         df = conn.execute(
             """
-            SELECT * FROM options_analytics
-            WHERE instrument_type = ?
-              AND expiry = CAST(? AS DATE)
-              AND trade_date = CAST(? AS DATE)
-            ORDER BY pcr DESC NULLS LAST
+                SELECT
+                    a.*,
+                    u.underlying_price
+                FROM options_analytics a
+                LEFT JOIN (
+                    SELECT
+                        i.instrument_type,
+                        i.ticker,
+                        i.expiry,
+                        m.trade_date,
+                        ANY_VALUE(m.underlying_price) AS underlying_price
+                    FROM market_data_daily m
+                    JOIN instruments i
+                    ON i.instrument_key = m.instrument_key
+                    WHERE i.instrument_type = ?
+                    AND i.expiry = CAST(? AS DATE)
+                    AND m.trade_date = CAST(? AS DATE)
+                    AND m.underlying_price IS NOT NULL
+                    GROUP BY
+                        i.instrument_type,
+                        i.ticker,
+                        i.expiry,
+                        m.trade_date
+                ) u
+                ON u.instrument_type = a.instrument_type
+                AND u.ticker          = a.ticker
+                AND u.expiry          = a.expiry
+                AND u.trade_date      = a.trade_date
+                WHERE a.instrument_type = ?
+                AND a.expiry = CAST(? AS DATE)
+                AND a.trade_date = CAST(? AS DATE)
+                ORDER BY a.pcr DESC NULLS LAST
             """,
-            [instr, expiry, trade_date],
+            [instr, expiry, trade_date, instr, expiry, trade_date],
         ).df()
     finally:
         conn.close()

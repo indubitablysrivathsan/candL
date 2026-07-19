@@ -163,7 +163,7 @@ export default function TimeSeriesChart({ analyticsData = [] }) {
       renderTooltip(
         tooltipEl,
         timeKey,
-        underlying ?? row?.underlying,
+        underlying ?? row?.underlying_price,
         maxPain    ?? row?.max_pain,
       );
 
@@ -223,8 +223,8 @@ export default function TimeSeriesChart({ analyticsData = [] }) {
 
     underlyingSeries.setData(
       sorted
-        .filter((r) => r.underlying != null)
-        .map((r) => ({ time: r.trade_date, value: r.underlying }))
+        .filter((r) => r.underlying_price != null)
+        .map((r) => ({ time: r.trade_date, value: r.underlying_price }))
     );
     underlyingRef.current = underlyingSeries;
 
@@ -280,7 +280,7 @@ export default function TimeSeriesChart({ analyticsData = [] }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           {[
             ['Underlying', T.green, false],
-            ['Max Pain',   T.pink,  true ],
+            ['Max Pain',   T.pink,  false ],
           ].map(([name, color, dashed]) => (
             <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <svg width="20" height="10">
