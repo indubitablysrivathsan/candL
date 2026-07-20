@@ -22,6 +22,15 @@ Two format differences drive most of this file's logic:
    otherwise a future and its "same" contract from the new-format pipeline
    would hash to different instrument_keys.
 
+Date fields (EXPIRY_DT, TIMESTAMP) ship as e.g. "26-Jun-2024" / "20-JUN-2024"
+— a 4-digit year, so they must be parsed with "%d-%b-%Y". Do NOT use "%y"
+(2-digit year) here — it silently fails to match, coercing every date to
+NaT/None, which then propagates into NOT NULL columns (trade_date, expiry)
+and NaN-cast errors (dte) downstream. Similarly, duckdb's TRY_CAST(... AS
+DATE) does NOT understand this format and silently returns NULL instead of
+raising — use strptime(col, '%d-%b-%Y') in SQL instead of TRY_CAST for these
+columns.
+
 ── Fields NOT present in the legacy format (always written NULL) ────────────
 instrument_id (FinInstrmId), isin, series (already NULL for F&O anyway),
 last, prev_close, underlying_price, trade_count, delivery_qty, delivery_pct,
@@ -36,7 +45,7 @@ total, so it's scaled by 1e5 to line up with TtlTrfVal in the new format.
 ── Compute/write split ──────────────────────────────────────────────────────
 Same shape as fo_bhavcopy.py: `process(trade_date)` does everything in one
 transaction (startup_sync path); `compute(trade_date)` is pure pandas/numpy/
-in-memory-duckdb work safe for a ProcessPoolExecutor worker, and `write(conn,
+in-memory-duckdb work safe for a ProcessPoolExecutor worker; and `write(conn,
 result, trade_date)` persists it on the single writer connection.
 `process()` is `write(conn, compute(trade_date), trade_date)` internally —
 no drift between the sequential and parallel paths.
@@ -56,7 +65,7 @@ from config import FO_LEGACY_RAW_ROOT, NSE_DB_PATH
 from api.db import get_conn, is_processed
 from .keys import make_instrument_key
 from .common import upsert_instruments, upsert_market_data
-from .fo_bhavcopy import (
+from .fo import (
     _QUADRANT,
     _write_futures_rows,
     _write_options_rows,
@@ -74,6 +83,10 @@ _LEGACY_TYPE_MAP = {
     "OPTIDX": "IDO",
     "OPTSTK": "STO",
 }
+
+# legacy EXPIRY_DT / TIMESTAMP format: e.g. "26-Jun-2024" / "20-JUN-2024" —
+# 4-digit year. NOT "%d-%b-%y" (2-digit) — see module docstring.
+_LEGACY_DATE_FMT = "%d-%b-%Y"
 
 
 def _raw_path(trade_date: str) -> Path:
@@ -140,7 +153,7 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
     df = _normalize_types(df)
 
     df["expiry_d"] = pd.to_datetime(
-        df["EXPIRY_DT"], format="%d-%b-%y", errors="coerce"
+        df["EXPIRY_DT"], format=_LEGACY_DATE_FMT, errors="coerce"
     ).dt.date
     df["strike_f"] = df["STRIKE_PR"]
 
@@ -175,7 +188,7 @@ def _build_instruments(df: pd.DataFrame) -> pd.DataFrame:
 
 def _build_market_data(df: pd.DataFrame) -> pd.DataFrame:
     d = pd.DataFrame()
-    d["trade_date"]       = pd.to_datetime(df["TIMESTAMP"], format="%d-%b-%y", errors="coerce").dt.date
+    d["trade_date"]       = pd.to_datetime(df["TIMESTAMP"], format=_LEGACY_DATE_FMT, errors="coerce").dt.date
     d["instrument_key"]   = df["instrument_key"]
     d["open"]             = pd.to_numeric(df["OPEN"],  errors="coerce")
     d["high"]             = pd.to_numeric(df["HIGH"],  errors="coerce")
@@ -208,17 +221,17 @@ def _compute_futures_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
     mem = duckdb.connect(":memory:")
     try:
         mem.register("_fut_stage", df)
-        agg = mem.execute("""
+        agg = mem.execute(f"""
             SELECT
                 instrument_type,
                 SYMBOL AS ticker,
-                TRY_CAST(EXPIRY_DT AS DATE) AS expiry_raw,
+                strptime(EXPIRY_DT, '{_LEGACY_DATE_FMT}') AS expiry_raw,
                 expiry_d,
                 AVG(TRY_CAST(CLOSE AS DOUBLE)) AS close,
                 SUM(TRY_CAST(CHG_IN_OI AS DOUBLE)) AS chng_in_oi,
                 SUM(TRY_CAST(OPEN_INT  AS DOUBLE)) AS open_int
             FROM _fut_stage
-            GROUP BY instrument_type, SYMBOL, TRY_CAST(EXPIRY_DT AS DATE), expiry_d
+            GROUP BY instrument_type, SYMBOL, strptime(EXPIRY_DT, '{_LEGACY_DATE_FMT}'), expiry_d
         """).df()
         mem.unregister("_fut_stage")
     finally:
@@ -233,7 +246,8 @@ def _compute_futures_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
         close = r["close"]
         chng_in_oi, open_int = r["chng_in_oi"], r["open_int"]
         expiry = r["expiry_d"]
-        dte = max((pd.to_datetime(expiry) - trade_dt).days, 0)
+        expiry_ts = pd.to_datetime(expiry)
+        dte = max((expiry_ts - trade_dt).days, 0) if pd.notna(expiry_ts) else None
 
         # legacy has no prev_close column, so chng_in_price / chng_price_per
         # can't be derived either — both stay NULL, same as basis/coc
@@ -282,15 +296,17 @@ def _compute_options_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
     mem = duckdb.connect(":memory:")
     try:
         mem.register("_opt_stage", df)
-        pcr_df = mem.execute("""
+        pcr_df = mem.execute(f"""
             SELECT
                 instrument_type, SYMBOL AS ticker,
-                TRY_CAST(EXPIRY_DT AS DATE) AS expiry,
-                TRY_CAST(TIMESTAMP AS DATE) AS trade_date,
+                strptime(EXPIRY_DT, '{_LEGACY_DATE_FMT}')::DATE AS expiry,
+                strptime(TIMESTAMP, '{_LEGACY_DATE_FMT}')::DATE AS trade_date,
                 SUM(CASE WHEN OPTION_TYP='PE' THEN TRY_CAST(OPEN_INT AS DOUBLE) ELSE 0 END) AS pe_oi,
                 SUM(CASE WHEN OPTION_TYP='CE' THEN TRY_CAST(OPEN_INT AS DOUBLE) ELSE 0 END) AS ce_oi,
             FROM _opt_stage
-            GROUP BY instrument_type, SYMBOL, TRY_CAST(EXPIRY_DT AS DATE), TRY_CAST(TIMESTAMP AS DATE)
+            GROUP BY instrument_type, SYMBOL,
+                     strptime(EXPIRY_DT, '{_LEGACY_DATE_FMT}'),
+                     strptime(TIMESTAMP, '{_LEGACY_DATE_FMT}')
         """).df()
 
         mp_df = mem.execute("""

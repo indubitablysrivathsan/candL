@@ -36,6 +36,10 @@ from typing import Optional
 import pandas as pd
 import duckdb
 
+LEGACY_CUTOFF = "2024-06-24"
+
+def _is_legacy(trade_date: str) -> bool:
+    return trade_date < LEGACY_CUTOFF
 
 # ── compute functions: one per processor, pure — safe in worker processes ──
 # Each mirrors the real process() body with all conn.execute/upsert calls
@@ -95,27 +99,36 @@ def _compute_cm_security(file_date: str, trade_date: str) -> dict:
 
 
 def _compute_fo(trade_date: str) -> dict:
-    # fo.py already ships a proper compute()/write() split — reuse it as-is
-    # instead of re-deriving it, so there's no chance of drift between the
-    # sequential path (process()) and this parallel path.
-    from pipeline.processors import fo as m
     from api.db import is_processed
 
     if is_processed(trade_date, "STF") and is_processed(trade_date, "STO"):
         return {"skipped": True}
 
+    if _is_legacy(trade_date):
+        from pipeline.processors import fo_legacy as m
+    else:
+        from pipeline.processors import fo as m
+
     result = m.compute(trade_date)
     result["skipped"] = False
+    result["_legacy"] = _is_legacy(trade_date)
     return result
 
 
 def _compute_cm_bhav(trade_date: str) -> dict:
-    from pipeline.processors import cm_bhav as m
-    from pipeline.processors.keys import make_instrument_key
     from api.db import is_processed
 
     if is_processed(trade_date, "cm_bhav"):
         return {"skipped": True}
+
+    if _is_legacy(trade_date):
+        return _compute_cm_bhav_legacy(trade_date)
+    return _compute_cm_bhav_new(trade_date)
+
+
+def _compute_cm_bhav_new(trade_date: str) -> dict:
+    from pipeline.processors import cm_bhav as m
+    from pipeline.processors.keys import make_instrument_key
 
     p = m._raw_path(trade_date)
     if not p.exists():
@@ -165,6 +178,67 @@ def _compute_cm_bhav(trade_date: str) -> dict:
         "change_in_oi":     pd.to_numeric(df["ChngInOpnIntrst"], errors="coerce").astype("Int64"),
         "settlement_price": pd.to_numeric(df["SttlmPric"],      errors="coerce"),
         "underlying_price": pd.to_numeric(df["UndrlygPric"],    errors="coerce"),
+        "delivery_qty":     None,
+        "delivery_pct":     None,
+    })
+
+    return {"skipped": False, "instruments": instr, "market_data": mdd, "row_count": len(df)}
+
+
+def _compute_cm_bhav_legacy(trade_date: str) -> dict:
+    """Mirrors cm_bhav_legacy.process()'s parsing exactly, minus the DB
+    connection/transaction — pure, safe for a worker process."""
+    from pipeline.processors import cm_bhav_legacy as m
+    from pipeline.processors.keys import make_instrument_key
+
+    p = m._raw_path(trade_date)
+    if not p.exists():
+        raise FileNotFoundError(p)
+
+    df = pd.read_csv(p, low_memory=False)
+    df.columns = df.columns.str.strip()
+
+    trade_dt = pd.to_datetime(df["TIMESTAMP"].iloc[0], format="%d-%b-%Y", errors="coerce").date()
+
+    df["series_"] = df["SERIES"].fillna("").str.strip()
+    df["itype"] = "STK"
+
+    df["instrument_key"] = df.apply(lambda r: make_instrument_key(
+        r["itype"], r["SYMBOL"].strip(), None, None, None, r["series_"]
+    ), axis=1)
+
+    instr = pd.DataFrame({
+        "instrument_key":   df["instrument_key"],
+        "exchange":         "NSE",
+        "segment":          "CM",
+        "instrument_id":    pd.array([pd.NA] * len(df), dtype="Int64"),
+        "instrument_type":  df["itype"],
+        "ticker":           df["SYMBOL"].str.strip(),
+        "instrument_name":  None,
+        "isin":             df["ISIN"].str.strip(),
+        "series":           df["series_"],
+        "expiry":           None,
+        "strike":           None,
+        "option_type":      None,
+    }).drop_duplicates("instrument_key")
+
+    mdd = pd.DataFrame({
+        "trade_date":       trade_dt,
+        "instrument_key":   df["instrument_key"],
+        "open":             pd.to_numeric(df["OPEN"],       errors="coerce"),
+        "high":             pd.to_numeric(df["HIGH"],       errors="coerce"),
+        "low":              pd.to_numeric(df["LOW"],        errors="coerce"),
+        "close":            pd.to_numeric(df["CLOSE"],      errors="coerce"),
+        "last":             pd.to_numeric(df["LAST"],       errors="coerce"),
+        "prev_close":       pd.to_numeric(df["PREVCLOSE"],  errors="coerce"),
+        "avg_price":        None,
+        "volume":           pd.to_numeric(df["TOTTRDQTY"],  errors="coerce").astype("Int64"),
+        "turnover":         pd.to_numeric(df["TOTTRDVAL"],  errors="coerce"),
+        "trade_count":      pd.to_numeric(df["TOTALTRADES"], errors="coerce").astype("Int64"),
+        "open_interest":    None,
+        "change_in_oi":     None,
+        "settlement_price": None,
+        "underlying_price": None,
         "delivery_qty":     None,
         "delivery_pct":     None,
     })
@@ -381,10 +455,12 @@ def _write_cm_security(conn, data: dict, d: str):
 
 
 def _write_fo(conn, data: dict, d: str):
-    from pipeline.processors import fo as m
-
     if data.get("skipped"):
         return
+    if data.get("_legacy"):
+        from pipeline.processors import fo_legacy as m
+    else:
+        from pipeline.processors import fo as m
     m.write(conn, data, d)
 
 

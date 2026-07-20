@@ -28,6 +28,14 @@ SESSION.headers.update(HEADERS)
 
 NEW_NSE_SCHEMA_DATE = datetime(2024, 7, 24).date()
 
+# Sentinel written to a dl_col once a download key has accumulated
+# STREAK_THRESHOLD consecutive non-"complete" results for a stretch of
+# dates — meaning "this file type does not exist for this date, don't
+# ever attempt again", as opposed to 0 ("not yet attempted") or a
+# transient market_closed/failed on an individual date.
+NOT_AVAILABLE = -1
+STREAK_THRESHOLD = 10
+
 # ── Schema switch ─────────────────────────────────────────────────────────────
 
 def use_new_schema(trade_date: str) -> bool:
@@ -114,85 +122,121 @@ def validate_or_market_closed(
 
 
 # ── Weekend staleness guard (fo_contracts / cm_security) ──────────────────────
-# These two endpoints don't 404 on non-trading days — they silently re-serve
-# the last trading day's file with a 200. On weekdays that's rarely an issue,
-# but on Sat/Sun there is no fresh file at all, so a "successful" download is
-# actually stale data from the preceding Friday. Guard against this by
-# confirming the requested trade_date literally appears in the file content
-# before accepting it as complete; only applied on weekends to avoid false
-# negatives on legitimate trading days.
+# fo_contracts/cm_security don't 404 on non-trading days — they silently
+# re-serve the previous trading day's file with a 200. On a normal weekend
+# that means "success" is actually stale Friday data. BUT NSE occasionally
+# runs special Saturday trading sessions, so we can't just blanket-reject
+# every weekend hit.
+#
+# Instead of trying to parse a date out of the fo_contracts/cm_security file
+# itself (whose timestamp field is some epoch/serial format that's a pain to
+# decode reliably), we lean on eq_bhav/cm_bhav, which already validate their
+# own date via a real DD-MM-YYYY text field (validate_eq_bhav /
+# validate_cm_bhav_legacy). If either of those confirms trade_date is a
+# genuine trading day, we trust it and accept the fo_contracts/cm_security
+# file too. If neither has run yet / neither confirms it, we fall back to
+# treating it as stale.
 
 def _is_weekend(trade_date: str) -> bool:
     return datetime.strptime(trade_date, "%Y-%m-%d").weekday() >= 5
 
 
-def _content_matches_date(content: bytes, trade_date: str) -> bool:
-    dt = datetime.strptime(trade_date, "%Y-%m-%d")
-    text = content.decode("utf-8", errors="ignore")
-    return any(
-        dt.strftime(fmt) in text
-        for fmt in ("%d-%m-%Y", "%d%m%Y", "%Y%m%d", "%Y-%m-%d")
-    )
+def _confirmed_trading_day(trade_date: str) -> bool:
+    """
+    Returns True if we have independent, reliable evidence that trade_date
+    was a real trading day — based on eq_bhav / cm_bhav files that already
+    exist on disk (they only get written after passing their own header-date
+    validation, so their mere presence for trade_date is proof).
+    If neither exists yet on disk, fetch+validate cm_bhav fresh as a
+    tiebreaker (cheap, and doesn't write anything itself here).
+    """
+    # 1. Already-downloaded, already-validated files are the cheapest proof.
+    eq_path = _output_path(EQ_BHAV_ROOT, trade_date)
+    if eq_path.exists():
+        return True
+
+    cm_root = CM_BHAV_ROOT if use_new_schema(trade_date) else CM_BHAV_LEGACY_ROOT
+    cm_path = _output_path(cm_root, trade_date)
+    if cm_path.exists():
+        return True
+
+    # 2. Nothing on disk yet (e.g. this ran before eq_bhav/cm_bhav in the
+    #    same batch) — do a live check via cm_bhav's own validator.
+    url = build_cm_bhav_url(trade_date) if use_new_schema(trade_date) else build_cm_bhav_legacy_url(trade_date)
+    content, status = _fetch(url, trade_date)
+    if status != "complete":
+        return False
+
+    try:
+        csv_bytes = _extract_csv_from_zip(content)
+        validator = validate_cm_bhav if use_new_schema(trade_date) else validate_cm_bhav_legacy
+        return validator(csv_bytes, trade_date)
+    except Exception as e:
+        print(f"[weekend_check] cm_bhav tiebreaker failed for {trade_date}: {e}")
+        return False
 
 
 # ── URL builders ──────────────────────────────────────────────────────────────
 
 def build_fo_url(trade_date: str) -> str:
-    """2026-05-27 → .../BhavCopy_NSE_FO_0_0_0_20260527_F_0000.csv.zip
-    pre-2024-07-21 → .../DERIVATIVES/2022/JAN/fo06JAN2022bhav.csv.zip"""
-    if use_new_schema(trade_date):
-        compact = trade_date.replace("-", "")
-        return f"{NSE_BASE_URL}/content/fo/BhavCopy_NSE_FO_0_0_0_{compact}_F_0000.csv.zip"
+    """2026-07-17 → .../content/fo/BhavCopy_NSE_FO_0_0_0_20260717_F_0000.csv.zip"""
+    compact = trade_date.replace("-", "")
+    return f"{NSE_BASE_URL}/content/fo/BhavCopy_NSE_FO_0_0_0_{compact}_F_0000.csv.zip"
 
+def build_fo_legacy_url(trade_date: str) -> str:
+    """2022-01-06 → .../content/historical/DERIVATIVES/2022/JAN/fo06JAN2022bhav.csv.zip"""
     dt = datetime.strptime(trade_date, "%Y-%m-%d")
     ddmonyyyy = dt.strftime("%d%b%Y").upper()
     return f"{NSE_HIST_BASE_URL}/DERIVATIVES/{dt.strftime('%Y')}/{dt.strftime('%b').upper()}/fo{ddmonyyyy}bhav.csv.zip"
 
 def build_eq_bhav_url(trade_date: str) -> str:
-    """2026-05-27 → .../sec_bhavdata_full_27052026.csv"""
+    """2026-07-17 → .../products/content/sec_bhavdata_full_17072026.csv"""
     dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
     return f"{NSE_BASE_URL}/products/content/sec_bhavdata_full_{dmy}.csv"
 
 def build_cm_bhav_url(trade_date: str) -> str:
-    """2026-05-27 → .../BhavCopy_NSE_CM_0_0_0_20260527_F_0000.csv.zip
-    pre-2024-07-21 → .../EQUITIES/2024/JUN/cm21JUN2024bhav.csv.zip"""
-    if use_new_schema(trade_date):
-        compact = trade_date.replace("-", "")
-        return f"{NSE_BASE_URL}/content/cm/BhavCopy_NSE_CM_0_0_0_{compact}_F_0000.csv.zip"
+    """2026-07-17 → .../content/cm/BhavCopy_NSE_CM_0_0_0_20260717_F_0000.csv.zip"""
+    compact = trade_date.replace("-", "")
+    return f"{NSE_BASE_URL}/content/cm/BhavCopy_NSE_CM_0_0_0_{compact}_F_0000.csv.zip"
 
+def build_cm_bhav_legacy_url(trade_date: str) -> str:
+    """2024-06-23 → .../content/historical/EQUITIES/2024/JUN/cm23JUN2024bhav.csv.zip"""
     dt = datetime.strptime(trade_date, "%Y-%m-%d")
     ddmonyyyy = dt.strftime("%d%b%Y").upper()
     return f"{NSE_HIST_BASE_URL}/EQUITIES/{dt.strftime('%Y')}/{dt.strftime('%b').upper()}/cm{ddmonyyyy}bhav.csv.zip"
 
 def build_fii_url(trade_date: str) -> str:
-    """2026-05-27 → .../fii_stats_27-May-2026.xls"""
+    """2026-07-17 → .../content/fo/fii_stats_17-Jul-2026.xls"""
     display = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d-%b-%Y")
     return f"{NSE_BASE_URL}/content/fo/fii_stats_{display}.xls"
 
 def build_part_oi_url(trade_date: str) -> str:
+    """2026-07-17 → .../content/nsccl/fao_participant_oi_17072026.csv"""
     dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
     return f"{NSE_BASE_URL}/content/nsccl/fao_participant_oi_{dmy}.csv"
 
 def build_part_vol_url(trade_date: str) -> str:
+    """2026-07-17 → .../content/nsccl/fao_participant_vol_17072026.csv"""
     dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
     return f"{NSE_BASE_URL}/content/nsccl/fao_participant_vol_{dmy}.csv"
 
 def build_fo_volt_url(trade_date: str) -> str:
+    """2026-07-17 → .../archives/nsccl/volt/FOVOLT_17072026.csv"""
     dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
     return f"{NSE_BASE_URL}/archives/nsccl/volt/FOVOLT_{dmy}.csv"
 
 def build_mkt_act_url(trade_date: str) -> str:
-    """2026-05-27 → .../MA270526.csv  (note: 2-digit year)"""
+    """2026-07-17 → .../archives/equities/mkt/MA170726.csv  (note: 2-digit year)"""
     ddmmyy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%y")
     return f"{NSE_BASE_URL}/archives/equities/mkt/MA{ddmmyy}.csv"
 
 def build_fo_contract_url(trade_date: str) -> str:
-    """2026-07-10 → .../NSE_FO_contract_10072026.csv.gz"""
+    """2026-07-17 → .../content/fo/NSE_FO_contract_17072026.csv.gz"""
     dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
     return f"{NSE_BASE_URL}/content/fo/NSE_FO_contract_{dmy}.csv.gz"
 
 def build_cm_security_url(trade_date: str) -> str:
-    """2026-07-09 → .../NSE_CM_security_09072026.csv.gz"""
+    """2026-07-17 → .../content/cm/NSE_CM_security_17072026.csv.gz"""
     dmy = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%d%m%Y")
     return f"{NSE_BASE_URL}/content/cm/NSE_CM_security_{dmy}.csv.gz"
 
@@ -253,7 +297,8 @@ def _fetch(url: str, trade_date: str) -> tuple[bytes | None, str]:
 # ── public download functions ─────────────────────────────────────────────────
 
 def download_fo_bhav(trade_date: str) -> str:
-    content, status = _fetch(build_fo_url(trade_date), trade_date)
+    url = build_fo_url(trade_date) if use_new_schema(trade_date) else build_fo_legacy_url(trade_date)
+    content, status = _fetch(url, trade_date)
     if status == "complete":
         csv_bytes = _extract_csv_from_zip(content)
         root = FO_RAW_ROOT if use_new_schema(trade_date) else FO_LEGACY_RAW_ROOT
@@ -279,7 +324,8 @@ def download_eq_bhav(trade_date: str) -> str:
 
 
 def download_cm_bhav(trade_date: str) -> str:
-    content, status = _fetch(build_cm_bhav_url(trade_date), trade_date)
+    url = build_cm_bhav_url(trade_date) if use_new_schema(trade_date) else build_cm_bhav_legacy_url(trade_date)
+    content, status = _fetch(url, trade_date)
     if status == "complete":
         csv_bytes = _extract_csv_from_zip(content)
         root = CM_BHAV_ROOT if use_new_schema(trade_date) else CM_BHAV_LEGACY_ROOT
@@ -329,9 +375,9 @@ def download_fo_contracts(trade_date: str) -> str:
 
     csv_bytes = _extract_csv_from_gz(content)
 
-    if _is_weekend(trade_date) and not _content_matches_date(csv_bytes, trade_date):
+    if _is_weekend(trade_date) and not _confirmed_trading_day(trade_date):
         print(
-            f"[fo_contracts] stale weekend file detected "
+            f"[fo_contracts] stale weekend file rejected "
             f"(requested={trade_date})"
         )
         return "market_closed"
@@ -347,9 +393,9 @@ def download_cm_security(trade_date: str) -> str:
 
     csv_bytes = _extract_csv_from_gz(content)
 
-    if _is_weekend(trade_date) and not _content_matches_date(csv_bytes, trade_date):
+    if _is_weekend(trade_date) and not _confirmed_trading_day(trade_date):
         print(
-            f"[cm_security] stale weekend file detected "
+            f"[cm_security] stale weekend file rejected "
             f"(requested={trade_date})"
         )
         return "market_closed"

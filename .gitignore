@@ -35,6 +35,9 @@ dist-ssr/
 # Research
 research/plots
 
-#Tests
+# Tests
 tests/fixtures/raw
 .pytest_cache
+
+# History
+history/
