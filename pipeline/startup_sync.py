@@ -47,19 +47,33 @@ processors. Before LEGACY_CUTOFF, they route to "fo_legacy" and
 "cm_bhav_legacy" instead. Manifest columns (dl/pr flags) are identical
 either way — only the processor function called differs.
 
-Download-side availability (Phase 1): for EVERY download key, a rolling
-streak of consecutive non-"complete" results (market_closed/failed) is
-tracked across ascending trade_dates. Once a streak reaches
-STREAK_THRESHOLD (10), the entire streak — including earlier dates
-already written with a "market_closed"/"failed" status — is rewritten
-to dl_col = NOT_AVAILABLE (-1), and any further consecutive misses keep
-extending that streak and get marked -1 immediately, without a real
-request. A "complete" result resets the streak for that key to empty.
-This is directional: it only ever suppresses a *stretch of misses*, so
-if the file type starts existing again later (a later date returns
-"complete"), later dates are attempted normally. -1 rows are skipped on
-future runs (never re-attempted) exactly like already-downloaded (1)
-rows are skipped, just via a different branch.
+Download-side availability (Phase 1): the set of missing dates is split
+into two independently-walked directional runs relative to the dates
+already present in the manifest:
+
+  - BACKWARD: missing dates older than the earliest manifest date,
+    walked in DESCENDING order (closest to existing data first, marching
+    down toward SYNC_START_DATE last).
+  - FORWARD: missing dates from the latest manifest date onward
+    (including any in-range gaps and "today"), walked in ASCENDING order.
+
+Each direction keeps its own independent, per-download-key rolling streak
+of consecutive non-"complete" results (market_closed/failed). Once a
+streak reaches STREAK_THRESHOLD (10) within a direction, the entire
+streak so far — including earlier dates in that same direction's walk
+already written with a "market_closed"/"failed" status — is rewritten to
+dl_col = NOT_AVAILABLE (-1), that date's aggregate `status` is recomputed
+(not_available counts as an ok/complete outcome), and the key is marked
+"saturated" for the remainder of that direction's walk: every further
+date is immediately written -1 for that key with no real request and no
+repeated log line. A "complete" result resets the streak and clears
+saturation for that key. Saturation and streak state do NOT carry across
+the backward/forward boundary — they are separate walks answering
+separate questions ("when did this file type start existing" vs "did it
+stop existing recently"). -1 rows are skipped on future runs (never
+re-attempted) exactly like already-downloaded (1) rows are skipped, just
+via a different branch. Dates already present in the manifest are never
+part of `missing` at all, so a fresh run never re-downloads them.
 """
 
 from datetime import datetime
@@ -144,23 +158,70 @@ def _resolve_proc_key(proc_key: str, trade_date: str) -> str:
     return proc_key
 
 
-def run_startup_sync():
-    print("────────────── NSE STARTUP SYNC ──────────────\n")
-    init_db()
+def _aggregate_status(statuses: dict) -> str:
+    ok_statuses     = ("complete", "already", "not_available")
+    closed_statuses = ("market_closed", "not_available")
+    all_closed = all(s in closed_statuses for s in statuses.values())
+    all_ok     = all(s in ok_statuses for s in statuses.values())
+    any_ok     = any(s in ok_statuses for s in statuses.values())
+    if all_closed:
+        return "market_closed"
+    elif all_ok:
+        return "complete"
+    elif any_ok:
+        return "partial"
+    else:
+        return "failed"
 
-    manifest = load_manifest()
-    today    = datetime.today().strftime("%Y-%m-%d")
-    missing  = get_missing_dates(manifest, SYNC_START_DATE, today)
 
-    # ── Phase 1: Download ─────────────────────────────────────────────────────
-    print(f"Found {len(missing)} missing dates.\n" if missing else "✓ No missing dates.\n")
+def _split_directional(manifest: pd.DataFrame, sync_start: str, today: str) -> tuple[list[str], list[str]]:
+    """
+    Split missing dates into two independently-walked runs relative to the
+    dates already present in the manifest:
 
-    # per download-key rolling streak of consecutive dates (ascending) that
-    # missed (market_closed/failed). Once len >= STREAK_THRESHOLD the whole
-    # streak gets written back to NOT_AVAILABLE; reset to [] on a "complete".
+      - backward: dates older than the earliest existing manifest date,
+        walked DESCENDING (closest to existing data first, marching down
+        toward sync_start last).
+      - forward: dates from the latest existing manifest date onward
+        (includes any in-range gaps from a previous partial run, plus any
+        brand-new dates up to and including today), walked ASCENDING.
+
+    If the manifest is empty there is no frontier to be backward/forward
+    *from* — the whole range is a single forward walk.
+    """
+    all_missing = get_missing_dates(manifest, sync_start, today)
+    existing = manifest["trade_date"].tolist()
+
+    if not existing:
+        return [], sorted(all_missing)
+
+    manifest_min, manifest_max = min(existing), max(existing)
+
+    backward = sorted((d for d in all_missing if d < manifest_min), reverse=True)
+    forward  = sorted(d for d in all_missing if d >= manifest_max)
+
+    return backward, forward
+
+
+def _download_phase(dates: list[str], manifest: pd.DataFrame,
+                     date_key_statuses: dict,
+                     initial_saturated: dict[str, bool] | None = None) -> pd.DataFrame:
+    """Walk `dates` in the order given, with its own independent per-key
+    miss-streak/saturation tracking. Direction is entirely determined by
+    the order of `dates` as passed in — this function doesn't know or
+    care whether it's walking backward or forward.
+
+    `initial_saturated` lets a caller seed a key as already-saturated
+    before the walk starts — used when a prior run already proved a key
+    permanently dead at/before the manifest's current frontier, so a
+    later backward walk into newly-missing older dates doesn't have to
+    re-burn a fresh 10-miss streak to re-derive the same conclusion."""
     miss_streaks: dict[str, list[str]] = {k: [] for k in DOWNLOAD_REGISTRY}
+    saturated: dict[str, bool] = {
+        k: (initial_saturated or {}).get(k, False) for k in DOWNLOAD_REGISTRY
+    }
 
-    for trade_date in missing:
+    for trade_date in dates:
         statuses = {}
         updates  = {}
 
@@ -173,68 +234,93 @@ def run_startup_sync():
                 continue
 
             if existing == DL_NOT_AVAILABLE:
-                # already-confirmed non-existent for this date — don't re-request
                 statuses[dl_key] = "not_available"
-                miss_streaks[dl_key].append(trade_date)
                 continue
 
-            result = entry["download"](trade_date)
-            statuses[dl_key] = result
+            if saturated[dl_key]:
+                # streak already confirmed dead for this key in this
+                # direction — no real request, no repeated log line.
+                updates[dl_col] = DL_NOT_AVAILABLE
+                statuses[dl_key] = "not_available"
+                continue
+
+            try:
+                result = entry["download"](trade_date)
+            except Exception as e:
+                print(
+                    f"  ✗ DOWNLOAD CRASH: key={dl_key}, "
+                    f"date={trade_date}, type={type(e).__name__}: {e}"
+                )
+                raise
 
             if result == "complete":
                 updates[dl_col] = 1
                 miss_streaks[dl_key] = []
-            else:
-                miss_streaks[dl_key].append(trade_date)
-                if len(miss_streaks[dl_key]) >= STREAK_THRESHOLD:
-                    for missed_date in miss_streaks[dl_key]:
-                        if missed_date == trade_date:
-                            updates[dl_col] = DL_NOT_AVAILABLE
-                        else:
-                            manifest = _set(manifest, missed_date, **{dl_col: DL_NOT_AVAILABLE})
-                    print(f"  ~ [{dl_key}] {STREAK_THRESHOLD}+ consecutive misses through {trade_date} "
-                          f"— marking stretch as not-available")
+                saturated[dl_key] = False
+                statuses[dl_key] = "complete"
+                continue
 
-        else:
-            # only runs if loop didn't break
-            ok_statuses      = ("complete", "already", "not_available")
-            closed_statuses  = ("market_closed", "not_available")
+            statuses[dl_key] = result
+            miss_streaks[dl_key].append(trade_date)
 
-            all_closed = all(
-                s in closed_statuses
-                for s in statuses.values()
-            )
+            if len(miss_streaks[dl_key]) >= STREAK_THRESHOLD:
+                for missed_date in miss_streaks[dl_key]:
+                    if missed_date == trade_date:
+                        updates[dl_col] = DL_NOT_AVAILABLE
+                    else:
+                        manifest = _set(manifest, missed_date, **{dl_col: DL_NOT_AVAILABLE})
+                        if missed_date in date_key_statuses:
+                            date_key_statuses[missed_date][dl_key] = "not_available"
+                            manifest = _set(manifest, missed_date,
+                                             status=_aggregate_status(date_key_statuses[missed_date]))
+                print(f"  ~ [{dl_key}] {STREAK_THRESHOLD}+ consecutive misses through {trade_date} "
+                      f"— marking stretch as not-available")
+                statuses[dl_key] = "not_available"
+                saturated[dl_key] = True
 
-            all_ok = all(
-                s in ok_statuses
-                for s in statuses.values()
-            )
-
-            any_ok = any(
-                s in ok_statuses
-                for s in statuses.values()
-            )
-
-            if all_closed:
-                status = "market_closed"
-            elif all_ok:
-                status = "complete"
-            elif any_ok:
-                status = "partial"
-            else:
-                status = "failed"
-            updates["status"] = status
-            print(f"{'✓' if all_ok else '~' if any_ok else '✗'} Download {status}: {trade_date}")
-
-        if trade_date == today and status == "failed":
-            print(f"~ Current Day: Pending NSE upload / Market Closed: {trade_date}")
-            continue
-
+        date_key_statuses[trade_date] = statuses
+        status = _aggregate_status(statuses)
+        updates["status"] = status
+        symbol = "✓" if status == "complete" else "✗" if status == "failed" else "~"
+        print(f"{symbol} Download {status}: {trade_date}")
         manifest = _set(manifest, trade_date, **updates)
+
+    return manifest
+
+
+def run_startup_sync():
+    print("────────────── NSE STARTUP SYNC ──────────────\n")
+    init_db()
+
+    manifest = load_manifest()
+    today    = datetime.today().strftime("%Y-%m-%d")
+
+    # ── Phase 1: Download ─────────────────────────────────────────────────
+    backward, forward = _split_directional(manifest, SYNC_START_DATE, today)
+    total = len(backward) + len(forward)
+    print(f"Found {total} missing dates.\n" if total else "✓ No missing dates.\n")
+
+    date_key_statuses: dict[str, dict[str, str]] = {}
+
+    if backward:
+        frontier_date = min(manifest["trade_date"]) if len(manifest) else None
+        initial_saturated = {}
+        if frontier_date is not None:
+            for dl_key, entry in DOWNLOAD_REGISTRY.items():
+                dl_col = entry["manifest_col"]
+                if _flag(manifest, frontier_date, dl_col) == DL_NOT_AVAILABLE:
+                    initial_saturated[dl_key] = True
+        manifest = _download_phase(backward, manifest, date_key_statuses,
+                                    initial_saturated=initial_saturated)
+        save_manifest(manifest)
+        manifest = load_manifest()
+
+    if forward:
+        manifest = _download_phase(forward, manifest, date_key_statuses)
 
     save_manifest(manifest)
 
-    # ── Phase 2: Process ──────────────────────────────────────────────────────
+    # ── Phase 2: Process ──────────────────────────────────────────────────
     print("\nChecking processing state...\n")
     manifest = load_manifest()
 
