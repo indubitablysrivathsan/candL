@@ -8,7 +8,7 @@ _INSTR_STR_COLS = [
     "instrument_name", "isin", "series", "option_type",
 ]
 
-def upsert_instruments(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
+def upsert_instruments(conn, df: pd.DataFrame):
     df = df.copy()
     for col in _INSTR_STR_COLS:
         if col in df.columns:
@@ -17,6 +17,9 @@ def upsert_instruments(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
 
     conn.register("_instr_stage", df)
 
+    # Only rows that are brand new OR whose name/isin actually differ from
+    # what's already stored — skips the no-op UPDATE that dominates cm_bhav's
+    
     conn.execute("""
         INSERT INTO instruments (
             instrument_key, exchange, segment, instrument_id,
@@ -24,10 +27,14 @@ def upsert_instruments(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame):
             isin, series, expiry, strike, option_type
         )
         SELECT
-            instrument_key, exchange, segment, instrument_id,
-            instrument_type, ticker, instrument_name,
-            isin, series, expiry, strike, option_type
-        FROM _instr_stage
+            s.instrument_key, s.exchange, s.segment, s.instrument_id,
+            s.instrument_type, s.ticker, s.instrument_name,
+            s.isin, s.series, s.expiry, s.strike, s.option_type
+        FROM _instr_stage s
+        LEFT JOIN instruments i ON i.instrument_key = s.instrument_key
+        WHERE i.instrument_key IS NULL
+           OR i.instrument_name IS DISTINCT FROM s.instrument_name
+           OR i.isin            IS DISTINCT FROM s.isin
         ON CONFLICT (instrument_key) DO UPDATE SET
             instrument_name = excluded.instrument_name,
             isin            = excluded.isin

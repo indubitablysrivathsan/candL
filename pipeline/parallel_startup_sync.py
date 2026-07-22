@@ -80,6 +80,9 @@ from config import SYNC_START_DATE
 
 NOT_AVAILABLE = -1
 
+FAILED = 3
+MAX_RETRIES = 3 
+
 _PIPELINE = [
     ("fo_contracts", "fo_contracts_dl", ["fo_contracts_pr"], ["FO_CONTRACT"]),
     ("cm_security",  "cm_security_dl",  ["cm_security_pr"],  ["CM_SECURITY"]),
@@ -304,7 +307,7 @@ def _find_round_candidates(manifest: pd.DataFrame):
 
         candidates = manifest[
             (manifest[dl_col] == 1) &
-            (~manifest[pr_col].isin([1, NOT_AVAILABLE])) &
+            (~manifest[pr_col].isin([1, NOT_AVAILABLE, FAILED])) &
             (manifest["status"] != "market_closed")
         ]["trade_date"].tolist()
 
@@ -361,16 +364,16 @@ def run_parallel_startup_sync(max_workers: int = 8, max_rounds: int = 50):
     init_db()
     manifest = load_manifest()
 
-    # ── Phase 1: Download (sequential, directional — see module docstring) ──
     manifest = _run_download_phase(manifest)
 
-    # ── Phase 2: Process (parallel, in rounds) ────────────────────────────────
     print("\nChecking processing state...\n")
+    retry_counts: dict[tuple[str, str], int] = {}   # NEW — (proc_key, manifest_date) -> fail count
+
     round_num = 0
     while round_num < max_rounds:
         round_num += 1
         tasks, meta, manifest = _find_round_candidates(manifest)
-        save_manifest(manifest)  # persist any "already processed" / "deferred" syncs even if no tasks
+        save_manifest(manifest)
 
         if not tasks:
             break
@@ -385,23 +388,35 @@ def run_parallel_startup_sync(max_workers: int = 8, max_rounds: int = 50):
             r = results.get((check_date, proc_key))
             if r is None:
                 continue
+
+            key = (proc_key, manifest_date)
+
             if not r["ok"]:
-                print(f"  ✗ {proc_key} {manifest_date}: {r['error']}")
-                continue  # leave pr flag at 0 so it's retried next run
+                retry_counts[key] = retry_counts.get(key, 0) + 1
+                if retry_counts[key] >= MAX_RETRIES:
+                    print(f"  ✗ {proc_key} {manifest_date}: giving up after "
+                          f"{MAX_RETRIES} failures — {r['error']}")
+                    manifest = _set(manifest, manifest_date, **{col: FAILED for col in pr_cols})
+                else:
+                    print(f"  ✗ {proc_key} {manifest_date} "
+                          f"(attempt {retry_counts[key]}/{MAX_RETRIES}): {r['error']}")
+                continue  # leave at 0 for retry, or FAILED just set above — either way, skip flag-update below
+
             if not _all_processed(check_date, check_keys):
                 print(f"  ⚠ {proc_key} {manifest_date}: DB check incomplete after processing")
                 continue
+
             updates = {col: 1 for col in pr_cols}
             if extra_pr:
                 updates[extra_pr] = 1
             manifest = _set(manifest, manifest_date, **updates)
 
         save_manifest(manifest)
-        manifest = load_manifest()  # reload so next round sees committed flags
+        manifest = load_manifest()
 
     if round_num >= max_rounds and tasks:
         print(f"\n⚠ Stopped after {max_rounds} rounds — possible stuck candidates.")
-
+        
     print("\n✓ Parallel startup sync complete.\n")
 
 

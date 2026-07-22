@@ -36,11 +36,22 @@ def _raw_path(root, trade_date: str) -> Path:
     return Path(root) / dt.strftime("%Y") / dt.strftime("%m") / f"{trade_date}.csv"
 
 
+def _find_header_row(path: Path, max_lines: int = 3) -> int:
+    """Return the row index (0-based) where the real header lives."""
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        for i in range(max_lines):
+            line = f.readline()
+            if not line:
+                break
+            if line.strip().startswith("Client Type"):
+                return i
+    raise ValueError(f"{path}: could not locate header row (no 'Client Type' in first {max_lines} lines)")
+
+
 def _parse_file(path: Path, trade_date: str, metric_type: str) -> pd.DataFrame:
-    raw = pd.read_csv(path, header=None, skiprows=1)
-    # First row after skip is the header
-    raw.columns = [str(c).strip() for c in raw.iloc[0]]
-    raw = raw[1:].reset_index(drop=True)
+    header_row = _find_header_row(path)
+    raw = pd.read_csv(path, header=header_row)
+    raw.columns = [str(c).strip() for c in raw.columns]
 
     # Strip column names and filter to known participants
     raw["Client Type"] = raw["Client Type"].str.strip()
