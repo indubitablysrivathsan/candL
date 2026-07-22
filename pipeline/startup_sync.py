@@ -365,7 +365,7 @@ def run_startup_sync():
             kept = []
             for d in candidates:
                 prev = get_previous_trading_date(manifest, d)
-                if prev is not None and prev < MASTER_START_DATE:
+                if d < MASTER_START_DATE:
                     kept.append(d)
                 elif (
                     prev is not None

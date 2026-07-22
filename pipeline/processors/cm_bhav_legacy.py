@@ -45,8 +45,11 @@ def process(trade_date: str):
 
     df = pd.read_csv(p, low_memory=False)
     df.columns = df.columns.str.strip()
-
-    trade_dt = pd.to_datetime(df["TIMESTAMP"].iloc[0], format="%d-%b-%Y", errors="coerce").date()
+    
+    try:
+        trade_dt = pd.to_datetime(df["TIMESTAMP"].iloc[0], format="%d-%b-%Y").date()
+    except ValueError:
+        trade_dt = pd.to_datetime(df["TIMESTAMP"].iloc[0], format="%d-%b-%y").date()
 
     df["series_"] = df["SERIES"].fillna("").str.strip()
     df["itype"]   = "STK"

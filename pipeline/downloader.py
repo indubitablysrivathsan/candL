@@ -41,6 +41,26 @@ STREAK_THRESHOLD = 10
 def use_new_schema(trade_date: str) -> bool:
     return datetime.strptime(trade_date, "%Y-%m-%d").date() >= NEW_NSE_SCHEMA_DATE
 
+# ── EQ bhav format ────────────────────────────────────────────────────────────
+
+def _normalize_eq_bhav(content: bytes) -> bytes:
+    """
+    NSE occasionally serves sec_bhavdata_full_*.csv as an actual XLSX
+    workbook despite the .csv extension. Convert such payloads to real
+    UTF-8 CSV bytes so the rest of the pipeline remains unchanged.
+    """
+    if content.startswith(b"PK\x03\x04"):
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            if "xl/workbook.xml" not in zf.namelist():
+                raise ValueError(
+                    "EQ bhav response is a ZIP container but not an XLSX workbook"
+                )
+
+        df = pd.read_excel(io.BytesIO(content))
+        return df.to_csv(index=False).encode("utf-8")
+
+    return content
+
 
 # ── Validators ───────────────────────────────────────────────────────────────
 
@@ -312,6 +332,10 @@ def download_eq_bhav(trade_date: str) -> str:
     if status != "complete":
         return status
 
+    # Some historical NSE "CSV" files are actually XLSX workbooks.
+    # Normalize them to genuine UTF-8 CSV before validation/storage.
+    content = _normalize_eq_bhav(content)
+
     if not validate_eq_bhav(content, trade_date):
         print(
             f"[eq_bhav] stale file detected "
@@ -321,7 +345,6 @@ def download_eq_bhav(trade_date: str) -> str:
 
     _output_path(EQ_BHAV_ROOT, trade_date).write_bytes(content)
     return "complete"
-
 
 def download_cm_bhav(trade_date: str) -> str:
     url = build_cm_bhav_url(trade_date) if use_new_schema(trade_date) else build_cm_bhav_legacy_url(trade_date)

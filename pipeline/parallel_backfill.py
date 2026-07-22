@@ -122,8 +122,13 @@ def _compute_cm_bhav(trade_date: str) -> dict:
         return {"skipped": True}
 
     if _is_legacy(trade_date):
-        return _compute_cm_bhav_legacy(trade_date)
-    return _compute_cm_bhav_new(trade_date)
+        result = _compute_cm_bhav_legacy(trade_date)
+    else:
+        result = _compute_cm_bhav_new(trade_date)
+
+    result["skipped"] = False
+    result["_legacy"] = _is_legacy(trade_date)
+    return result
 
 
 def _compute_cm_bhav_new(trade_date: str) -> dict:
@@ -453,15 +458,89 @@ def _write_cm_security(conn, data: dict, d: str):
     print(f"[write] cm_security {d} — {len(data['sec_master'])} security rows, "
           f"{len(data['corp_actions'])} corp actions")
 
+# ── vectorized futures/options writers (parallel path only) ────────────────
+# fo.py / fo_legacy.py still use conn.executemany() for their sequential
+# process() path — untouched, unchanged. These are separate implementations
+# used only by write_all() below, targeting the same tables with the same
+# ON CONFLICT logic, just via register()+INSERT instead of executemany().
+
+_FUTURES_COLS = [
+    "instrument_type", "ticker", "expiry", "trade_date",
+    "chng_in_price", "chng_price_per", "chng_oi_per",
+    "quadrant", "basis", "cost_of_carry", "choi_volume_ratio", "days_to_expiry",
+]
+
+def _write_futures_rows_batched(conn, rows: list[tuple]):
+    if not rows:
+        return
+    df = pd.DataFrame(rows, columns=_FUTURES_COLS)
+    conn.register("_futures_stage", df)
+    try:
+        conn.execute("""
+            INSERT INTO futures_analytics (
+                instrument_type, ticker, expiry, trade_date,
+                chng_in_price, chng_price_per, chng_oi_per,
+                quadrant, basis, cost_of_carry, choi_volume_ratio, days_to_expiry
+            )
+            SELECT * FROM _futures_stage
+            ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
+                chng_in_price      = excluded.chng_in_price,
+                chng_price_per     = excluded.chng_price_per,
+                chng_oi_per        = excluded.chng_oi_per,
+                quadrant           = excluded.quadrant,
+                basis              = excluded.basis,
+                cost_of_carry      = excluded.cost_of_carry,
+                choi_volume_ratio  = excluded.choi_volume_ratio,
+                days_to_expiry     = excluded.days_to_expiry
+        """)
+    finally:
+        conn.unregister("_futures_stage")
+
+
+_OPTIONS_COLS = [
+    "instrument_type", "ticker", "expiry", "trade_date",
+    "pe_oi", "ce_oi", "pcr", "max_pain",
+]
+
+
+def _write_options_rows_batched(conn, rows: list[tuple]):
+    if not rows:
+        return
+    df = pd.DataFrame(rows, columns=_OPTIONS_COLS)
+    conn.register("_options_stage", df)
+    try:
+        conn.execute("""
+            INSERT INTO options_analytics (
+                instrument_type, ticker, expiry, trade_date,
+                pe_oi, ce_oi, pcr, max_pain
+            )
+            SELECT * FROM _options_stage
+            ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
+                pe_oi    = excluded.pe_oi,
+                ce_oi    = excluded.ce_oi,
+                pcr      = excluded.pcr,
+                max_pain = excluded.max_pain
+        """)
+    finally:
+        conn.unregister("_options_stage")
+
 
 def _write_fo(conn, data: dict, d: str):
+    from pipeline.processors.common import upsert_instruments, upsert_market_data
+
     if data.get("skipped"):
         return
-    if data.get("_legacy"):
-        from pipeline.processors import fo_legacy as m
-    else:
-        from pipeline.processors import fo as m
-    m.write(conn, data, d)
+
+    if not data["instruments"].empty:
+        upsert_instruments(conn, data["instruments"])
+    if not data["market_data"].empty:
+        upsert_market_data(conn, data["market_data"])
+
+    _write_futures_rows_batched(conn, data["futures_rows"])
+    _write_options_rows_batched(conn, data["options_rows"])
+
+    print(f"[write] fo {d} — {data['fut_row_count']} fut rows, {data['opt_row_count']} opt rows "
+          f"({'legacy' if data.get('_legacy') else 'standard'})")
 
 
 def _write_cm_bhav(conn, data: dict, d: str):
@@ -471,7 +550,8 @@ def _write_cm_bhav(conn, data: dict, d: str):
         return
     upsert_instruments(conn, data["instruments"])
     upsert_market_data(conn, data["market_data"])
-    print(f"[write] cm_bhav {d} — {data['row_count']} rows")
+    print(f"[write] cm_bhav {d} — {data['row_count']} rows "
+          f"({'legacy' if data.get('_legacy') else 'standard'})")
 
 
 def _write_eq_bhav(conn, data: dict, d: str):

@@ -201,7 +201,14 @@ def _download_walk(dates: list[str], manifest: pd.DataFrame,
                 statuses[dl_key] = "not_available"
                 continue
 
-            result = entry["download"](trade_date)
+            try:
+                result = entry["download"](trade_date)
+            except Exception as e:
+                print(
+                    f"  ✗ DOWNLOAD CRASH: key={dl_key}, "
+                    f"date={trade_date}, type={type(e).__name__}: {e}"
+                )
+                raise
 
             if result == "complete":
                 updates[dl_col] = 1
@@ -325,8 +332,8 @@ def _find_round_candidates(manifest: pd.DataFrame):
         else:
             for d in candidates:
                 prev = get_previous_trading_date(manifest, d)
-                if prev is not None and prev < MASTER_START_DATE:
-                    pass  # nothing to wait for pre-cutoff — process directly, no deferred stamp
+                if d < MASTER_START_DATE:
+                    pass  # before masters existed at all — never defer, just process
                 elif (
                     prev is not None
                     and _flag(manifest, prev, "fo_contracts_pr") == 1

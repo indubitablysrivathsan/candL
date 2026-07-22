@@ -215,17 +215,33 @@ def _compute_futures_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
 
 # ── futures analytics: write half (must run on the single writer conn) ──────
 
+_FUTURES_COLS = [
+    "instrument_type", "ticker", "expiry", "trade_date",
+    "chng_in_price", "chng_price_per", "chng_oi_per",
+    "quadrant", "basis", "cost_of_carry", "choi_volume_ratio", "days_to_expiry",
+]
+
 def _write_futures_rows(conn: duckdb.DuckDBPyConnection, rows: list[tuple]):
     if not rows:
         return
-    conn.executemany("""
-        INSERT INTO futures_analytics VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
-            chng_in_price=excluded.chng_in_price, chng_price_per=excluded.chng_price_per,
-            chng_oi_per=excluded.chng_oi_per, quadrant=excluded.quadrant,
-            basis=excluded.basis, cost_of_carry=excluded.cost_of_carry,
-            choi_volume_ratio=excluded.choi_volume_ratio, days_to_expiry=excluded.days_to_expiry
-    """, rows)
+    df = pd.DataFrame(rows, columns=_FUTURES_COLS)
+    conn.register("_futures_stage", df)
+    try:
+        conn.execute("""
+            INSERT INTO futures_analytics
+            SELECT * FROM _futures_stage
+            ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
+                chng_in_price      = excluded.chng_in_price,
+                chng_price_per     = excluded.chng_price_per,
+                chng_oi_per        = excluded.chng_oi_per,
+                quadrant           = excluded.quadrant,
+                basis              = excluded.basis,
+                cost_of_carry      = excluded.cost_of_carry,
+                choi_volume_ratio  = excluded.choi_volume_ratio,
+                days_to_expiry     = excluded.days_to_expiry
+        """)
+    finally:
+        conn.unregister("_futures_stage")
 
 
 # ── options analytics: max pain (unchanged from original) ───────────────────
@@ -307,15 +323,28 @@ def _compute_options_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
 
 # ── options analytics: write half (must run on the single writer conn) ──────
 
+_OPTIONS_COLS = [
+    "instrument_type", "ticker", "expiry", "trade_date",
+    "pe_oi", "ce_oi", "pcr", "max_pain",
+]
+
 def _write_options_rows(conn: duckdb.DuckDBPyConnection, rows: list[tuple]):
     if not rows:
         return
-    conn.executemany("""
-        INSERT INTO options_analytics VALUES (?,?,?,?,?,?,?,?)
-        ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
-            pe_oi=excluded.pe_oi, ce_oi=excluded.ce_oi, pcr=excluded.pcr,
-            max_pain=excluded.max_pain
-    """, rows)
+    df = pd.DataFrame(rows, columns=_OPTIONS_COLS)
+    conn.register("_options_stage", df)
+    try:
+        conn.execute("""
+            INSERT INTO options_analytics
+            SELECT * FROM _options_stage
+            ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
+                pe_oi    = excluded.pe_oi,
+                ce_oi    = excluded.ce_oi,
+                pcr      = excluded.pcr,
+                max_pain = excluded.max_pain
+        """)
+    finally:
+        conn.unregister("_options_stage")
 
 
 # ── top-level compute (worker-safe: no real DB connection anywhere) ─────────
