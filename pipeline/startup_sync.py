@@ -174,33 +174,38 @@ def _aggregate_status(statuses: dict) -> str:
         return "failed"
 
 
-def _split_directional(manifest: pd.DataFrame, sync_start: str, today: str) -> tuple[list[str], list[str]]:
+def _split_directional(manifest: pd.DataFrame, sync_start: str, today: str) -> tuple[list[str], list[str], list[str]]:
     """
-    Split missing dates into two independently-walked runs relative to the
-    dates already present in the manifest:
-
+    Split missing dates into three groups:
       - backward: dates older than the earliest existing manifest date,
         walked DESCENDING (closest to existing data first, marching down
         toward sync_start last).
-      - forward: dates from the latest existing manifest date onward
-        (includes any in-range gaps from a previous partial run, plus any
-        brand-new dates up to and including today), walked ASCENDING.
-
+      - retry: existing in-range dates (between manifest_min and
+        manifest_max) whose status is partial/failed — historical holes,
+        kept OUT of directional streak/saturation logic.
+      - forward: dates from the latest existing manifest date onward,
+        walked ASCENDING.
     If the manifest is empty there is no frontier to be backward/forward
     *from* — the whole range is a single forward walk.
     """
+    def _key(d: str) -> datetime:
+        return datetime.strptime(d, "%Y-%m-%d")
+
     all_missing = get_missing_dates(manifest, sync_start, today)
     existing = manifest["trade_date"].tolist()
 
     if not existing:
-        return [], sorted(all_missing)
+        return [], [], sorted(all_missing, key=_key)
 
-    manifest_min, manifest_max = min(existing), max(existing)
+    manifest_min = min(existing, key=_key)
+    manifest_max = max(existing, key=_key)
+    min_key, max_key = _key(manifest_min), _key(manifest_max)
 
-    backward = sorted((d for d in all_missing if d < manifest_min), reverse=True)
-    forward  = sorted(d for d in all_missing if d >= manifest_max)
+    backward = sorted((d for d in all_missing if _key(d) < min_key), key=_key, reverse=True)
+    retry    = sorted((d for d in all_missing if min_key <= _key(d) < max_key), key=_key)
+    forward  = sorted((d for d in all_missing if _key(d) >= max_key), key=_key)
 
-    return backward, forward
+    return backward, retry, forward
 
 
 def _download_phase(dates: list[str], manifest: pd.DataFrame,
@@ -288,6 +293,131 @@ def _download_phase(dates: list[str], manifest: pd.DataFrame,
     return manifest
 
 
+def _retry_historical_dates(dates: list[str], manifest: pd.DataFrame,) -> pd.DataFrame:
+    """
+    Retry unresolved download flags on existing historical partial/failed rows.
+
+    Historical holes are handled independently from directional saturation:
+      - existing 1  -> already available, skip
+      - existing -1 -> already known unavailable, skip
+      - existing 0  -> retry download, up to MAX_RETRIES attempts
+
+    If a retry succeeds (within MAX_RETRIES attempts):
+      - set dl flag to 1
+
+    If all MAX_RETRIES attempts fail:
+      - set dl flag to -1 (not_available)
+      - this is the one case where retry logic is allowed to write -1,
+        since MAX_RETRIES attempts is treated as proof the file is gone,
+        same conclusion the directional streak logic reaches via 10
+        consecutive misses — just reached immediately instead of over
+        multiple runs, since these are known historical gaps rather than
+        an unknown frontier.
+    """
+    MAX_RETRIES = 3
+
+    for trade_date in dates:
+        statuses = {}
+        updates = {}
+
+        print(f"~ Retry historical: {trade_date}")
+
+        for dl_key, entry in DOWNLOAD_REGISTRY.items():
+            dl_col = entry["manifest_col"]
+            existing = _flag(manifest, trade_date, dl_col)
+
+            if existing == 1:
+                statuses[dl_key] = "already"
+                continue
+
+            if existing == DL_NOT_AVAILABLE:
+                statuses[dl_key] = "not_available"
+                continue
+
+            # existing == 0: retry unresolved historical file, up to
+            # MAX_RETRIES attempts, before giving up on it for good.
+            result = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    result = entry["download"](trade_date)
+                except Exception as e:
+                    print(
+                        f"  ✗ DOWNLOAD CRASH: key={dl_key}, "
+                        f"date={trade_date}, "
+                        f"type={type(e).__name__}: {e}"
+                    )
+                    raise
+
+                if result == "complete":
+                    break
+
+                print(
+                    f"  ~ [{dl_key}] attempt {attempt}/{MAX_RETRIES} "
+                    f"failed for {trade_date} ({result})"
+                )
+
+            if result == "complete":
+                updates[dl_col] = 1
+                statuses[dl_key] = "complete"
+            else:
+                # Exhausted all retries — proven unavailable, write -1
+                # so future runs skip it like any other saturated date.
+                updates[dl_col] = DL_NOT_AVAILABLE
+                statuses[dl_key] = "not_available"
+                print(
+                    f"  ~ [{dl_key}] {trade_date}: exhausted "
+                    f"{MAX_RETRIES} retries — marking not-available"
+                )
+
+        # Apply flag updates (both successes -> 1, and exhausted -> -1).
+        if updates:
+            manifest = _set(
+                manifest,
+                trade_date,
+                **updates,
+            )
+
+        # Recompute aggregate status using the final manifest flags.
+        final_statuses = {}
+
+        for dl_key, entry in DOWNLOAD_REGISTRY.items():
+            dl_col = entry["manifest_col"]
+            value = _flag(manifest, trade_date, dl_col)
+
+            if value == 1:
+                final_statuses[dl_key] = "complete"
+            elif value == DL_NOT_AVAILABLE:
+                final_statuses[dl_key] = "not_available"
+            else:
+                # Still 0 — shouldn't normally happen anymore since every
+                # key above now resolves to either 1 or -1, but fall back
+                # safely just in case a key was skipped for some reason.
+                final_statuses[dl_key] = statuses.get(
+                    dl_key,
+                    "failed",
+                )
+
+        status = _aggregate_status(final_statuses)
+
+        manifest = _set(
+            manifest,
+            trade_date,
+            status=status,
+        )
+
+        symbol = (
+            "✓" if status == "complete"
+            else "✗" if status == "failed"
+            else "~"
+        )
+
+        print(
+            f"{symbol} Historical retry "
+            f"{status}: {trade_date}"
+        )
+
+    return manifest
+
 def run_startup_sync():
     print("────────────── NSE STARTUP SYNC ──────────────\n")
     init_db()
@@ -296,8 +426,8 @@ def run_startup_sync():
     today    = datetime.today().strftime("%Y-%m-%d")
 
     # ── Phase 1: Download ─────────────────────────────────────────────────
-    backward, forward = _split_directional(manifest, SYNC_START_DATE, today)
-    total = len(backward) + len(forward)
+    backward, retry, forward = _split_directional(manifest, SYNC_START_DATE, today)
+    total = len(backward) + len(retry) + len(forward)
     print(f"Found {total} missing dates.\n" if total else "✓ No missing dates.\n")
 
     date_key_statuses: dict[str, dict[str, str]] = {}
@@ -314,6 +444,12 @@ def run_startup_sync():
                                     initial_saturated=initial_saturated)
         save_manifest(manifest)
         manifest = load_manifest()
+
+    if retry:
+            manifest = _retry_historical_dates(retry, manifest)
+
+    save_manifest(manifest)
+    manifest = load_manifest()
 
     if forward:
         manifest = _download_phase(forward, manifest, date_key_statuses)
