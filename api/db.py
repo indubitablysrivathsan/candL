@@ -257,10 +257,12 @@ CREATE TABLE IF NOT EXISTS options_analytics (
     ticker          VARCHAR     NOT NULL,
     expiry          DATE        NOT NULL,
     trade_date      DATE        NOT NULL,
-    pe_oi           DOUBLE,
-    ce_oi           DOUBLE,
-    pcr             DOUBLE,
-    max_pain        DOUBLE,
+
+    underlying_price        DOUBLE,
+    pe_oi                   DOUBLE,
+    ce_oi                   DOUBLE,
+    pcr                     DOUBLE,
+    max_pain                DOUBLE,
     PRIMARY KEY (instrument_type, ticker, expiry, trade_date)
 );
  
@@ -269,6 +271,8 @@ CREATE TABLE IF NOT EXISTS futures_analytics (
     ticker          VARCHAR     NOT NULL,
     expiry          DATE        NOT NULL,
     trade_date      DATE        NOT NULL,
+
+    underlying_price  DOUBLE,
 
     chng_in_price     DOUBLE,
     chng_price_per    DOUBLE,

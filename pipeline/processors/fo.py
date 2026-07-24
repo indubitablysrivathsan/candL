@@ -1,4 +1,5 @@
 """
+fo.py
 FO bhavcopy processor
 → instruments, market_data_daily, options_analytics, futures_analytics
 
@@ -207,6 +208,7 @@ def _compute_futures_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
         rows.append((
             str(r["instrument_type"]), str(r["ticker"]),
             expiry, pd.to_datetime(trade_date).date(),
+            underlying,
             chng_price, chng_price_p, chng_oi_p,
             quadrant, basis, coc, choivr, dte,
         ))
@@ -217,6 +219,7 @@ def _compute_futures_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
 
 _FUTURES_COLS = [
     "instrument_type", "ticker", "expiry", "trade_date",
+    "underlying_price",
     "chng_in_price", "chng_price_per", "chng_oi_per",
     "quadrant", "basis", "cost_of_carry", "choi_volume_ratio", "days_to_expiry",
 ]
@@ -228,9 +231,20 @@ def _write_futures_rows(conn: duckdb.DuckDBPyConnection, rows: list[tuple]):
     conn.register("_futures_stage", df)
     try:
         conn.execute("""
-            INSERT INTO futures_analytics
-            SELECT * FROM _futures_stage
+            INSERT INTO futures_analytics (
+                instrument_type, ticker, expiry, trade_date,
+                underlying_price,
+                chng_in_price, chng_price_per, chng_oi_per,
+                quadrant, basis, cost_of_carry, choi_volume_ratio, days_to_expiry
+            )
+            SELECT
+                instrument_type, ticker, expiry, trade_date,
+                underlying_price,
+                chng_in_price, chng_price_per, chng_oi_per,
+                quadrant, basis, cost_of_carry, choi_volume_ratio, days_to_expiry
+            FROM _futures_stage
             ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
+                underlying_price   = excluded.underlying_price,
                 chng_in_price      = excluded.chng_in_price,
                 chng_price_per     = excluded.chng_price_per,
                 chng_oi_per        = excluded.chng_oi_per,
@@ -282,8 +296,9 @@ def _compute_options_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
                 FinInstrmTp AS instrument_type, TckrSymb AS ticker,
                 TRY_CAST(XpryDt AS DATE) AS expiry,
                 TRY_CAST(TradDt AS DATE) AS trade_date,
+                AVG(TRY_CAST(UndrlygPric AS DOUBLE)) AS underlying_price,
                 SUM(CASE WHEN OptnTp='PE' THEN TRY_CAST(OpnIntrst AS DOUBLE) ELSE 0 END) AS pe_oi,
-                SUM(CASE WHEN OptnTp='CE' THEN TRY_CAST(OpnIntrst AS DOUBLE) ELSE 0 END) AS ce_oi,
+                SUM(CASE WHEN OptnTp='CE' THEN TRY_CAST(OpnIntrst AS DOUBLE) ELSE 0 END) AS ce_oi
             FROM _opt_stage
             GROUP BY FinInstrmTp, TckrSymb, TRY_CAST(XpryDt AS DATE), TRY_CAST(TradDt AS DATE)
         """).df()
@@ -315,6 +330,7 @@ def _compute_options_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
         rows.append((
             str(r["instrument_type"]), str(r["ticker"]),
             r["expiry"], r["trade_date"],
+            r["underlying_price"],
             r["pe_oi"], r["ce_oi"], r["pcr"],
             None if (isinstance(mp, float) and np.isnan(mp)) else mp,
         ))
@@ -325,6 +341,7 @@ def _compute_options_rows(df: pd.DataFrame, trade_date: str) -> list[tuple]:
 
 _OPTIONS_COLS = [
     "instrument_type", "ticker", "expiry", "trade_date",
+    "underlying_price",
     "pe_oi", "ce_oi", "pcr", "max_pain",
 ]
 
@@ -335,9 +352,18 @@ def _write_options_rows(conn: duckdb.DuckDBPyConnection, rows: list[tuple]):
     conn.register("_options_stage", df)
     try:
         conn.execute("""
-            INSERT INTO options_analytics
-            SELECT * FROM _options_stage
+            INSERT INTO options_analytics (
+                instrument_type, ticker, expiry, trade_date,
+                underlying_price,
+                pe_oi, ce_oi, pcr, max_pain
+            )
+            SELECT
+                instrument_type, ticker, expiry, trade_date,
+                underlying_price,
+                pe_oi, ce_oi, pcr, max_pain
+            FROM _options_stage
             ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
+                underlying_price = excluded.underlying_price,
                 pe_oi    = excluded.pe_oi,
                 ce_oi    = excluded.ce_oi,
                 pcr      = excluded.pcr,
