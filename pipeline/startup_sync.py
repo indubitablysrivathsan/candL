@@ -48,32 +48,62 @@ processors. Before LEGACY_CUTOFF, they route to "fo_legacy" and
 either way — only the processor function called differs.
 
 Download-side availability (Phase 1): the set of missing dates is split
-into two independently-walked directional runs relative to the dates
-already present in the manifest:
+into three independently-walked runs relative to the dates already
+present in the manifest:
 
   - BACKWARD: missing dates older than the earliest manifest date,
     walked in DESCENDING order (closest to existing data first, marching
     down toward SYNC_START_DATE last).
+  - RETRY: missing dates INSIDE the existing manifest range
+    (manifest_min <= d < manifest_max) — holes: rows that were deleted,
+    or dates that were never written despite newer and older dates
+    existing. Kept OUT of directional streak/saturation logic entirely —
+    a hole isn't evidence about "when did this file type stop/start
+    existing", it's just a gap that needs a plain retry.
   - FORWARD: missing dates from the latest manifest date onward
     (including any in-range gaps and "today"), walked in ASCENDING order.
 
+Any date whose dl_cols are ALL already resolved (1 or -1) is dropped
+before any of the three groups are built, regardless of what
+get_missing_dates reports — such a date has nothing left for the
+download phase to do; if it's still incomplete, that's a processing-side
+gap (deferred pr flags), not a download one, and re-walking it here would
+just produce misleading "Download ok" noise for a date that was never
+actually re-downloaded.
+
 Each direction keeps its own independent, per-download-key rolling streak
-of consecutive non-"complete" results (market_closed/failed). Once a
+of consecutive real misses. "market_closed" results do NOT feed this
+streak — a known-good non-error outcome (the exchange was shut) is not
+evidence a file type stopped existing, and a run of consecutive holidays
+must never trip -1 saturation. Only genuine failures count. Once a real
 streak reaches STREAK_THRESHOLD (10) within a direction, the entire
-streak so far — including earlier dates in that same direction's walk
-already written with a "market_closed"/"failed" status — is rewritten to
-dl_col = NOT_AVAILABLE (-1), that date's aggregate `status` is recomputed
-(not_available counts as an ok/complete outcome), and the key is marked
-"saturated" for the remainder of that direction's walk: every further
-date is immediately written -1 for that key with no real request and no
-repeated log line. A "complete" result resets the streak and clears
-saturation for that key. Saturation and streak state do NOT carry across
-the backward/forward boundary — they are separate walks answering
-separate questions ("when did this file type start existing" vs "did it
-stop existing recently"). -1 rows are skipped on future runs (never
-re-attempted) exactly like already-downloaded (1) rows are skipped, just
-via a different branch. Dates already present in the manifest are never
-part of `missing` at all, so a fresh run never re-downloads them.
+streak so far is rewritten to dl_col = NOT_AVAILABLE (-1), and the key is
+marked "saturated" for the remainder of that direction's walk: every
+further date is immediately written -1 for that key with no real
+request and no repeated log line. A "complete" result resets the streak
+and clears saturation for that key. Saturation and streak state do NOT
+carry across the backward/forward boundary — they are separate walks
+answering separate questions ("when did this file type start existing"
+vs "did it stop existing recently"). -1 rows are skipped on future runs
+(never re-attempted) exactly like already-downloaded (1) rows are
+skipped, just via a different branch. A day that's simply market_closed
+is left at dl_col=0 (never attempted, nothing to attempt) — this is what
+gives closed stretches their visually distinct "wall of zeros" in the
+manifest, separate from both real 1s and real -1s.
+
+STATUS OWNERSHIP:
+`status` is owned entirely by the processing phase, with one exception:
+download phase may stamp "market_closed" (NSE simply had no session that
+day — nothing will ever be processed for it, so processing can't derive
+this after the fact from pr flags, which won't exist). Download phase
+never writes "complete" / "partial" / "failed" — a day being fully
+downloaded says nothing about whether it's been processed. Those three
+values are written only by _recompute_status_after_processing, which
+aggregates over the row's pr_* columns once they've been touched by
+processing, treating NOT_AVAILABLE (-1) as an ok/closed outcome same as
+"1", and leaving status untouched if all pr_cols are still pending (0/2)
+— we don't overwrite market_closed and we don't invent a verdict before
+there's anything to aggregate.
 """
 
 from datetime import datetime
@@ -94,13 +124,13 @@ from config import SYNC_START_DATE
 _PIPELINE = [
     ("fo_contracts", "fo_contracts_dl", ["fo_contracts_pr"], ["FO_CONTRACT"]),
     ("cm_security",  "cm_security_dl",  ["cm_security_pr"],  ["CM_SECURITY"]),
-    ("fo",           "fo_dl",           ["stf_pr", "idf_pr", "sto_pr", "ido_pr"], ["STF", "IDF", "STO", "IDO"]),
     ("cm_bhav",      "cm_bhav_dl",      ["cm_bhav_pr"],      ["cm_bhav"]),
     ("eq_bhav",      "eq_bhav_dl",      ["eq_bhav_pr"],      ["eq_bhav"]),
+    ("mkt_act",      "mkt_act_dl",      ["mkt_act_pr"],      ["mkt_act"]),
+    ("fo",           "fo_dl",           ["stf_pr", "idf_pr", "sto_pr", "ido_pr"], ["STF", "IDF", "STO", "IDO"]),
     ("fii",          "fii_dl",          ["fii_pr"],          ["fii"]),
     ("participant",  "part_oi_dl",      ["part_oi_pr"],      ["part_oi", "part_vol"]),
     ("fo_volt",      "fo_volt_dl",      ["fo_volt_pr"],      ["fo_volt"]),
-    ("mkt_act",      "mkt_act_dl",      ["mkt_act_pr"],      ["mkt_act"]),
 ]
 
 # processor keys that also require a second dl flag before processing
@@ -127,6 +157,9 @@ MASTER_START_DATE = "2024-02-05"
 NOT_AVAILABLE = -1
 # sentinel: downloaded, waiting on a confirming next trading date
 DEFERRED = 2
+
+FAILED = 3
+MAX_RETRIES = 3
 
 
 def _flag(manifest: pd.DataFrame, trade_date: str, col: str) -> int:
@@ -158,20 +191,61 @@ def _resolve_proc_key(proc_key: str, trade_date: str) -> str:
     return proc_key
 
 
-def _aggregate_status(statuses: dict) -> str:
-    ok_statuses     = ("complete", "already", "not_available")
+def _is_market_closed(statuses: dict) -> bool:
+    """A day is market_closed only if every download key came back
+    market_closed or not_available — i.e. NSE had nothing to publish."""
     closed_statuses = ("market_closed", "not_available")
-    all_closed = all(s in closed_statuses for s in statuses.values())
-    all_ok     = all(s in ok_statuses for s in statuses.values())
-    any_ok     = any(s in ok_statuses for s in statuses.values())
-    if all_closed:
-        return "market_closed"
-    elif all_ok:
-        return "complete"
-    elif any_ok:
-        return "partial"
+    return bool(statuses) and all(s in closed_statuses for s in statuses.values())
+
+
+def _recompute_status_after_processing(manifest: pd.DataFrame, trade_date: str) -> pd.DataFrame:
+    """Re-aggregate `status` from pr_* flags after a processing write.
+    NOT_AVAILABLE counts as an ok/closed outcome, same rule the download
+    phase used to apply to dl_* flags. market_closed is sticky — a closed
+    day has no real pr work to do and is never touched here. If every
+    pr_col is still pending (0/2), status is left as-is rather than
+    invented early."""
+    row = manifest[manifest["trade_date"] == trade_date]
+    if not len(row):
+        return manifest
+    row = row.iloc[0]
+
+    if row.get("status") == "market_closed":
+        return manifest
+
+    pr_cols = [c for c in _FLAG_COLS if c.endswith("_pr") and c in row.index]
+    if not pr_cols:
+        return manifest
+
+    vals = [row[c] for c in pr_cols]
+    ok_vals = (1, NOT_AVAILABLE)
+
+    if all(v in ok_vals for v in vals):
+        new_status = "complete"
+    elif all(v in ok_vals or v == FAILED for v in vals) and any(v == FAILED for v in vals):
+        new_status = "failed"
+    elif any(v in ok_vals for v in vals):
+        new_status = "partial"
     else:
-        return "failed"
+        return manifest  # still all pending (0/2) — nothing to say yet
+
+    if new_status != row.get("status"):
+        manifest = _set(manifest, trade_date, status=new_status)
+    return manifest
+
+
+def _all_dl_resolved(manifest: pd.DataFrame, trade_date: str) -> bool:
+    """True if every download key for this date is already settled (1 or
+    -1) — nothing left for the downloader to do. get_missing_dates can
+    surface a date as "missing" for reasons unrelated to dl flags (e.g.
+    it isn't fully processed yet), but that's a processing-phase concern,
+    not a download-phase one — the downloader must never be invoked for
+    a date it already fully resolved."""
+    for entry in DOWNLOAD_REGISTRY.values():
+        dl_col = entry["manifest_col"]
+        if _flag(manifest, trade_date, dl_col) not in (1, DL_NOT_AVAILABLE):
+            return False
+    return True
 
 
 def _split_directional(manifest: pd.DataFrame, sync_start: str, today: str) -> tuple[list[str], list[str], list[str]]:
@@ -181,17 +255,22 @@ def _split_directional(manifest: pd.DataFrame, sync_start: str, today: str) -> t
         walked DESCENDING (closest to existing data first, marching down
         toward sync_start last).
       - retry: existing in-range dates (between manifest_min and
-        manifest_max) whose status is partial/failed — historical holes,
-        kept OUT of directional streak/saturation logic.
+        manifest_max) that are missing — historical holes, kept OUT of
+        directional streak/saturation logic.
       - forward: dates from the latest existing manifest date onward,
         walked ASCENDING.
     If the manifest is empty there is no frontier to be backward/forward
     *from* — the whole range is a single forward walk.
+
+    Dates already fully resolved on the dl side (_all_dl_resolved) are
+    filtered out before the split, regardless of what get_missing_dates
+    reports — see module docstring.
     """
     def _key(d: str) -> datetime:
         return datetime.strptime(d, "%Y-%m-%d")
 
-    all_missing = get_missing_dates(manifest, sync_start, today)
+    all_missing = [d for d in get_missing_dates(manifest, sync_start, today)
+                   if not _all_dl_resolved(manifest, d)]
     existing = manifest["trade_date"].tolist()
 
     if not existing:
@@ -209,12 +288,16 @@ def _split_directional(manifest: pd.DataFrame, sync_start: str, today: str) -> t
 
 
 def _download_phase(dates: list[str], manifest: pd.DataFrame,
-                     date_key_statuses: dict,
+                     date_key_statuses: dict, today: str,
                      initial_saturated: dict[str, bool] | None = None) -> pd.DataFrame:
     """Walk `dates` in the order given, with its own independent per-key
     miss-streak/saturation tracking. Direction is entirely determined by
     the order of `dates` as passed in — this function doesn't know or
     care whether it's walking backward or forward.
+
+    Writes only dl_* flags and, when every key for the day resolves to
+    market_closed/not_available, the sticky "market_closed" status.
+    Otherwise `status` is left untouched here for the processing phase.
 
     `initial_saturated` lets a caller seed a key as already-saturated
     before the walk starts — used when a prior run already proved a key
@@ -265,6 +348,15 @@ def _download_phase(dates: list[str], manifest: pd.DataFrame,
                 statuses[dl_key] = "complete"
                 continue
 
+            if result == "market_closed":
+                # Known-good non-error outcome — the exchange was shut,
+                # not evidence this file type stopped existing. Leave
+                # dl_col at 0 (never downloaded because there was nothing
+                # to download) and don't touch the miss streak — a run of
+                # consecutive holidays must never trip -1 saturation.
+                statuses[dl_key] = "market_closed"
+                continue
+
             statuses[dl_key] = result
             miss_streaks[dl_key].append(trade_date)
 
@@ -276,51 +368,65 @@ def _download_phase(dates: list[str], manifest: pd.DataFrame,
                         manifest = _set(manifest, missed_date, **{dl_col: DL_NOT_AVAILABLE})
                         if missed_date in date_key_statuses:
                             date_key_statuses[missed_date][dl_key] = "not_available"
-                            manifest = _set(manifest, missed_date,
-                                             status=_aggregate_status(date_key_statuses[missed_date]))
                 print(f"  ~ [{dl_key}] {STREAK_THRESHOLD}+ consecutive misses through {trade_date} "
                       f"— marking stretch as not-available")
                 statuses[dl_key] = "not_available"
                 saturated[dl_key] = True
 
         date_key_statuses[trade_date] = statuses
-        status = _aggregate_status(statuses)
-        updates["status"] = status
-        symbol = "✓" if status == "complete" else "✗" if status == "failed" else "~"
-        print(f"{symbol} Download {status}: {trade_date}")
+
+        all_ok = all(s in ("complete", "already", "not_available") for s in statuses.values())
+        any_ok = any(s in ("complete", "already", "not_available") for s in statuses.values())
+        is_failed_today = (trade_date == today) and not any_ok
+
+        if is_failed_today:
+            # Nothing published for today yet (pre-close, or NSE hasn't
+            # uploaded). No manifest row exists yet for this date and we
+            # deliberately don't create one here.
+            print(f"~ Current day pending NSE upload / market closed: {trade_date}")
+            continue
+
+        if _is_market_closed(statuses):
+            symbol, label = "~", "market_closed"
+            updates["status"] = "market_closed"
+        elif all_ok:
+            symbol, label = "✓", "ok"
+        elif any_ok:
+            symbol, label = "~", "partial"
+        else:
+            symbol, label = "✗", "failed"
+        print(f"{symbol} Download {label}: {trade_date}")
+
         manifest = _set(manifest, trade_date, **updates)
 
     return manifest
 
 
-def _retry_historical_dates(dates: list[str], manifest: pd.DataFrame,) -> pd.DataFrame:
+def _retry_historical_dates(dates: list[str], manifest: pd.DataFrame) -> pd.DataFrame:
     """
-    Retry unresolved download flags on existing historical partial/failed rows.
+    Retry unresolved download flags on existing historical holes.
 
-    Historical holes are handled independently from directional saturation:
       - existing 1  -> already available, skip
       - existing -1 -> already known unavailable, skip
       - existing 0  -> retry download, up to MAX_RETRIES attempts
 
-    If a retry succeeds (within MAX_RETRIES attempts):
-      - set dl flag to 1
+    If a retry succeeds: dl flag -> 1.
+    If a retry confirms market_closed: leave dl flag at 0 (not a
+    failure, don't burn remaining attempts, don't write -1 — same rule
+    as the directional walk).
+    If all MAX_RETRIES attempts genuinely fail: dl flag -> -1
+    (not_available) — MAX_RETRIES attempts is treated as proof the file
+    is gone, same conclusion the directional streak logic reaches via 10
+    consecutive misses, just reached immediately since these are known
+    historical gaps rather than an unknown frontier.
 
-    If all MAX_RETRIES attempts fail:
-      - set dl flag to -1 (not_available)
-      - this is the one case where retry logic is allowed to write -1,
-        since MAX_RETRIES attempts is treated as proof the file is gone,
-        same conclusion the directional streak logic reaches via 10
-        consecutive misses — just reached immediately instead of over
-        multiple runs, since these are known historical gaps rather than
-        an unknown frontier.
+    Dates where every key was already resolved (1/-1) are not logged at
+    all — nothing was actually retried, so a log line would be noise.
     """
-    MAX_RETRIES = 3
-
     for trade_date in dates:
         statuses = {}
         updates = {}
-
-        print(f"~ Retry historical: {trade_date}")
+        attempted = False
 
         for dl_key, entry in DOWNLOAD_REGISTRY.items():
             dl_col = entry["manifest_col"]
@@ -336,6 +442,7 @@ def _retry_historical_dates(dates: list[str], manifest: pd.DataFrame,) -> pd.Dat
 
             # existing == 0: retry unresolved historical file, up to
             # MAX_RETRIES attempts, before giving up on it for good.
+            attempted = True
             result = None
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
@@ -348,7 +455,7 @@ def _retry_historical_dates(dates: list[str], manifest: pd.DataFrame,) -> pd.Dat
                     )
                     raise
 
-                if result == "complete":
+                if result in ("complete", "market_closed"):
                     break
 
                 print(
@@ -359,6 +466,11 @@ def _retry_historical_dates(dates: list[str], manifest: pd.DataFrame,) -> pd.Dat
             if result == "complete":
                 updates[dl_col] = 1
                 statuses[dl_key] = "complete"
+            elif result == "market_closed":
+                # Confirmed closed on first sight — not a failure, don't
+                # burn remaining retries and don't write -1. dl_col stays
+                # 0, same as any other closed day.
+                statuses[dl_key] = "market_closed"
             else:
                 # Exhausted all retries — proven unavailable, write -1
                 # so future runs skip it like any other saturated date.
@@ -369,54 +481,33 @@ def _retry_historical_dates(dates: list[str], manifest: pd.DataFrame,) -> pd.Dat
                     f"{MAX_RETRIES} retries — marking not-available"
                 )
 
-        # Apply flag updates (both successes -> 1, and exhausted -> -1).
-        if updates:
-            manifest = _set(
-                manifest,
-                trade_date,
-                **updates,
-            )
+        if not attempted:
+            # Every dl_col for this date was already 1 or -1 — nothing to
+            # retry, this date only showed up because get_missing_dates
+            # flags it on some other basis (e.g. unprocessed rows). Don't
+            # log it as a retry.
+            continue
 
-        # Recompute aggregate status using the final manifest flags.
-        final_statuses = {}
+        if _is_market_closed(statuses):
+            updates["status"] = "market_closed"
 
-        for dl_key, entry in DOWNLOAD_REGISTRY.items():
-            dl_col = entry["manifest_col"]
-            value = _flag(manifest, trade_date, dl_col)
+        manifest = _set(manifest, trade_date, **updates)
 
-            if value == 1:
-                final_statuses[dl_key] = "complete"
-            elif value == DL_NOT_AVAILABLE:
-                final_statuses[dl_key] = "not_available"
-            else:
-                # Still 0 — shouldn't normally happen anymore since every
-                # key above now resolves to either 1 or -1, but fall back
-                # safely just in case a key was skipped for some reason.
-                final_statuses[dl_key] = statuses.get(
-                    dl_key,
-                    "failed",
-                )
-
-        status = _aggregate_status(final_statuses)
-
-        manifest = _set(
-            manifest,
-            trade_date,
-            status=status,
-        )
-
-        symbol = (
-            "✓" if status == "complete"
-            else "✗" if status == "failed"
-            else "~"
-        )
-
-        print(
-            f"{symbol} Historical retry "
-            f"{status}: {trade_date}"
-        )
+        all_ok = all(s in ("complete", "already", "not_available") for s in statuses.values())
+        any_ok = any(s in ("complete", "already", "not_available") for s in statuses.values())
+        if _is_market_closed(statuses):
+            symbol, label = "~", "market_closed"
+        elif all_ok:
+            symbol, label = "✓", "ok"
+        elif any_ok:
+            symbol, label = "~", "partial"
+        else:
+            symbol, label = "✗", "failed"
+        print(f"~ Retry historical: {trade_date}")
+        print(f"{symbol} Historical retry {label}: {trade_date}")
 
     return manifest
+
 
 def run_startup_sync():
     print("────────────── NSE STARTUP SYNC ──────────────\n")
@@ -440,19 +531,18 @@ def run_startup_sync():
                 dl_col = entry["manifest_col"]
                 if _flag(manifest, frontier_date, dl_col) == DL_NOT_AVAILABLE:
                     initial_saturated[dl_key] = True
-        manifest = _download_phase(backward, manifest, date_key_statuses,
+        manifest = _download_phase(backward, manifest, date_key_statuses, today,
                                     initial_saturated=initial_saturated)
         save_manifest(manifest)
         manifest = load_manifest()
 
     if retry:
-            manifest = _retry_historical_dates(retry, manifest)
-
-    save_manifest(manifest)
-    manifest = load_manifest()
+        manifest = _retry_historical_dates(retry, manifest)
+        save_manifest(manifest)
+        manifest = load_manifest()
 
     if forward:
-        manifest = _download_phase(forward, manifest, date_key_statuses)
+        manifest = _download_phase(forward, manifest, date_key_statuses, today)
 
     save_manifest(manifest)
 
@@ -485,6 +575,7 @@ def run_startup_sync():
             for file_date in candidates:
                 if file_date < MASTER_START_DATE:
                     manifest = _set(manifest, file_date, **{pr_col: NOT_AVAILABLE})
+                    manifest = _recompute_status_after_processing(manifest, file_date)
                     continue
                 eff = get_next_confirmed_trading_date(manifest, file_date)
                 if eff is not None:
@@ -494,23 +585,38 @@ def run_startup_sync():
                     manifest = _set(manifest, file_date, **{pr_col: DEFERRED})
             candidates = kept
         else:
-            # candidates here are the file's own trade_date. Need the PREVIOUS
-            # trading date's masters to already be processed — but only once
-            # masters exist at all. If the previous trading date predates
-            # MASTER_START_DATE there's nothing to wait for, so skip the gate.
+            # candidates here are the file's own trade_date. Need the PREVIOUS trading date's masters to already be processed 
+            # but only once masters exist at all.
+            # If the previous trading date predates MASTER_START_DATE there's nothing to wait for, so skip the gate.
+            # Additionally legacy fo has a dependency on cm bhav, eq bhav and mkt act
             kept = []
             for d in candidates:
                 prev = get_previous_trading_date(manifest, d)
                 if d < MASTER_START_DATE:
-                    kept.append(d)
+                    pass
                 elif (
                     prev is not None
                     and _flag(manifest, prev, "fo_contracts_pr") == 1
                     and _flag(manifest, prev, "cm_security_pr") == 1
                 ):
-                    kept.append(d)
+                    pass
                 else:
                     manifest = _set(manifest, d, **{pr_col: DEFERRED})
+                    continue
+
+                if proc_key == "fo" and d < LEGACY_CUTOFF:
+                    resolved = {1, NOT_AVAILABLE, FAILED}
+                    ok = (
+                        _flag(manifest, d, "cm_bhav_pr") in resolved
+                        and _flag(manifest, d, "mkt_act_pr") in resolved
+                        and (prev is None or _flag(manifest, prev, "cm_bhav_pr") in resolved)
+                        and (prev is None or _flag(manifest, prev, "mkt_act_pr") in resolved)
+                    )
+                    if not ok:
+                        manifest = _set(manifest, d, **{pr_col: DEFERRED})
+                        continue
+
+                kept.append(d)
             candidates = kept
 
         for trade_date in sorted(candidates):
@@ -527,6 +633,7 @@ def run_startup_sync():
                 if extra_pr:
                     updates[extra_pr] = 1
                 manifest = _set(manifest, trade_date, **updates)
+                manifest = _recompute_status_after_processing(manifest, trade_date)
                 continue
             try:
                 if is_master:
@@ -539,6 +646,7 @@ def run_startup_sync():
                     if extra_pr:
                         updates[extra_pr] = 1
                     manifest = _set(manifest, trade_date, **updates)
+                    manifest = _recompute_status_after_processing(manifest, trade_date)
                 else:
                     print(f"  ⚠ {proc_key} {trade_date}: DB check incomplete after processing")
             except FileNotFoundError as e:
@@ -548,3 +656,7 @@ def run_startup_sync():
 
     save_manifest(manifest)
     print("\n✓ Startup sync complete.\n")
+
+
+if __name__ == "__main__":
+    run_startup_sync()

@@ -85,6 +85,7 @@ import numpy as np
 import pandas as pd
 import duckdb
 from pathlib import Path
+import yfinance as yf
 
 from config import FO_LEGACY_RAW_ROOT, NSE_DB_PATH
 from api.db import get_conn, is_processed
@@ -109,18 +110,30 @@ _LEGACY_TYPE_MAP = {
 
 _LEGACY_DATE_FMT = "%d-%b-%Y"
 
-# F&O index ticker -> market_activity_index.index_name, as written by
-# mkt_act.py from NSE's MA*.csv (column-1 display names, not tickers).
-# Extend as you hit new FUTIDX/OPTIDX underlyings.
+# F&O index ticker -> market_activity_index.index_name, as written by mkt_act.py from NSE's MA*.csv (column-1 display names, not tickers).
 _INDEX_NAME_MAP = {
-    "NIFTY": "Nifty 50",
-    "BANKNIFTY": "Nifty Bank",
-    "NIFTYIT": "Nifty IT",
-    "NIFTYNXT50": "Nifty Next 50",
-    "MIDCPNIFTY": "Nifty Midcap 50",
+    "NIFTY": "NIFTY 50",
+    "BANKNIFTY": "NIFTY BANK",
+    "FINNIFTY": "NIFTY FIN SERVICE",
+    "MIDCPNIFTY": "NIFTY MID SELECT",
+    "NIFTYIT": "NIFTY IT",
+    "NIFTYINFRA": "NIFTY INFRA",
+    "NIFTYPSE": "NIFTY PSE",
+    "NIFTYCPSE": "NIFTY CPSE",
+    "NIFTYNXT50": "NIFTY NEXT 50",
+    "NIFTYMID50": "NIFTY MIDCAP 50",
 }
-# Foreign indices NSE's MA*.csv never carries — expected gap, not a bug.
-_KNOWN_UNMAPPED_INDICES = {"DJIA", "FTSE100"}
+# NSE F&O index ticker -> Yahoo Finance ticker, for foreign indices that never appear in NSE's own market_activity_index (MA*.csv).
+# Both US indices settle ~01:30 IST and FTSE settles ~20:30 IST — i.e. AFTER NSE's 15:30 IST close, for the same calendar trade_date.
+# So we always want the PRIOR completed session's close, never same-day — same-day data literally doesn't exist yet at NSE-close time.
+# This is why the lookup below is strict_before=True unconditionally, unlike the DB-backed indices which try exact-date first.
+_YF_INDEX_MAP = {
+    "S&P500": "^GSPC",
+    "DJIA": "^DJI",
+    "FTSE100": "^FTSE",
+}
+
+_UNMAPPED_INDICES = set()
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -170,13 +183,22 @@ def fetch_reference_data(conn, trade_date: str, fut_instr: pd.DataFrame,
         ).fetchall())
 
         for ticker in idx_tickers:
-            if ticker in _KNOWN_UNMAPPED_INDICES:
+            if ticker in _UNMAPPED_INDICES:
                 continue
+
+            if ticker in _YF_INDEX_MAP:
+                price = _yf_nearest_close_before(_YF_INDEX_MAP[ticker], trade_date)
+                if price is None:
+                    missing.append(f"IDF/IDO:{ticker} (yfinance {_YF_INDEX_MAP[ticker]}, no close before {trade_date})")
+                    continue
+                underlying[("IDF", ticker)] = price
+                underlying[("IDO", ticker)] = price
+                continue
+
             name = _INDEX_NAME_MAP.get(ticker)
             if name is None:
                 missing.append(f"IDF/IDO:{ticker} (no entry in _INDEX_NAME_MAP)")
                 continue
-
             price = idx_today.get(name)
             if price is None:
                 price = _nearest_on_or_before(
@@ -227,6 +249,220 @@ def fetch_reference_data(conn, trade_date: str, fut_instr: pd.DataFrame,
             # module docstring. It's genuinely absent for most legacy dates.
 
     return {"underlying": underlying, "prior_close": prior_close, "lot_size": lot_size}
+
+
+def fetch_reference_data_batch(conn, date_inputs: dict) -> dict:
+    """
+    Batched sibling of fetch_reference_data(), for the parallel backfill
+    path only. Does NOT replace fetch_reference_data() — that stays as-is
+    for the sequential startup_sync.process() path.
+
+    date_inputs: {trade_date: (fut_instr, tickers)} for every legacy-fo
+    date in the current round.
+
+    Issues a small constant number of queries for the whole round instead
+    of one query per ticker per date, then resolves "exact date, else
+    nearest existing prior" per date in pandas. Returns
+    {trade_date: reference_dict} — same shape fetch_reference_data()
+    returns, so compute() doesn't care which path produced it.
+    """
+    if not date_inputs:
+        return {}
+
+    dates = sorted(date_inputs.keys())
+    max_date = dates[-1]
+
+    idx_tickers, stk_tickers, fut_keys = set(), set(), set()
+    for trade_date, (fut_instr, tickers) in date_inputs.items():
+        idx_tickers |= tickers.get("IDF", set()) | tickers.get("IDO", set())
+        stk_tickers |= tickers.get("STF", set()) | tickers.get("STO", set())
+        if not fut_instr.empty:
+            fut_keys |= set(fut_instr["instrument_key"])
+
+    yf_tickers_needed = sorted(t for t in idx_tickers if t in _YF_INDEX_MAP)
+    yf_hist = _yf_history_batch(
+        [_YF_INDEX_MAP[t] for t in yf_tickers_needed], dates[0], dates[-1],
+    ) if yf_tickers_needed else {}
+
+    idx_hist = pd.DataFrame(columns=["index_name", "trade_date", "close"])
+    idx_names_needed = {
+        t: _INDEX_NAME_MAP[t] for t in idx_tickers
+        if t in _INDEX_NAME_MAP and t not in _YF_INDEX_MAP
+    }
+    if idx_names_needed:
+        names = list(set(idx_names_needed.values()))
+        idx_hist = conn.execute(f"""
+            SELECT index_name, trade_date, close
+            FROM market_activity_index
+            WHERE index_name IN ({",".join("?" * len(names))})
+              AND trade_date <= ?
+            ORDER BY index_name, trade_date
+        """, names + [max_date]).df()
+
+    if not idx_hist.empty:
+        idx_hist["trade_date"] = pd.to_datetime(idx_hist["trade_date"]).dt.date
+
+    mdd_keys = {make_instrument_key("STK", t, None, None, None, "EQ") for t in stk_tickers}
+    mdd_keys |= fut_keys
+
+    mdd_hist = pd.DataFrame(columns=["instrument_key", "trade_date", "close"])
+    if mdd_keys:
+        keys = list(mdd_keys)
+        mdd_hist = conn.execute(f"""
+            SELECT instrument_key, trade_date, close
+            FROM market_data_daily
+            WHERE instrument_key IN ({",".join("?" * len(keys))})
+              AND trade_date <= ?
+            ORDER BY instrument_key, trade_date
+        """, keys + [max_date]).df()
+
+    if not mdd_hist.empty:
+        mdd_hist["trade_date"] = pd.to_datetime(mdd_hist["trade_date"]).dt.date
+
+    # lot_size best-effort — once legacy history runs past where
+    # instrument_contract_daily has rows, this returns nothing for those
+    # keys and lot_size stays None downstream, same as today.
+    lot_hist = pd.DataFrame(columns=["instrument_key", "trade_date", "lot_size"])
+    if fut_keys:
+        keys = list(fut_keys)
+        lot_hist = conn.execute(f"""
+            SELECT instrument_key, trade_date, lot_size
+            FROM instrument_contract_daily
+            WHERE instrument_key IN ({",".join("?" * len(keys))})
+              AND trade_date <= ?
+            ORDER BY instrument_key, trade_date
+        """, keys + [max_date]).df()
+
+    if not lot_hist.empty:
+        lot_hist["trade_date"] = pd.to_datetime(lot_hist["trade_date"]).dt.date
+
+    def _nearest(hist_df, key_col, key_val, date_col, val_col, trade_date, strict_before):
+        sub = hist_df[hist_df[key_col] == key_val]
+        if sub.empty:
+            return None
+        cutoff = pd.to_datetime(trade_date).date()
+        sub = sub[sub[date_col] < cutoff] if strict_before else sub[sub[date_col] <= cutoff]
+        if sub.empty:
+            return None
+        return sub.iloc[-1][val_col]  # sorted ascending by date already
+
+    def _yf_nearest(ticker_nse, trade_date):
+        s = yf_hist.get(_YF_INDEX_MAP[ticker_nse])
+        if s is None or s.empty:
+            return None
+        cutoff = pd.to_datetime(trade_date).date()
+        s = s[s.index < cutoff]  # always strict — see _YF_INDEX_MAP docstring
+        return float(s.iloc[-1]) if not s.empty else None
+
+    out = {}
+    for trade_date, (fut_instr, tickers) in date_inputs.items():
+        underlying, missing = {}, []
+
+        for ticker in (tickers.get("IDF", set()) | tickers.get("IDO", set())):
+            if ticker in _UNMAPPED_INDICES:
+                continue
+
+            if ticker in _YF_INDEX_MAP:
+                price = _yf_nearest(ticker, trade_date)
+                if price is None:
+                    missing.append(f"IDF/IDO:{ticker} (yfinance {_YF_INDEX_MAP[ticker]}, no close before {trade_date})")
+                    continue
+                underlying[("IDF", ticker)] = price
+                underlying[("IDO", ticker)] = price
+                continue
+
+            name = _INDEX_NAME_MAP.get(ticker)
+            if name is None:
+                missing.append(f"IDF/IDO:{ticker} (no entry in _INDEX_NAME_MAP)")
+                continue
+            price = _nearest(idx_hist, "index_name", name, "trade_date", "close", trade_date, False)
+            if price is None:
+                missing.append(f"IDF/IDO:{ticker} (mapped to '{name}', no row on or before {trade_date})")
+                continue
+            underlying[("IDF", ticker)] = price
+            underlying[("IDO", ticker)] = price
+
+        for ticker in (tickers.get("STF", set()) | tickers.get("STO", set())):
+            key = make_instrument_key("STK", ticker, None, None, None, "EQ")
+            price = _nearest(mdd_hist, "instrument_key", key, "trade_date", "close", trade_date, False)
+            if price is None:
+                missing.append(f"STF/STO:{ticker} (key={key}, no CM row on or before {trade_date})")
+                continue
+            underlying[("STF", ticker)] = price
+            underlying[("STO", ticker)] = price
+
+        if missing:
+            raise RuntimeError(
+                f"[fo_legacy] {trade_date}: could not resolve underlying price for "
+                f"{len(missing)} ticker(s):\n  " + "\n  ".join(missing)
+            )
+
+        prior_close, lot_size = {}, {}
+        if not fut_instr.empty:
+            for key in fut_instr["instrument_key"]:
+                prior_close[key] = _nearest(mdd_hist, "instrument_key", key, "trade_date", "close", trade_date, True)
+                lot_size[key] = _nearest(lot_hist, "instrument_key", key, "trade_date", "lot_size", trade_date, False)
+
+        out[trade_date] = {"underlying": underlying, "prior_close": prior_close, "lot_size": lot_size}
+
+    return out
+
+
+def _yf_nearest_close_before(yf_ticker: str, trade_date: str, lookback_days: int = 10):
+    """
+    Nearest close strictly before trade_date for a Yahoo ticker. Always
+    strict — see _YF_INDEX_MAP docstring: these indices settle after NSE's
+    close for the same calendar day, so same-day data isn't real yet.
+    Pulls a short trailing window (not just trade_date - 1) to ride out
+    Yahoo holidays that don't line up with NSE's calendar.
+    """
+    cutoff = pd.to_datetime(trade_date).date()
+    start = cutoff - pd.Timedelta(days=lookback_days)
+    hist = yf.Ticker(yf_ticker).history(
+        start=start.isoformat(), end=cutoff.isoformat(), interval="1d", auto_adjust=True,
+    )
+    if hist.empty:
+        return None
+    hist = hist[hist.index.date < cutoff]
+    if hist.empty:
+        return None
+    return float(hist["Close"].iloc[-1])
+
+
+def _yf_history_batch(yf_tickers: list[str], min_date: str, max_date: str, lookback_days: int = 15) -> dict:
+    """
+    One yfinance pull per ticker (not per date) covering the whole backfill
+    round, mirroring idx_hist/mdd_hist. Returns {yf_ticker: pd.Series of
+    close, indexed by date, sorted ascending}. Empty series (not missing
+    key) if a ticker returns nothing — caller decides what that means.
+    """
+    start = (pd.to_datetime(min_date).date() - pd.Timedelta(days=lookback_days)).isoformat()
+    end = (pd.to_datetime(max_date).date() + pd.Timedelta(days=1)).isoformat()  # yfinance end is exclusive
+
+    out = {}
+    if not yf_tickers:
+        return out
+
+    raw = yf.download(
+        yf_tickers, start=start, end=end, interval="1d",
+        group_by="ticker", auto_adjust=True, progress=False, threads=True,
+    )
+
+    for t in yf_tickers:
+        try:
+            if len(yf_tickers) == 1:
+                # single ticker: yfinance may return flat columns instead of MultiIndex
+                s = raw["Close"] if "Close" in raw.columns else raw[t]["Close"]
+            else:
+                s = raw[t]["Close"]
+        except (KeyError, TypeError):
+            out[t] = pd.Series(dtype="float64")
+            continue
+        s = s.dropna()
+        s.index = pd.to_datetime(s.index).date
+        out[t] = s.sort_index()
+
+    return out
 
 
 def _tickers_by_type(raw: pd.DataFrame) -> dict:

@@ -867,23 +867,46 @@ export default function Futures({ assetType = 'stock_futures' }) {
   }, [assetType]);
 
   useEffect(() => {
-    if (!tickerList.length) return;
+    if (mode !== "screener") return;
+
     let mounted = true;
+
     getExpiries(assetType)
       .then((res) => {
         if (!mounted) return;
+
         const list = res?.expiries || [];
+
         setAllExpiries(list);
-        if (list.length > 0) {
-          setScreenerSelectedExpiry(list[0]);
-          const defaults = list.slice(0, 3);
-          setSelectedExpiries(defaults);
-          if (defaults.length > 0) setActiveExpiry(defaults[0]);
-        }
-      })
-      .catch((err) => console.error('Failed loading expiries', err));
-    return () => { mounted = false; };
-  }, [assetType, tickerList]);
+        setScreenerSelectedExpiry(list[0] || "");
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [assetType, mode]);
+
+  useEffect(() => {
+    if (!selectedTicker || mode !== "expiry") return;
+
+    let mounted = true;
+
+    getExpiries(assetType, selectedTicker)
+      .then((res) => {
+        if (!mounted) return;
+
+        const list = res?.expiries || [];
+
+        setAllExpiries(list);
+
+        setSelectedExpiries(list.slice(0, 3));
+        setActiveExpiry(list[0] || "");
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [assetType, selectedTicker, mode]);
 
   useEffect(() => {
     let mounted = true;
@@ -963,6 +986,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
             <span style={sectionLabel()}>Ticker</span>
             <div style={{ position: 'relative' }}>
               <select
+                disabled={mode === "screener" && screenerTab === "screener"}
                 value={selectedTicker}
                 onChange={(e) => setSelectedTicker(e.target.value)}
                 style={{
@@ -971,6 +995,8 @@ export default function Futures({ assetType = 'stock_futures' }) {
                   outline: 'none', letterSpacing: '0.06em', textTransform: 'uppercase',
                   height: 30, borderRadius: 0, cursor: 'pointer', appearance: 'none',
                   boxSizing: 'border-box',
+                  opacity:
+                    mode === "screener" && screenerTab === "screener" ? 0.5 : 1,
                 }}
               >
                 {displayTickerList.map((t) => (
@@ -1003,7 +1029,7 @@ export default function Futures({ assetType = 'stock_futures' }) {
             <ExpiryDropdown
               expiries={
                 mode === 'screener'
-                  ? screenerTab === 'charts' ? validChartExpiries : allExpiries.slice(0, 6)
+                  ? screenerTab === 'charts' ? validChartExpiries : allExpiries
                   : allExpiries
               }
               selectedExpiries={

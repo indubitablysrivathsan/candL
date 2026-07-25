@@ -8,3 +8,4 @@ pandas
 requests
 pytest
 httpx2
+yfinance==1.5.2

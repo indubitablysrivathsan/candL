@@ -139,7 +139,7 @@ def _parse(path: Path, trade_date: str) -> dict:
             # Real index row
             index_rows.append({
                 "trade_date": trade_date,
-                "index_name": b,
+                "index_name": b.upper().strip(),
                 "prev_close": _float(_col(row, 2)),
                 "open":       _float(_col(row, 3)),
                 "high":       _float(_col(row, 4)),

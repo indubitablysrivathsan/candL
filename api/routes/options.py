@@ -185,18 +185,16 @@ def _make_options_router(asset_type: str) -> APIRouter:
         bars = [
             StrikeBar(
                 strike     = float(s),
-                ce_oi      = _safe_float(ce.loc[s]["OpnIntrst"]       if s in ce.index else 0),
-                pe_oi      = _safe_float(pe.loc[s]["OpnIntrst"]       if s in pe.index else 0),
-                ce_oi_chng = _safe_float(ce.loc[s]["ChngInOpnIntrst"] if s in ce.index else 0),
-                pe_oi_chng = _safe_float(pe.loc[s]["ChngInOpnIntrst"] if s in pe.index else 0),
-                ce_vol     = _safe_float(
-                    (ce.loc[s]["TtlTradgVol"] * ce.loc[s]["NewBrdLotQty"])
-                    if s in ce.index else 0
-                ),
-                pe_vol     = _safe_float(
-                    (pe.loc[s]["TtlTradgVol"] * pe.loc[s]["NewBrdLotQty"])
-                    if s in pe.index else 0
-                ),
+                ce_oi      = _safe_float(ce.loc[s].get("OpnIntrst")) if s in ce.index else None,
+                pe_oi      = _safe_float(pe.loc[s].get("OpnIntrst")) if s in pe.index else None,
+                ce_oi_chng = _safe_float(ce.loc[s].get("ChngInOpnIntrst")) if s in ce.index else None,
+                pe_oi_chng = _safe_float(pe.loc[s].get("ChngInOpnIntrst")) if s in pe.index else None,
+                ce_vol     = float(ce.loc[s]["TtlTradgVol"] * ce.loc[s]["NewBrdLotQty"]) 
+                             if (s in ce.index and pd.notna(ce.loc[s].get("TtlTradgVol")) and pd.notna(ce.loc[s].get("NewBrdLotQty"))) 
+                             else 0.0,
+                pe_vol     = float(pe.loc[s]["TtlTradgVol"] * pe.loc[s]["NewBrdLotQty"]) 
+                             if (s in pe.index and pd.notna(pe.loc[s].get("TtlTradgVol")) and pd.notna(pe.loc[s].get("NewBrdLotQty"))) 
+                             else 0.0,
             )
             for s in sorted(set(ce.index.tolist()) | set(pe.index.tolist()))
         ]

@@ -36,6 +36,8 @@ from typing import Optional
 import pandas as pd
 import duckdb
 
+from api.db import get_conn
+
 LEGACY_CUTOFF = "2024-06-24"
 
 def _is_legacy(trade_date: str) -> bool:
@@ -98,7 +100,7 @@ def _compute_cm_security(file_date: str, trade_date: str) -> dict:
     }
 
 
-def _compute_fo(trade_date: str) -> dict:
+def _compute_fo(trade_date: str, reference: Optional[dict] = None) -> dict:
     from api.db import is_processed
 
     if is_processed(trade_date, "STF") and is_processed(trade_date, "STO"):
@@ -106,10 +108,11 @@ def _compute_fo(trade_date: str) -> dict:
 
     if _is_legacy(trade_date):
         from pipeline.processors import fo_legacy as m
+        result = m.compute(trade_date, reference)
     else:
         from pipeline.processors import fo as m
+        result = m.compute(trade_date)
 
-    result = m.compute(trade_date)
     result["skipped"] = False
     result["_legacy"] = _is_legacy(trade_date)
     return result
@@ -374,9 +377,8 @@ _MASTER_PROCS = {"fo_contracts", "cm_security"}
 
 _WRITE_ORDER = [
     "fo_contracts", "cm_security",
-    "fo", "cm_bhav",
-    "eq_bhav",
-    "fii", "participant", "fo_volt", "mkt_act",
+    "cm_bhav", "eq_bhav", "mkt_act",
+    "fo", "fii", "participant", "fo_volt",
 ]
 
 
@@ -408,27 +410,58 @@ def _run_one(task: dict) -> dict:
     try:
         if key in _MASTER_PROCS:
             result = fn(task["file_date"], task["trade_date"])
+        elif key == "fo":
+            result = fn(task["trade_date"], task.get("reference"))
         else:
             result = fn(task["trade_date"])
         return {"ok": True, "proc": key, "trade_date": task["trade_date"], "result": result}
-    except FileNotFoundError as e:
-        return {"ok": False, "proc": key, "trade_date": task["trade_date"], "error": f"missing: {e}"}
-    except Exception as e:
-        return {"ok": False, "proc": key, "trade_date": task["trade_date"], "error": repr(e)}
+    except (FileNotFoundError, RuntimeError) as e:
+        # genuine data-condition errors — missing file, unresolvable
+        # reference price. Safe to retry / eventually mark FAILED.
+        return {"ok": False, "proc": key, "trade_date": task["trade_date"], "error": f"{type(e).__name__}: {e}"}
+    # anything else (TypeError, KeyError, AttributeError, ImportError, ...)
+    # is a code bug, not a data problem — let it propagate. It will surface
+    # via fut.result() in run_parallel_backfill and stop the run, same as
+    # the downloader's DOWNLOAD CRASH behavior. Do not retry, do not mark
+    # FAILED — that would hide the bug and, worse, get treated as
+    # "resolved" by the legacy-fo dependency gate downstream.
 
 
 def run_parallel_backfill(tasks: list[dict], max_workers: int = 8) -> dict:
-    """tasks: list of {"proc": key, "trade_date": d, "file_date": d (masters only)}"""
-    results = {}  # (trade_date, proc) -> result dict
+    legacy_fo_tasks = [t for t in tasks if t["proc"] == "fo" and _is_legacy(t["trade_date"])]
+    if legacy_fo_tasks:
+        from pipeline.processors import fo_legacy as m
+        date_inputs = {}
+        for t in legacy_fo_tasks:
+            try:
+                raw = m._load(t["trade_date"])
+                raw.columns = raw.columns.str.strip()
+                tickers = m._tickers_by_type(raw)
+                fut_raw = raw[raw["INSTRUMENT"].isin(m._LEGACY_FUT)].copy()
+                _, fut_instr = m._build_instruments(fut_raw)
+                date_inputs[t["trade_date"]] = (fut_instr, tickers)
+            except FileNotFoundError:
+                continue  # let _run_one's own _load() surface this as usual
+
+        if date_inputs:
+            conn = get_conn()
+            try:
+                reference_by_date = m.fetch_reference_data_batch(conn, date_inputs)
+            finally:
+                conn.close()
+            for t in legacy_fo_tasks:
+                if t["trade_date"] in reference_by_date:
+                    t["reference"] = reference_by_date[t["trade_date"]]
+
+    results = {}
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_run_one, t): t for t in tasks}
         for fut in as_completed(futures):
-            r = fut.result()
+            r = fut.result()  # non-data exceptions raise here and abort the run
             results[(r["trade_date"], r["proc"])] = r
             status = "✓" if r["ok"] else f"✗ {r['error']}"
             print(f"[compute] {r['proc']} {r['trade_date']} {status}")
     return results
-
 
 # ── writer: strictly sequential, one long-lived connection ─────────────────
 
@@ -466,6 +499,7 @@ def _write_cm_security(conn, data: dict, d: str):
 
 _FUTURES_COLS = [
     "instrument_type", "ticker", "expiry", "trade_date",
+    "underlying_price",
     "chng_in_price", "chng_price_per", "chng_oi_per",
     "quadrant", "basis", "cost_of_carry", "choi_volume_ratio", "days_to_expiry",
 ]
@@ -479,11 +513,18 @@ def _write_futures_rows_batched(conn, rows: list[tuple]):
         conn.execute("""
             INSERT INTO futures_analytics (
                 instrument_type, ticker, expiry, trade_date,
+                underlying_price,
                 chng_in_price, chng_price_per, chng_oi_per,
                 quadrant, basis, cost_of_carry, choi_volume_ratio, days_to_expiry
             )
-            SELECT * FROM _futures_stage
+            SELECT
+                instrument_type, ticker, expiry, trade_date,
+                underlying_price,
+                chng_in_price, chng_price_per, chng_oi_per,
+                quadrant, basis, cost_of_carry, choi_volume_ratio, days_to_expiry
+            FROM _futures_stage
             ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
+                underlying_price   = excluded.underlying_price,
                 chng_in_price      = excluded.chng_in_price,
                 chng_price_per     = excluded.chng_price_per,
                 chng_oi_per        = excluded.chng_oi_per,
@@ -499,6 +540,7 @@ def _write_futures_rows_batched(conn, rows: list[tuple]):
 
 _OPTIONS_COLS = [
     "instrument_type", "ticker", "expiry", "trade_date",
+    "underlying_price",
     "pe_oi", "ce_oi", "pcr", "max_pain",
 ]
 
@@ -512,14 +554,20 @@ def _write_options_rows_batched(conn, rows: list[tuple]):
         conn.execute("""
             INSERT INTO options_analytics (
                 instrument_type, ticker, expiry, trade_date,
+                underlying_price,
                 pe_oi, ce_oi, pcr, max_pain
             )
-            SELECT * FROM _options_stage
+            SELECT
+                instrument_type, ticker, expiry, trade_date,
+                underlying_price,
+                pe_oi, ce_oi, pcr, max_pain
+            FROM _options_stage
             ON CONFLICT (instrument_type, ticker, expiry, trade_date) DO UPDATE SET
-                pe_oi    = excluded.pe_oi,
-                ce_oi    = excluded.ce_oi,
-                pcr      = excluded.pcr,
-                max_pain = excluded.max_pain
+                underlying_price   = excluded.underlying_price,
+                pe_oi              = excluded.pe_oi,
+                ce_oi              = excluded.ce_oi,
+                pcr                = excluded.pcr,
+                max_pain           = excluded.max_pain
         """)
     finally:
         conn.unregister("_options_stage")

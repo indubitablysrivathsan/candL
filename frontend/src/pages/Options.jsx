@@ -771,7 +771,7 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <MetricStrip items={[
-        { title: 'Underlying',    value: formatCurrency(snapshotData?.underlying_price, 2),                                    accent: T.blue  },
+        { title: 'Underlying',    value: formatCurrency(snapshotData?.underlying, 2),                                    accent: T.blue  },
         { title: 'Max Pain',      value: formatCurrency(snapshotData?.max_pain, 2),                                      accent: T.purple   },
         { title: 'PCR',           value: snapshotData?.pcr != null ? Number(snapshotData.pcr).toFixed(3) : '--',         accent: snapshotData?.pcr >= 1 ? T.green : T.red },
         { title: 'CE | PE Total', value: `${formatNumber(totals.ceTotal)} | ${formatNumber(totals.peTotal)}`,            accent: T.textHi },
@@ -901,6 +901,30 @@ function TerminalTd({ children, accent, bold }) {
   );
 }
 
+function sortExpiries(expiries, tradeDate) {
+  if (!tradeDate) return [...expiries];
+
+  const ref = new Date(tradeDate);
+
+  const upcoming = [];
+  const past = [];
+
+  expiries.forEach((e) => {
+    const d = new Date(e);
+
+    if (d >= ref) {
+      upcoming.push(e);
+    } else {
+      past.push(e);
+    }
+  });
+
+  upcoming.sort((a, b) => new Date(a) - new Date(b));
+  past.sort((a, b) => new Date(b) - new Date(a));
+
+  return [...upcoming, ...past];
+}
+
 /* ─── MAIN PAGE ──────────────────────────────────────────────── */
 export default function Options({ assetType = 'stock_options' }) {
   const [tickerList, setTickerList]             = useState([]);
@@ -908,6 +932,7 @@ export default function Options({ assetType = 'stock_options' }) {
   const [expiries, setExpiries]                 = useState([]);
   const [selectedExpiries, setSelectedExpiries] = useState([]);
   const [selectedMetric, setSelectedMetric]     = useState('oi');
+  const [dailySnapshotDate, setDailySnapshotDate] = useState('');
   const [startDate, setStartDate]               = useState('');
   const [endDate, setEndDate]                   = useState('');
   const [activeExpiry, setActiveExpiry]         = useState('');
@@ -963,20 +988,31 @@ export default function Options({ assetType = 'stock_options' }) {
 
   /* fetch expiries */
   useEffect(() => {
-    if (!selectedTicker || selectedTicker === OPTIONS_COMBINED_TICKER) return;
+    if (!selectedTicker && !isDailySnapshot) return;
+    if (selectedTicker === OPTIONS_COMBINED_TICKER) return;
+
     let mounted = true;
-    getExpiries(assetType, selectedTicker)
+
+    getExpiries(
+      assetType,
+      isDailySnapshot ? null : selectedTicker
+    )
       .then((res) => {
         if (!mounted) return;
-        const list = [...(res?.expiries || [])];
+
+        const list = sortExpiries(res?.expiries || [], dailySnapshotDate);
+
         setExpiries(list);
+
         const defaults = list.slice(0, 3);
         setSelectedExpiries(defaults);
-        if (defaults.length > 0) setActiveExpiry(defaults[0]);
-      })
-      .catch((err) => { if (mounted) setError(err.message || 'Failed to load expiries'); });
-    return () => { mounted = false; };
-  }, [assetType, selectedTicker]);
+        setActiveExpiry(defaults[0] || "");
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [assetType, selectedTicker, isDailySnapshot, startDate, endDate]);
 
   useEffect(() => {
     if (!isOICharts && selectedTicker === OPTIONS_COMBINED_TICKER)
@@ -985,10 +1021,10 @@ export default function Options({ assetType = 'stock_options' }) {
 
   /* daily expiry snapshot fetch */
   useEffect(() => {
-    if (!isDailySnapshot || !selectedExpiries.length || (!startDate && !endDate)) return;
+    if (!isDailySnapshot || !selectedExpiries.length || !dailySnapshotDate) return;
     let mounted = true;
     setLoadingSnapshot(true);
-    getDailyExpirySnapshot(assetType, selectedExpiries[0], endDate || startDate)
+    getDailyExpirySnapshot(assetType, selectedExpiries[0], dailySnapshotDate)
       .then((res) => { if (mounted) setSnapshotRows(res?.rows || []); })
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load daily snapshot'); })
       .finally(() => { if (mounted) setLoadingSnapshot(false); });
@@ -1028,9 +1064,13 @@ export default function Options({ assetType = 'stock_options' }) {
         onExpiriesChange={setSelectedExpiries}
         selectedMetric={selectedMetric}
         onMetricChange={setSelectedMetric}
-        startDate={startDate}
+        startDate={isDailySnapshot ? dailySnapshotDate : startDate}
         endDate={endDate}
-        onStartDateChange={setStartDate}
+        onStartDateChange={
+          isDailySnapshot
+            ? setDailySnapshotDate
+            : setStartDate
+        }
         onEndDateChange={setEndDate}
         isOICharts={isOICharts}
         validChartExpiries={validChartExpiries}

@@ -90,10 +90,10 @@ class AnalyticsResponse(BaseModel):
 
 class StrikeBar(BaseModel):
     strike:     float
-    ce_oi:      float
-    pe_oi:      float
-    ce_oi_chng: float
-    pe_oi_chng: float
+    ce_oi:      Optional[float] = None
+    pe_oi:      Optional[float] = None
+    ce_oi_chng: Optional[float] = None
+    pe_oi_chng: Optional[float] = None
     ce_vol:     float
     pe_vol:     float
 
