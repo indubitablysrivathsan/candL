@@ -441,14 +441,14 @@ def run_parallel_backfill(tasks: list[dict], max_workers: int = 8) -> dict:
                 _, fut_instr = m._build_instruments(fut_raw)
                 date_inputs[t["trade_date"]] = (fut_instr, tickers)
             except FileNotFoundError:
-                continue  # let _run_one's own _load() surface this as usual
+                continue
 
         if date_inputs:
             conn = get_conn()
             try:
                 reference_by_date = m.fetch_reference_data_batch(conn, date_inputs)
             finally:
-                conn.close()
+                conn.close()  # must close before the pool starts
             for t in legacy_fo_tasks:
                 if t["trade_date"] in reference_by_date:
                     t["reference"] = reference_by_date[t["trade_date"]]
@@ -457,7 +457,7 @@ def run_parallel_backfill(tasks: list[dict], max_workers: int = 8) -> dict:
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_run_one, t): t for t in tasks}
         for fut in as_completed(futures):
-            r = fut.result()  # non-data exceptions raise here and abort the run
+            r = fut.result()
             results[(r["trade_date"], r["proc"])] = r
             status = "✓" if r["ok"] else f"✗ {r['error']}"
             print(f"[compute] {r['proc']} {r['trade_date']} {status}")
@@ -721,7 +721,7 @@ _WRITERS = {
 }
 
 
-def write_all(results: dict, trade_dates: list[str]) -> None:
+def write_all(results: dict, trade_dates: list[str], conn=None) -> None:
     """
     Single sequential pass: dates in increasing order, and within each date,
     masters (fo_contracts, cm_security) before fo/cm_bhav before eq_bhav
@@ -729,15 +729,17 @@ def write_all(results: dict, trade_dates: list[str]) -> None:
     transaction per (date, proc) — a failure on one task rolls back just
     that task and moves on, it doesn't abort the whole backfill.
     """
-    from api.db import get_conn
+    owns_conn = conn is None
+    if owns_conn:
+        from api.db import get_conn
+        conn = get_conn()
 
-    conn = get_conn()
     try:
         for d in sorted(trade_dates):
             for proc in _WRITE_ORDER:
                 r = results.get((d, proc))
                 if r is None:
-                    continue  # no task was scheduled for this (date, proc)
+                    continue
                 if not r["ok"]:
                     print(f"[write] {proc} {d} SKIPPED — compute failed: {r['error']}")
                     continue
@@ -749,11 +751,9 @@ def write_all(results: dict, trade_dates: list[str]) -> None:
                     conn.execute("COMMIT")
                 except Exception as e:
                     conn.execute("ROLLBACK")
-                    # record the failure back onto the result so callers
-                    # (e.g. parallel_startup_sync) can tell write failures
-                    # apart from compute failures / successes.
                     r["ok"] = False
                     r["error"] = f"write failed: {e!r}"
                     print(f"[write] {proc} {d} FAILED: {e!r}")
     finally:
-        conn.close()
+        if owns_conn:
+            conn.close()

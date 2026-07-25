@@ -266,11 +266,16 @@ def fetch_reference_data_batch(conn, date_inputs: dict) -> dict:
     {trade_date: reference_dict} — same shape fetch_reference_data()
     returns, so compute() doesn't care which path produced it.
     """
+
     if not date_inputs:
         return {}
 
     dates = sorted(date_inputs.keys())
-    max_date = dates[-1]
+    min_date, max_date = dates[0], dates[-1]
+
+    LOOKBACK_DAYS = 10
+
+    lower_bound = (pd.to_datetime(min_date).date() - pd.Timedelta(days=LOOKBACK_DAYS)).isoformat()
 
     idx_tickers, stk_tickers, fut_keys = set(), set(), set()
     for trade_date, (fut_instr, tickers) in date_inputs.items():
@@ -284,57 +289,35 @@ def fetch_reference_data_batch(conn, date_inputs: dict) -> dict:
         [_YF_INDEX_MAP[t] for t in yf_tickers_needed], dates[0], dates[-1],
     ) if yf_tickers_needed else {}
 
-    idx_hist = pd.DataFrame(columns=["index_name", "trade_date", "close"])
     idx_names_needed = {
         t: _INDEX_NAME_MAP[t] for t in idx_tickers
         if t in _INDEX_NAME_MAP and t not in _YF_INDEX_MAP
     }
-    if idx_names_needed:
-        names = list(set(idx_names_needed.values()))
-        idx_hist = conn.execute(f"""
-            SELECT index_name, trade_date, close
-            FROM market_activity_index
-            WHERE index_name IN ({",".join("?" * len(names))})
-              AND trade_date <= ?
-            ORDER BY index_name, trade_date
-        """, names + [max_date]).df()
 
-    if not idx_hist.empty:
-        idx_hist["trade_date"] = pd.to_datetime(idx_hist["trade_date"]).dt.date
+    def _fetch_bounded(table, key_col, keys, val_col, lo, hi):
+        if not keys:
+            return pd.DataFrame(columns=[key_col, "trade_date", val_col])
+        df = conn.execute(f"""
+            SELECT {key_col}, trade_date, {val_col}
+            FROM {table}
+            WHERE {key_col} IN ({",".join("?" * len(keys))})
+              AND trade_date <= ? AND trade_date >= ?
+            ORDER BY {key_col}, trade_date
+        """, list(keys) + [hi, lo]).df()
+        if not df.empty:
+            df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+        return df
 
-    mdd_keys = {make_instrument_key("STK", t, None, None, None, "EQ") for t in stk_tickers}
-    mdd_keys |= fut_keys
+    idx_hist = _fetch_bounded("market_activity_index", "index_name",
+                               list(set(idx_names_needed.values())), "close",
+                               lower_bound, max_date)
 
-    mdd_hist = pd.DataFrame(columns=["instrument_key", "trade_date", "close"])
-    if mdd_keys:
-        keys = list(mdd_keys)
-        mdd_hist = conn.execute(f"""
-            SELECT instrument_key, trade_date, close
-            FROM market_data_daily
-            WHERE instrument_key IN ({",".join("?" * len(keys))})
-              AND trade_date <= ?
-            ORDER BY instrument_key, trade_date
-        """, keys + [max_date]).df()
+    mdd_keys = {make_instrument_key("STK", t, None, None, None, "EQ") for t in stk_tickers} | fut_keys
+    mdd_hist = _fetch_bounded("market_data_daily", "instrument_key",
+                               list(mdd_keys), "close", lower_bound, max_date)
 
-    if not mdd_hist.empty:
-        mdd_hist["trade_date"] = pd.to_datetime(mdd_hist["trade_date"]).dt.date
-
-    # lot_size best-effort — once legacy history runs past where
-    # instrument_contract_daily has rows, this returns nothing for those
-    # keys and lot_size stays None downstream, same as today.
-    lot_hist = pd.DataFrame(columns=["instrument_key", "trade_date", "lot_size"])
-    if fut_keys:
-        keys = list(fut_keys)
-        lot_hist = conn.execute(f"""
-            SELECT instrument_key, trade_date, lot_size
-            FROM instrument_contract_daily
-            WHERE instrument_key IN ({",".join("?" * len(keys))})
-              AND trade_date <= ?
-            ORDER BY instrument_key, trade_date
-        """, keys + [max_date]).df()
-
-    if not lot_hist.empty:
-        lot_hist["trade_date"] = pd.to_datetime(lot_hist["trade_date"]).dt.date
+    lot_hist = _fetch_bounded("instrument_contract_daily", "instrument_key",
+                               list(fut_keys), "lot_size", lower_bound, max_date)
 
     def _nearest(hist_df, key_col, key_val, date_col, val_col, trade_date, strict_before):
         sub = hist_df[hist_df[key_col] == key_val]
@@ -344,14 +327,37 @@ def fetch_reference_data_batch(conn, date_inputs: dict) -> dict:
         sub = sub[sub[date_col] < cutoff] if strict_before else sub[sub[date_col] <= cutoff]
         if sub.empty:
             return None
-        return sub.iloc[-1][val_col]  # sorted ascending by date already
+        return sub.iloc[-1][val_col]
+
+    # ── NEW: narrow, single-key unbounded fallback for genuine long gaps.
+    # Only triggered per (table, key) that came back empty from the bounded
+    # window — rare, so its cost doesn't matter, unlike scanning unbounded
+    # for the whole round up front. ──
+    _fallback_cache = {}
+
+    def _nearest_with_fallback(hist_df, table, key_col, key_val, val_col, trade_date, strict_before):
+        v = _nearest(hist_df, key_col, key_val, "trade_date", val_col, trade_date, strict_before)
+        if v is not None:
+            return v
+        cache_key = (table, key_val, trade_date, strict_before)
+        if cache_key in _fallback_cache:
+            return _fallback_cache[cache_key]
+        op = "<" if strict_before else "<="
+        row = conn.execute(f"""
+            SELECT {val_col} FROM {table}
+            WHERE {key_col} = ? AND trade_date {op} ?
+            ORDER BY trade_date DESC LIMIT 1
+        """, [key_val, trade_date]).fetchone()
+        result = row[0] if row else None
+        _fallback_cache[cache_key] = result
+        return result
 
     def _yf_nearest(ticker_nse, trade_date):
         s = yf_hist.get(_YF_INDEX_MAP[ticker_nse])
         if s is None or s.empty:
             return None
         cutoff = pd.to_datetime(trade_date).date()
-        s = s[s.index < cutoff]  # always strict — see _YF_INDEX_MAP docstring
+        s = s[s.index < cutoff]
         return float(s.iloc[-1]) if not s.empty else None
 
     out = {}
@@ -361,7 +367,6 @@ def fetch_reference_data_batch(conn, date_inputs: dict) -> dict:
         for ticker in (tickers.get("IDF", set()) | tickers.get("IDO", set())):
             if ticker in _UNMAPPED_INDICES:
                 continue
-
             if ticker in _YF_INDEX_MAP:
                 price = _yf_nearest(ticker, trade_date)
                 if price is None:
@@ -370,12 +375,12 @@ def fetch_reference_data_batch(conn, date_inputs: dict) -> dict:
                 underlying[("IDF", ticker)] = price
                 underlying[("IDO", ticker)] = price
                 continue
-
             name = _INDEX_NAME_MAP.get(ticker)
             if name is None:
                 missing.append(f"IDF/IDO:{ticker} (no entry in _INDEX_NAME_MAP)")
                 continue
-            price = _nearest(idx_hist, "index_name", name, "trade_date", "close", trade_date, False)
+            price = _nearest_with_fallback(idx_hist, "market_activity_index", "index_name",
+                                            name, "close", trade_date, False)
             if price is None:
                 missing.append(f"IDF/IDO:{ticker} (mapped to '{name}', no row on or before {trade_date})")
                 continue
@@ -384,7 +389,8 @@ def fetch_reference_data_batch(conn, date_inputs: dict) -> dict:
 
         for ticker in (tickers.get("STF", set()) | tickers.get("STO", set())):
             key = make_instrument_key("STK", ticker, None, None, None, "EQ")
-            price = _nearest(mdd_hist, "instrument_key", key, "trade_date", "close", trade_date, False)
+            price = _nearest_with_fallback(mdd_hist, "market_data_daily", "instrument_key",
+                                            key, "close", trade_date, False)
             if price is None:
                 missing.append(f"STF/STO:{ticker} (key={key}, no CM row on or before {trade_date})")
                 continue
@@ -400,8 +406,14 @@ def fetch_reference_data_batch(conn, date_inputs: dict) -> dict:
         prior_close, lot_size = {}, {}
         if not fut_instr.empty:
             for key in fut_instr["instrument_key"]:
-                prior_close[key] = _nearest(mdd_hist, "instrument_key", key, "trade_date", "close", trade_date, True)
+                prior_close[key] = _nearest_with_fallback(mdd_hist, "market_data_daily", "instrument_key",
+                                                            key, "close", trade_date, True)
+
+                # lot_size: bounded lookup only, no fallback. instrument_contract_daily only has coverage from master-file availability (~Feb 2024) onward —
+                # for all legacy-fo dates this is expected to stay None permanently, not a rare gap. An unbounded per-key fallback here would trigger a
+                # full-table-scan storm across every futures key, every legacy round.
                 lot_size[key] = _nearest(lot_hist, "instrument_key", key, "trade_date", "lot_size", trade_date, False)
+                # lot_size fallback still best-effort/no-raise, same as before
 
         out[trade_date] = {"underlying": underlying, "prior_close": prior_close, "lot_size": lot_size}
 
