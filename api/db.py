@@ -1884,25 +1884,35 @@ def get_security_snapshot(
     return df.replace([np.nan, np.inf, -np.inf], None)
 
 
+from config import PART_OI_ROOT, PART_VOL_ROOT
+
 # ── Processing state checks ───────────────────────────────────────────────────
-# (table, extra_where_clause_or_None, params_list_or_None)
-# Replaces old _PROCESS_CHECK dict — new tables, new keys.
+# (table, where_clause, params_fn, file_absent_fn=None)
+#
+# file_absent_fn is optional: for keys backed by an independent source
+# file (rather than derived from another table), it returns True when
+# that file is confirmed to not exist — meaning there's nothing left to
+# do for this key, distinct from "not processed yet". Keys with no file
+# dependency simply omit the 4th element.
+
+def _raw_path(root, trade_date: str) -> Path:
+    dt = pd.to_datetime(trade_date)
+    return Path(root) / dt.strftime("%Y") / dt.strftime("%m") / f"{trade_date}.csv"
 
 _PROCESS_CHECK = {
 
     # Contracts
     "FO_CONTRACT": ("instrument_contract_daily", "trade_date = CAST(? AS DATE)", lambda d: [d]),
-    # F&O analytics (unchanged keys, unchanged tables)
-    "STF": ("futures_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["STF", d]),
-    "IDF": ("futures_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["IDF", d]),
-    "STO": ("options_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["STO", d]),
-    "IDO": ("options_analytics",       "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["IDO", d]),
 
-    # Normalized tables — check via segment/instrument_type on market_data_daily
+    # F&O analytics
+    "STF": ("futures_analytics", "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["STF", d]),
+    "IDF": ("futures_analytics", "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["IDF", d]),
+    "STO": ("options_analytics", "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["STO", d]),
+    "IDO": ("options_analytics", "instrument_type = ? AND trade_date = CAST(? AS DATE)", lambda d: ["IDO", d]),
 
     # Securities
-    "CM_SECURITY": ("security_master_daily",      "trade_date = CAST(? AS DATE)", lambda d: [d]),
-    
+    "CM_SECURITY": ("security_master_daily", "trade_date = CAST(? AS DATE)", lambda d: [d]),
+
     "cm_bhav": ("market_data_daily JOIN instruments USING (instrument_key)",
             "instruments.segment = 'CM' AND instruments.isin IS NOT NULL AND market_data_daily.trade_date = CAST(? AS DATE)",
             lambda d: [d]),
@@ -1912,11 +1922,13 @@ _PROCESS_CHECK = {
             lambda d: [d]),
 
     # Standalone tables
-    "fii":      ("fii_stats",                "trade_date = CAST(? AS DATE)", lambda d: [d]),
-    "part_oi":  ("participant_activity",     "metric_type = 'OI'  AND trade_date = CAST(? AS DATE)", lambda d: [d]),
-    "part_vol": ("participant_activity",     "metric_type = 'VOL' AND trade_date = CAST(? AS DATE)", lambda d: [d]),
-    "fo_volt":  ("fo_volatility",            "trade_date = CAST(? AS DATE)", lambda d: [d]),
-    "mkt_act":  ("market_activity_index",  "trade_date = CAST(? AS DATE)", lambda d: [d]),
+    "fii":      ("fii_stats", "trade_date = CAST(? AS DATE)", lambda d: [d]),
+    "part_oi":  ("participant_activity", "metric_type = 'OI'  AND trade_date = CAST(? AS DATE)", lambda d: [d],
+                 lambda d: not _raw_path(PART_OI_ROOT, d).exists()),
+    "part_vol": ("participant_activity", "metric_type = 'VOL' AND trade_date = CAST(? AS DATE)", lambda d: [d],
+                 lambda d: not _raw_path(PART_VOL_ROOT, d).exists()),
+    "fo_volt":  ("fo_volatility", "trade_date = CAST(? AS DATE)", lambda d: [d]),
+    "mkt_act":  ("market_activity_index", "trade_date = CAST(? AS DATE)", lambda d: [d]),
 }
 
 
@@ -1925,16 +1937,24 @@ def is_processed(trade_date: str, key: str) -> bool:
     if entry is None:
         raise ValueError(f"Unknown process key: {key!r}")
 
-    table, where, params_fn = entry
+    table, where, params_fn, *rest = entry
+    file_absent_fn = rest[0] if rest else None
+
     conn = get_conn(read_only=True)
     try:
         result = conn.execute(
             f"SELECT COUNT(*) FROM {table} WHERE {where}",
             params_fn(trade_date),
         ).fetchone()
-        return result[0] > 0
+        if result[0] > 0:
+            return True
     except Exception as e:
         print(f"[is_processed] ERROR {key} {trade_date}: {e}")
         return False
     finally:
         conn.close()
+
+    if file_absent_fn is not None:
+        return file_absent_fn(trade_date)
+
+    return False

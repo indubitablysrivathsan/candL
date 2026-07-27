@@ -94,8 +94,8 @@ class StrikeBar(BaseModel):
     pe_oi:      Optional[float] = None
     ce_oi_chng: Optional[float] = None
     pe_oi_chng: Optional[float] = None
-    ce_vol:     float
-    pe_vol:     float
+    ce_vol:     Optional[float] = None
+    pe_vol:     Optional[float] = None
 
 
 class StrikeSnapshotResponse(BaseModel):
