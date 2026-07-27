@@ -596,8 +596,8 @@ def run_startup_sync():
                     pass
                 elif (
                     prev is not None
-                    and _flag(manifest, prev, "fo_contracts_pr") == 1
-                    and _flag(manifest, prev, "cm_security_pr") == 1
+                    and _flag(manifest, prev, "fo_contracts_pr") in (1, NOT_AVAILABLE)
+                    and _flag(manifest, prev, "cm_security_pr") in (1, NOT_AVAILABLE)
                 ):
                     pass
                 else:

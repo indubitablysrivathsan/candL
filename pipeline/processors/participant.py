@@ -63,7 +63,13 @@ def _parse_file(path: Path, trade_date: str, metric_type: str) -> pd.DataFrame:
         for col, (asset_class, direction, option_side) in _COL_META.items():
             if col not in raw.columns:
                 continue
-            val = pd.to_numeric(r.get(col), errors="coerce")
+            raw_val = r.get(col)
+
+            if isinstance(raw_val, str):
+                raw_val = raw_val.replace(",", "").strip()
+
+            val = pd.to_numeric(raw_val, errors="coerce")
+
             if pd.isna(val):
                 continue
             rows.append({
@@ -87,22 +93,32 @@ def process(trade_date: str):
         return
 
     frames = []
+
+    # OI
     if not oi_done:
         p = _raw_path(PART_OI_ROOT, trade_date)
-        if not p.exists():
-            raise FileNotFoundError(p)
-        frames.append(_parse_file(p, trade_date, "OI"))
+        if p.exists():
+            df = _parse_file(p, trade_date, "OI")
+            if not df.empty:
+                frames.append(df)
+        else:
+            print(f"[participant] {trade_date} — OI file missing")
 
+    # VOL
     if not vol_done:
         p = _raw_path(PART_VOL_ROOT, trade_date)
-        if not p.exists():
-            raise FileNotFoundError(p)
-        frames.append(_parse_file(p, trade_date, "VOL"))
+        if p.exists():
+            df = _parse_file(p, trade_date, "VOL")
+            if not df.empty:
+                frames.append(df)
+        else:
+            print(f"[participant] {trade_date} — VOL file missing")
+
+    if not frames:
+        print(f"[participant] {trade_date} — nothing to process")
+        return
 
     df = pd.concat(frames, ignore_index=True)
-    if df.empty:
-        print(f"[participant] {trade_date} — no rows parsed")
-        return
 
     conn = get_conn()
     try:

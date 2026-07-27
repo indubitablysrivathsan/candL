@@ -39,7 +39,7 @@ def get_missing_dates(manifest_df: pd.DataFrame, start_date: str, end_date: str)
 
     return [
         d for d in expected
-        if d not in existing or status_map.get(d) in ("failed", "partial")
+        if d not in existing or status_map.get(d) in ("failed", "partial", "ongoing")
     ]
 
 

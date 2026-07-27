@@ -97,19 +97,23 @@ FAILED = 3
 MAX_RETRIES = 3
 
 _PIPELINE = [
-    ("fo_contracts", "fo_contracts_dl", ["fo_contracts_pr"], ["FO_CONTRACT"]),
-    ("cm_security",  "cm_security_dl",  ["cm_security_pr"],  ["CM_SECURITY"]),
-    ("fo",           "fo_dl",           ["stf_pr", "idf_pr", "sto_pr", "ido_pr"], ["STF", "IDF", "STO", "IDO"]),
-    ("cm_bhav",      "cm_bhav_dl",      ["cm_bhav_pr"],      ["cm_bhav"]),
-    ("eq_bhav",      "eq_bhav_dl",      ["eq_bhav_pr"],      ["eq_bhav"]),
-    ("fii",          "fii_dl",          ["fii_pr"],          ["fii"]),
-    ("participant",  "part_oi_dl",      ["part_oi_pr"],      ["part_oi", "part_vol"]),
-    ("fo_volt",      "fo_volt_dl",      ["fo_volt_pr"],      ["fo_volt"]),
-    ("mkt_act",      "mkt_act_dl",      ["mkt_act_pr"],      ["mkt_act"]),
+    # (proc_key, dl_cols, pr_cols, check_keys) — dl_cols[i] governs pr_cols[i].
+    # A single download gating several pr flags (e.g. fo) repeats its dl
+    # column once per pr_col; independent legs (e.g. participant's OI/VOL)
+    # each get their own dl/pr pair. No side-tables — everything a
+    # processor needs is one row in this list.
+    ("fo_contracts", ["fo_contracts_dl"], ["fo_contracts_pr"], ["FO_CONTRACT"]),
+    ("cm_security",  ["cm_security_dl"],  ["cm_security_pr"],  ["CM_SECURITY"]),
+    ("fo",           ["fo_dl", "fo_dl", "fo_dl", "fo_dl"],
+                      ["stf_pr", "idf_pr", "sto_pr", "ido_pr"], ["STF", "IDF", "STO", "IDO"]),
+    ("cm_bhav",      ["cm_bhav_dl"],      ["cm_bhav_pr"],      ["cm_bhav"]),
+    ("eq_bhav",      ["eq_bhav_dl"],      ["eq_bhav_pr"],      ["eq_bhav"]),
+    ("fii",          ["fii_dl"],          ["fii_pr"],          ["fii"]),
+    ("participant",  ["part_oi_dl", "part_vol_dl"],
+                      ["part_oi_pr", "part_vol_pr"],           ["part_oi", "part_vol"]),
+    ("fo_volt",      ["fo_volt_dl"],      ["fo_volt_pr"],      ["fo_volt"]),
+    ("mkt_act",      ["mkt_act_dl"],      ["mkt_act_pr"],      ["mkt_act"]),
 ]
-
-_EXTRA_DL = {"participant": "part_vol_dl"}
-_EXTRA_PR = {"participant": "part_vol_pr"}
 
 # FO Contract / CM Security master files are not available before this
 # date — NSE simply did not publish them. Dates before this are never
@@ -126,7 +130,7 @@ def _set(manifest: pd.DataFrame, trade_date: str, **kwargs) -> pd.DataFrame:
     if trade_date not in manifest["trade_date"].values:
         new = {c: 0 for c in _FLAG_COLS}
         new["trade_date"] = trade_date
-        new["status"] = ""
+        new["status"] = "ongoing"
         new.update(kwargs)
         manifest = pd.concat([manifest, pd.DataFrame([new])], ignore_index=True)
     else:
@@ -137,6 +141,14 @@ def _set(manifest: pd.DataFrame, trade_date: str, **kwargs) -> pd.DataFrame:
 
 def _all_processed(trade_date: str, keys: list[str]) -> bool:
     return all(is_processed(trade_date, k) for k in keys)
+
+
+def _pending_pr_cols(manifest: pd.DataFrame, trade_date: str, pr_cols: list[str]) -> list[str]:
+    """pr_cols still at 0/2 for this date — the only ones safe to stamp
+    to 1 on success. A col already at -1 (permanently unavailable) or
+    FAILED must never be overwritten just because a sibling leg on the
+    same proc succeeded."""
+    return [c for c in pr_cols if _flag(manifest, trade_date, c) not in (1, NOT_AVAILABLE, FAILED)]
 
 
 def _is_market_closed(statuses: dict) -> bool:
@@ -280,14 +292,37 @@ def _download_walk(dates: list[str], manifest: pd.DataFrame,
                 statuses[dl_key] = "not_available"
                 continue
 
+            # Masters don't exist before MASTER_START_DATE — known
+            # permanent absence, not a miss to feed into the streak.
+            if dl_key in ("fo_contracts", "cm_security") and trade_date < MASTER_START_DATE:
+                updates[dl_col] = DL_NOT_AVAILABLE
+                statuses[dl_key] = "not_available"
+                continue
+
             try:
                 result = entry["download"](trade_date)
-            except Exception as e:
+            except OSError as e:
+                # Local/environmental failure (file locked, permission
+                # denied, disk issue, etc.) — not evidence about whether
+                # the source has this date's data. Must NOT feed the
+                # miss-streak, or enough of these across dates would
+                # eventually trip false -1 saturation. Leave dl_col
+                # untouched at 0 for a clean retry next run.
                 print(
-                    f"  ✗ DOWNLOAD CRASH: key={dl_key}, "
-                    f"date={trade_date}, type={type(e).__name__}: {e}"
+                    f"  ✗ [{dl_key}] {trade_date}: local error, not a data "
+                    f"failure — {type(e).__name__}: {e}"
                 )
-                raise
+                statuses[dl_key] = "failed"
+                continue
+            except Exception as e:
+                # Treat like any other failed attempt so the miss-streak
+                # (and eventual 10-in-a-row saturation) still fires,
+                # instead of propagating and killing the whole sync.
+                print(
+                    f"  ✗ [{dl_key}] crashed for {trade_date}: "
+                    f"{type(e).__name__}: {e}"
+                )
+                result = "failed"
 
             if result == "complete":
                 updates[dl_col] = 1
@@ -385,15 +420,44 @@ def _retry_historical_dates(dates: list[str], manifest: pd.DataFrame) -> pd.Data
                 statuses[dl_key] = "not_available"
                 continue
 
+            # Masters don't exist before MASTER_START_DATE — NSE never
+            # published them, so this isn't a transient failure to retry,
+            # it's a known permanent absence. Skip straight to
+            # NOT_AVAILABLE without burning retries or hitting the network.
+            if dl_key in ("fo_contracts", "cm_security") and trade_date < MASTER_START_DATE:
+                updates[dl_col] = DL_NOT_AVAILABLE
+                statuses[dl_key] = "not_available"
+                attempted = True
+                print(f"  ~ [{dl_key}] {trade_date}: before MASTER_START_DATE — marking not-available")
+                continue
+
             attempted = True
             result = None
+            local_error = False
             for attempt in range(1, MAX_RETRIES + 1):
                 try:
                     result = entry["download"](trade_date)
+                except OSError as e:
+                    # Local/environmental failure (file locked by Excel,
+                    # permission denied, disk full, etc.) — says nothing
+                    # about whether the source has the data. Don't burn
+                    # retries pretending it's a data-side failure and
+                    # NEVER let this reach the NOT_AVAILABLE fallback.
+                    print(f"  ✗ [{dl_key}] {trade_date}: local error, not a data "
+                          f"failure — {type(e).__name__}: {e}")
+                    local_error = True
+                    break
                 except Exception as e:
-                    print(f"  ✗ DOWNLOAD CRASH: key={dl_key}, date={trade_date}, "
-                          f"type={type(e).__name__}: {e}")
-                    raise
+                    # A raised exception from the download call itself
+                    # (network error, 404, etc.) is a failed attempt, not
+                    # a fatal crash — degrade it to a "failed" result so
+                    # retry counting and the eventual NOT_AVAILABLE
+                    # fallback below still run, instead of propagating
+                    # and killing the whole sync mid-manifest.
+                    print(f"  ✗ [{dl_key}] attempt {attempt}/{MAX_RETRIES} crashed for "
+                          f"{trade_date}: {type(e).__name__}: {e}")
+                    result = "failed"
+                    continue
                 if result in ("complete", "market_closed"):
                     break
                 print(f"  ~ [{dl_key}] attempt {attempt}/{MAX_RETRIES} failed for {trade_date} ({result})")
@@ -406,6 +470,12 @@ def _retry_historical_dates(dates: list[str], manifest: pd.DataFrame) -> pd.Data
                 # burn remaining retries and don't write -1. dl_col stays
                 # 0, same as any other closed day.
                 statuses[dl_key] = "market_closed"
+            elif local_error:
+                # Environmental failure, not a data-side one. Leave
+                # dl_col untouched at 0 — no -1, no "not_available" —
+                # so this key gets picked up cleanly on the next run
+                # instead of being permanently written off.
+                statuses[dl_key] = "failed"
             else:
                 updates[dl_col] = DL_NOT_AVAILABLE
                 statuses[dl_key] = "not_available"
@@ -481,30 +551,24 @@ def _run_download_phase(manifest: pd.DataFrame) -> pd.DataFrame:
 
 
 def _propagate_unavailable_downloads(manifest: pd.DataFrame) -> pd.DataFrame:
-    """A pr_col whose dl_col is NOT_AVAILABLE can never be processed —
-    there's no file. Previously these rows were left at pr=0 forever,
-    which both kept them stuck out of (or perpetually re-entering) the
-    candidate scan and kept `status` from ever resolving to complete.
-    Mirror the sentinel through: pr_col -> NOT_AVAILABLE, same as dl_col,
-    whenever pr_col is still pending (0). Rows already at 1/-1/FAILED are
-    left alone."""
-    for proc_key, dl_col, pr_cols, _check_keys in _PIPELINE:
-        extra_dl = _EXTRA_DL.get(proc_key)
-        extra_pr = _EXTRA_PR.get(proc_key)
-
-        unavailable_rows = manifest[manifest[dl_col] == DL_NOT_AVAILABLE]["trade_date"].tolist()
-        for d in unavailable_rows:
-            for pr_col in pr_cols:
+    """A pr_col whose governing dl_col is NOT_AVAILABLE can never be
+    processed — there's no file. Previously these rows were left at pr=0
+    forever, which both kept them stuck out of (or perpetually
+    re-entering) the candidate scan and kept `status` from ever resolving
+    to complete. Mirror the sentinel through: pr_col -> NOT_AVAILABLE,
+    same as dl_col, whenever pr_col is still pending (0). Rows already at
+    1/-1/FAILED are left alone. dl_cols[i] governs pr_cols[i] — walk the
+    pairs directly, no separate "extra" columns to special-case."""
+    for proc_key, dl_cols, pr_cols, _check_keys in _PIPELINE:
+        touched_dates = set()
+        for dl_col, pr_col in zip(dl_cols, pr_cols):
+            unavailable_rows = manifest[manifest[dl_col] == DL_NOT_AVAILABLE]["trade_date"].tolist()
+            for d in unavailable_rows:
                 if _flag(manifest, d, pr_col) == 0:
                     manifest = _set(manifest, d, **{pr_col: NOT_AVAILABLE})
+                touched_dates.add(d)
 
-        if extra_dl and extra_pr:
-            extra_unavailable = manifest[manifest[extra_dl] == DL_NOT_AVAILABLE]["trade_date"].tolist()
-            for d in extra_unavailable:
-                if _flag(manifest, d, extra_pr) == 0:
-                    manifest = _set(manifest, d, **{extra_pr: NOT_AVAILABLE})
-
-        for d in set(unavailable_rows):
+        for d in touched_dates:
             manifest = _recompute_status_after_processing(manifest, d)
 
     return manifest
@@ -517,31 +581,39 @@ def _find_round_candidates(manifest: pd.DataFrame):
               {"proc": key, "trade_date": <effective/check date>,
                "file_date": <manifest row date, masters only>}
       meta  — parallel list of (proc_key, manifest_date, check_date,
-              pr_cols, extra_pr, check_keys); manifest_date is the
-              manifest row's own trade_date (== check_date for
-              non-masters; == FILE date for masters, which can differ
-              from check_date).
+              pr_cols, check_keys); manifest_date is the manifest row's
+              own trade_date (== check_date for non-masters; == FILE date
+              for masters, which can differ from check_date).
       manifest — possibly updated in place: masters whose effective date
               still can't be confirmed get pr_col set to 2 ("deferred"),
               same as startup_sync.py does inline.
     """
     tasks, meta = [], []
 
-    for proc_key, dl_col, pr_cols, check_keys in _PIPELINE:
-        extra_dl = _EXTRA_DL.get(proc_key)
-        extra_pr = _EXTRA_PR.get(proc_key)
+    for proc_key, dl_cols, pr_cols, check_keys in _PIPELINE:
         is_master = proc_key in _MASTER_PROCS
-        pr_col = pr_cols[0]
+        pr_col = pr_cols[0]  # representative column for defer(2)/master bookkeeping
+
+        # Ready to attempt if ANY governing dl_col is downloaded — a
+        # processor with independent legs (e.g. participant) shouldn't
+        # wait on a leg that's permanently unavailable.
+        dl_ready = manifest[dl_cols[0]] == 1
+        for extra_col in set(dl_cols[1:]):
+            dl_ready = dl_ready | (manifest[extra_col] == 1)
+
+        # Still eligible if ANY pr_col is unresolved — a single resolved
+        # leg (e.g. part_oi_pr already -1) must not mask a still-pending
+        # sibling leg (part_vol_pr still 0).
+        pr_pending = ~manifest[pr_cols[0]].isin([1, NOT_AVAILABLE, FAILED])
+        for extra_col in pr_cols[1:]:
+            pr_pending = pr_pending | ~manifest[extra_col].isin([1, NOT_AVAILABLE, FAILED])
 
         candidates = manifest[
             (manifest["trade_date"] >= SYNC_START_DATE) &
-            (manifest[dl_col] == 1) &
-            (~manifest[pr_col].isin([1, NOT_AVAILABLE, FAILED])) &
+            dl_ready &
+            pr_pending &
             (manifest["status"] != "market_closed")
         ]["trade_date"].tolist()
-
-        if extra_dl:
-            candidates = [d for d in candidates if _flag(manifest, d, extra_dl) == 1]
 
         if is_master:
             for file_date in candidates:
@@ -555,14 +627,12 @@ def _find_round_candidates(manifest: pd.DataFrame):
                     continue
                 if _all_processed(eff, check_keys):
                     print(f"[{proc_key}] {file_date} — already in DB, syncing manifest flag")
-                    updates = {col: 1 for col in pr_cols}
-                    if extra_pr:
-                        updates[extra_pr] = 1
+                    updates = {col: 1 for col in _pending_pr_cols(manifest, file_date, pr_cols)}
                     manifest = _set(manifest, file_date, **updates)
                     manifest = _recompute_status_after_processing(manifest, file_date)
                     continue
                 tasks.append({"proc": proc_key, "trade_date": eff, "file_date": file_date})
-                meta.append((proc_key, file_date, eff, pr_cols, extra_pr, check_keys))
+                meta.append((proc_key, file_date, eff, pr_cols, check_keys))
         else:
             for d in candidates:
                 prev = get_previous_trading_date(manifest, d)
@@ -572,9 +642,10 @@ def _find_round_candidates(manifest: pd.DataFrame):
                     pass  # masters don't exist yet — never defer on this leg
                 elif (
                     prev is not None
-                    and _flag(manifest, prev, "fo_contracts_pr") == 1
-                    and _flag(manifest, prev, "cm_security_pr") == 1
+                    and _flag(manifest, prev, "fo_contracts_pr") in (1, NOT_AVAILABLE)
+                    and _flag(manifest, prev, "cm_security_pr") in (1, NOT_AVAILABLE)
                 ):
+                    pass
                     pass
                 else:
                     manifest = _set(manifest, d, **{pr_col: 2})
@@ -596,14 +667,12 @@ def _find_round_candidates(manifest: pd.DataFrame):
 
                 if _all_processed(d, check_keys):
                     print(f"[{proc_key}] {d} — already in DB, syncing manifest flag")
-                    updates = {col: 1 for col in pr_cols}
-                    if extra_pr:
-                        updates[extra_pr] = 1
+                    updates = {col: 1 for col in _pending_pr_cols(manifest, d, pr_cols)}
                     manifest = _set(manifest, d, **updates)
                     manifest = _recompute_status_after_processing(manifest, d)
                     continue
                 tasks.append({"proc": proc_key, "trade_date": d})
-                meta.append((proc_key, d, d, pr_cols, extra_pr, check_keys))
+                meta.append((proc_key, d, d, pr_cols, check_keys))
 
     return tasks, meta, manifest
 
@@ -636,7 +705,7 @@ def run_parallel_startup_sync(max_workers: int = 8, max_rounds: int = 50):
         results = run_parallel_backfill(tasks, max_workers=max_workers)
         write_all(results, trade_dates_in_round)
 
-        for proc_key, manifest_date, check_date, pr_cols, extra_pr, check_keys in meta:
+        for proc_key, manifest_date, check_date, pr_cols, check_keys in meta:
             r = results.get((check_date, proc_key))
             if r is None:
                 continue
@@ -648,7 +717,8 @@ def run_parallel_startup_sync(max_workers: int = 8, max_rounds: int = 50):
                 if retry_counts[key] >= MAX_RETRIES:
                     print(f"  ✗ {proc_key} {manifest_date}: giving up after "
                           f"{MAX_RETRIES} failures — {r['error']}")
-                    manifest = _set(manifest, manifest_date, **{col: FAILED for col in pr_cols})
+                    pending = _pending_pr_cols(manifest, manifest_date, pr_cols)
+                    manifest = _set(manifest, manifest_date, **{col: FAILED for col in pending})
                     manifest = _recompute_status_after_processing(manifest, manifest_date)
                 else:
                     print(f"  ✗ {proc_key} {manifest_date} "
@@ -659,9 +729,7 @@ def run_parallel_startup_sync(max_workers: int = 8, max_rounds: int = 50):
                 print(f"  ⚠ {proc_key} {manifest_date}: DB check incomplete after processing")
                 continue
 
-            updates = {col: 1 for col in pr_cols}
-            if extra_pr:
-                updates[extra_pr] = 1
+            updates = {col: 1 for col in _pending_pr_cols(manifest, manifest_date, pr_cols)}
             manifest = _set(manifest, manifest_date, **updates)
             manifest = _recompute_status_after_processing(manifest, manifest_date)
 

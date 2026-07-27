@@ -312,17 +312,27 @@ def _compute_participant(trade_date: str) -> dict:
         return {"skipped": True}
 
     frames = []
+
     if not oi_done:
         p = m._raw_path(PART_OI_ROOT, trade_date)
-        if not p.exists():
-            raise FileNotFoundError(p)
-        frames.append(m._parse_file(p, trade_date, "OI"))
+        if p.exists():
+            df = m._parse_file(p, trade_date, "OI")
+            if not df.empty:
+                frames.append(df)
+        else:
+            print(f"[participant] {trade_date} — OI file missing")
 
     if not vol_done:
         p = m._raw_path(PART_VOL_ROOT, trade_date)
-        if not p.exists():
-            raise FileNotFoundError(p)
-        frames.append(m._parse_file(p, trade_date, "VOL"))
+        if p.exists():
+            df = m._parse_file(p, trade_date, "VOL")
+            if not df.empty:
+                frames.append(df)
+        else:
+            print(f"[participant] {trade_date} — VOL file missing")
+
+    if not frames:
+        return {"skipped": True}
 
     df = pd.concat(frames, ignore_index=True)
     return {"skipped": False, "participant": df}
