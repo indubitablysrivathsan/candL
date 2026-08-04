@@ -14,6 +14,7 @@ calendar day, so weekends/holidays/gaps are handled correctly.
 """
 
 import pandas as pd
+import numpy as np
 import duckdb
 from pathlib import Path
 
@@ -49,8 +50,9 @@ def _epoch_to_date(series: pd.Series) -> pd.Series:
     """Decode legacy contract master epoch fields (0 means null)."""
     s = pd.to_numeric(series, errors="coerce")
     s = s.where(s > 0)
+    vals = (s + _EPOCH_10Y_OFFSET).dropna().astype(np.int64)
 
-    return pd.to_datetime(s + _EPOCH_10Y_OFFSET, unit="s", errors="coerce").dt.date
+    return pd.to_datetime(vals, unit="s", errors="coerce").dt.date
 
 
 
