@@ -1002,17 +1002,19 @@ export default function Options({ assetType = 'stock_options' }) {
 
         const list = sortExpiries(res?.expiries || [], dailySnapshotDate);
 
-        setExpiries(list);
-
-        const defaults = list.slice(0, 3);
-        setSelectedExpiries(defaults);
-        setActiveExpiry(defaults[0] || "");
+        if (isDailySnapshot) {
+            setSelectedExpiries(list.length ? [list[0]] : []);
+        } else {
+            const defaults = list.slice(0, 3);
+            setSelectedExpiries(defaults);
+            setActiveExpiry(defaults[0] || "");
+        }
       });
 
     return () => {
       mounted = false;
     };
-  }, [assetType, selectedTicker, isDailySnapshot, startDate, endDate]);
+  }, [assetType, selectedTicker, isDailySnapshot, dailySnapshotDate]);
 
   useEffect(() => {
     if (!isOICharts && selectedTicker === OPTIONS_COMBINED_TICKER)
@@ -1029,7 +1031,7 @@ export default function Options({ assetType = 'stock_options' }) {
       .catch((err) => { if (mounted) setError(err.message || 'Failed to load daily snapshot'); })
       .finally(() => { if (mounted) setLoadingSnapshot(false); });
     return () => { mounted = false; };
-  }, [assetType, isDailySnapshot, selectedExpiries, startDate, endDate]);
+  }, [assetType, isDailySnapshot, selectedExpiries, dailySnapshotDate]);
 
   useEffect(() => {
     if (!selectedExpiries.includes(activeExpiry)) setActiveExpiry(selectedExpiries[0] || '');

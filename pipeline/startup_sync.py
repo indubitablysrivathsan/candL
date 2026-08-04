@@ -122,21 +122,18 @@ from config import SYNC_START_DATE
 # "cm_bhav" the actual function invoked is swapped to the _legacy variant
 # at call time based on trade_date vs LEGACY_CUTOFF — see _resolve_proc_key.
 _PIPELINE = [
-    ("fo_contracts", "fo_contracts_dl", ["fo_contracts_pr"], ["FO_CONTRACT"]),
-    ("cm_security",  "cm_security_dl",  ["cm_security_pr"],  ["CM_SECURITY"]),
-    ("cm_bhav",      "cm_bhav_dl",      ["cm_bhav_pr"],      ["cm_bhav"]),
-    ("eq_bhav",      "eq_bhav_dl",      ["eq_bhav_pr"],      ["eq_bhav"]),
-    ("mkt_act",      "mkt_act_dl",      ["mkt_act_pr"],      ["mkt_act"]),
-    ("fo",           "fo_dl",           ["stf_pr", "idf_pr", "sto_pr", "ido_pr"], ["STF", "IDF", "STO", "IDO"]),
-    ("fii",          "fii_dl",          ["fii_pr"],          ["fii"]),
-    ("participant",  "part_oi_dl",      ["part_oi_pr"],      ["part_oi", "part_vol"]),
-    ("fo_volt",      "fo_volt_dl",      ["fo_volt_pr"],      ["fo_volt"]),
+    ("fo_contracts", ["fo_contracts_dl"], ["fo_contracts_pr"], ["FO_CONTRACT"]),
+    ("cm_security",  ["cm_security_dl"],  ["cm_security_pr"],  ["CM_SECURITY"]),
+    ("cm_bhav",      ["cm_bhav_dl"],      ["cm_bhav_pr"],      ["cm_bhav"]),
+    ("eq_bhav",      ["eq_bhav_dl"],      ["eq_bhav_pr"],      ["eq_bhav"]),
+    ("mkt_act",      ["mkt_act_dl"],      ["mkt_act_pr"],      ["mkt_act"]),
+    ("fo",           ["fo_dl", "fo_dl", "fo_dl", "fo_dl"],
+                      ["stf_pr", "idf_pr", "sto_pr", "ido_pr"], ["STF", "IDF", "STO", "IDO"]),
+    ("fii",          ["fii_dl"],          ["fii_pr"],          ["fii"]),
+    ("participant",  ["part_oi_dl", "part_vol_dl"],
+                      ["part_oi_pr", "part_vol_pr"],           ["part_oi", "part_vol"]),
+    ("fo_volt",      ["fo_volt_dl"],      ["fo_volt_pr"],      ["fo_volt"]),
 ]
-
-# processor keys that also require a second dl flag before processing
-_EXTRA_DL = {"participant": "part_vol_dl"}
-# processor keys that set an extra pr flag on success
-_EXTRA_PR = {"participant": "part_vol_pr"}
 
 # processor keys whose manifest row date is a *file_date* (publication date),
 # not the trade_date the snapshot is effective for. These are gated on
@@ -179,6 +176,24 @@ def _set(manifest: pd.DataFrame, trade_date: str, **kwargs):
             manifest.loc[manifest["trade_date"] == trade_date, col] = val
     return manifest
 
+def _propagate_unavailable_downloads(manifest: pd.DataFrame) -> pd.DataFrame:
+    for proc_key, dl_cols, pr_cols, _check_keys in _PIPELINE:
+        touched_dates = set()
+        for dl_col, pr_col in zip(dl_cols, pr_cols):
+            unavailable_rows = manifest[manifest[dl_col] == DL_NOT_AVAILABLE]["trade_date"].tolist()
+            for d in unavailable_rows:
+                if _flag(manifest, d, pr_col) == 0:
+                    manifest = _set(manifest, d, **{pr_col: NOT_AVAILABLE})
+                touched_dates.add(d)
+        for d in touched_dates:
+            manifest = _recompute_status_after_processing(manifest, d)
+    return manifest
+
+def _pending_pr_cols(manifest: pd.DataFrame, trade_date: str, pr_cols: list[str]) -> list[str]:
+    """pr_cols still at 0/2 for this date — the only ones safe to stamp
+    to 1 on success. A col already at -1/FAILED must never be overwritten
+    just because a sibling leg on the same proc succeeded."""
+    return [c for c in pr_cols if _flag(manifest, trade_date, c) not in (1, NOT_AVAILABLE, FAILED)]
 
 def _all_processed(trade_date: str, keys: list[str]) -> bool:
     return all(is_processed(trade_date, k) for k in keys)
@@ -544,32 +559,32 @@ def run_startup_sync():
     if forward:
         manifest = _download_phase(forward, manifest, date_key_statuses, today)
 
+    manifest = _propagate_unavailable_downloads(manifest)
     save_manifest(manifest)
 
     # ── Phase 2: Process ──────────────────────────────────────────────────
     print("\nChecking processing state...\n")
     manifest = load_manifest()
 
-    for proc_key, dl_col, pr_cols, check_keys in _PIPELINE:
-        extra_dl = _EXTRA_DL.get(proc_key)
-        extra_pr = _EXTRA_PR.get(proc_key)
+    retry_counts: dict[tuple[str, str], int] = {}
+
+    for proc_key, dl_cols, pr_cols, check_keys in _PIPELINE:
         is_master = proc_key in _MASTER_KEYS
-        pr_col = pr_cols[0]
+        pr_col = pr_cols[0]  # representative column for defer(2)/master bookkeeping
+
+        dl_ready = manifest[dl_cols[0]] == 1
+        for extra_col in set(dl_cols[1:]):
+            dl_ready = dl_ready | (manifest[extra_col] == 1)
+
+        pr_pending = ~manifest[pr_cols[0]].isin([1, NOT_AVAILABLE, FAILED])
+        for extra_col in pr_cols[1:]:
+            pr_pending = pr_pending | ~manifest[extra_col].isin([1, NOT_AVAILABLE, FAILED])
 
         candidates = manifest[
-            (manifest[dl_col] == 1) &
-            (~manifest[pr_col].isin([1, NOT_AVAILABLE])) &
-            (manifest["status"] != "market_closed")
+            dl_ready & pr_pending & (manifest["status"] != "market_closed")
         ]["trade_date"].tolist()
 
-        if extra_dl:
-            candidates = [d for d in candidates if _flag(manifest, d, extra_dl) == 1]
-
         if is_master:
-            # candidates here are FILE dates. Files before MASTER_START_DATE
-            # never existed — mark permanently N/A and skip entirely, no
-            # confirmation lookup needed. Others need their confirming next
-            # trading date to exist before they can be written to the DB.
             effective_date = {}
             kept = []
             for file_date in candidates:
@@ -585,10 +600,6 @@ def run_startup_sync():
                     manifest = _set(manifest, file_date, **{pr_col: DEFERRED})
             candidates = kept
         else:
-            # candidates here are the file's own trade_date. Need the PREVIOUS trading date's masters to already be processed 
-            # but only once masters exist at all.
-            # If the previous trading date predates MASTER_START_DATE there's nothing to wait for, so skip the gate.
-            # Additionally legacy fo has a dependency on cm bhav, eq bhav and mkt act
             kept = []
             for d in candidates:
                 prev = get_previous_trading_date(manifest, d)
@@ -624,17 +635,16 @@ def run_startup_sync():
             run_key = _resolve_proc_key(proc_key, trade_date)
 
             if run_key not in PROCESSOR_REGISTRY:
-                # processor not implemented for this key — no-op, skip silently
                 continue
 
             if _all_processed(check_date, check_keys):
                 print(f"[{proc_key}] {trade_date} — already in DB, syncing manifest flag")
-                updates = {col: 1 for col in pr_cols}
-                if extra_pr:
-                    updates[extra_pr] = 1
+                updates = {col: 1 for col in _pending_pr_cols(manifest, trade_date, pr_cols)}
                 manifest = _set(manifest, trade_date, **updates)
                 manifest = _recompute_status_after_processing(manifest, trade_date)
                 continue
+
+            key = (proc_key, trade_date)
             try:
                 if is_master:
                     PROCESSOR_REGISTRY[run_key](file_date=trade_date, trade_date=check_date)
@@ -642,17 +652,23 @@ def run_startup_sync():
                     PROCESSOR_REGISTRY[run_key](trade_date)
 
                 if _all_processed(check_date, check_keys):
-                    updates = {col: 1 for col in pr_cols}
-                    if extra_pr:
-                        updates[extra_pr] = 1
+                    updates = {col: 1 for col in _pending_pr_cols(manifest, trade_date, pr_cols)}
                     manifest = _set(manifest, trade_date, **updates)
                     manifest = _recompute_status_after_processing(manifest, trade_date)
+                    retry_counts.pop(key, None)
                 else:
                     print(f"  ⚠ {proc_key} {trade_date}: DB check incomplete after processing")
             except FileNotFoundError as e:
                 print(f"  ✗ {proc_key} {trade_date}: file missing — {e}")
             except Exception as e:
-                print(f"  ✗ {proc_key} {trade_date}: {e}")
+                retry_counts[key] = retry_counts.get(key, 0) + 1
+                if retry_counts[key] >= MAX_RETRIES:
+                    print(f"  ✗ {proc_key} {trade_date}: giving up after {MAX_RETRIES} failures — {e}")
+                    pending = _pending_pr_cols(manifest, trade_date, pr_cols)
+                    manifest = _set(manifest, trade_date, **{col: FAILED for col in pending})
+                    manifest = _recompute_status_after_processing(manifest, trade_date)
+                else:
+                    print(f"  ✗ {proc_key} {trade_date} (attempt {retry_counts[key]}/{MAX_RETRIES}): {e}")
 
     save_manifest(manifest)
     print("\n✓ Startup sync complete.\n")
