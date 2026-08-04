@@ -459,6 +459,7 @@ function MetricStrip({ items }) {
    CandlestickChart instance as stacked, x-axis-synced panes — no
    separate chart-tab submenu needed since they're all one chart.
 ───────────────────────────────────────────────────────────────── */
+const chartCache = new Map();
 
 function OHLCView({ tickers, dates }) {
   const [ticker,    setTicker]    = useState(tickers[0] ?? '');
@@ -478,14 +479,32 @@ function OHLCView({ tickers, dates }) {
 
   const load = useCallback(async () => {
     if (!ticker || !startDate || !endDate) return;
+
+    const key = `${ticker}_${startDate}_${endDate}`;
+
+    if (chartCache.has(key)) {
+        const cached = chartCache.get(key);
+        setData(cached.data);
+        setRollData(cached.roll);
+        return;
+    }
+
     setLoading(true);
     try {
-      const d = await stocks.ohlc(ticker, startDate, endDate);
+      const [d, rolling] = await Promise.all([
+          stocks.ohlc(ticker, startDate, endDate),
+          stocks.rolling(ticker, startDate, endDate),
+      ]);
+      chartCache.set(key, {
+          data: d,
+          roll: rolling,
+      });
       setData(d);
-      const rolling = await stocks.rolling(ticker, startDate, endDate);
       setRollData(rolling);
     } catch (e) { console.error(e); }
-    setLoading(false);
+    finally {
+      setLoading(false);
+    }
   }, [ticker, startDate, endDate]);
 
   useEffect(() => { load(); }, [load]);
