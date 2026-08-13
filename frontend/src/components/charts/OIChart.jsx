@@ -16,7 +16,7 @@ import {
 import {
   getFuturesAnalytics,
   getFuturesCycleHistory,
-  getFuturesCombinedHistory,
+  getFuturesMarketHistory,
   getOptionsCycleHistory,
   getOptionsMarketHistory,
   formatNumber,
@@ -520,7 +520,7 @@ export function ScreenerOIChart({
     const fetcher = fetchHistory
       ? fetchHistory(assetType, ticker)
       : isCombined
-        ? getFuturesCombinedHistory(assetType, allDates, selectedCycles, orderedExpiries, ticker)
+        ? getFuturesMarketHistory(assetType)
         : getFuturesCycleHistory(assetType, ticker);
 
     fetcher

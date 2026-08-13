@@ -295,29 +295,6 @@ export async function getOptionsCycleHistory(assetType = 'stock_options', ticker
   return request(`/${assetType}/cycle-history/${encodeURIComponent(ticker)}`);
 }
 
-export async function getOptionsCombinedHistory(assetType = 'stock_options', allDates = [], expiry = '') {
-  const results = await Promise.all(
-    allDates.map((date) =>
-      request(`/${assetType}/daily-expiry-snapshot/${encodeURIComponent(expiry)}/${encodeURIComponent(date)}`)
-        .then((res) => {
-          const rows = res?.rows ?? [];
-          const ce   = rows.reduce((s, r) => s + (Number(r.ce) || 0), 0);
-          const pe   = rows.reduce((s, r) => s + (Number(r.pe) || 0), 0);
-          return { date, ce, pe };
-        })
-        .catch(() => ({ date, ce: 0, pe: 0 }))
-    )
-  );
-  return {
-    rows: results.map(({ date, ce, pe }) => ({
-      trade_date: date,
-      expiry,
-      ce_oi: ce,
-      pe_oi: pe,
-    })),
-  };
-}
-
 export async function getOptionsMarketHistory(assetType = 'stock_options') {
   return request(`/${assetType}/market-history`);
 }
@@ -360,46 +337,8 @@ export async function getFuturesCycleHistory(assetType = 'stock_futures', ticker
   return request(`/${assetType}/cycle-history/${encodeURIComponent(ticker)}`);
 }
 
-export async function getFuturesCombinedHistory(
-  assetType = 'stock_futures',
-  allDates = [],
-  selectedCycles = [],
-  expiryChain = []
-) {
-  // build expiryLookup: date → which cycle it belongs to
-  const expiryLookup = {};
-  selectedCycles.forEach((cycleExp) => {
-    const idx = expiryChain.indexOf(cycleExp);
-    const prevExpiry = idx > 0 ? expiryChain[idx - 1] : null;
-    allDates.forEach((date) => {
-      if ((!prevExpiry || date > prevExpiry) && date <= cycleExp) {
-        expiryLookup[date] = cycleExp;
-      }
-    });
-  });
-
-  // only fetch dates that belong to at least one selected cycle
-  const relevantDates = allDates.filter((date) => expiryLookup[date] != null);
-
-  const results = await Promise.all(
-    relevantDates.map((date) =>
-      getFuturesRollup(assetType, date)
-        .then((res) => {
-          const rows = res?.rows ?? [];
-          const total = rows.reduce((sum, r) => sum + (Number(r.open_int) || 0), 0);
-          return { date, expiry: expiryLookup[date], total };
-        })
-        .catch(() => ({ date, expiry: expiryLookup[date], total: 0 }))
-    )
-  );
-
-  return {
-    rows: results.map(({ date, expiry, total }) => ({
-      trade_date: date,
-      expiry,
-      open_int: total,
-    })),
-  };
+export async function getFuturesMarketHistory(assetType = 'stock_futures') {
+  return request(`/${assetType}/market-history`);
 }
 
 /* =========================================

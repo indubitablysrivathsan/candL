@@ -837,6 +837,35 @@ def get_futures_rollup(
     return df.replace([np.nan, np.inf, -np.inf], None)
 
 
+def get_futures_market_history(asset_type: str = "stock_futures") -> pd.DataFrame:
+    """
+    Total open interest + OI change across ALL tickers per trade_date.
+    Used for the COMBINED market OI chart (mirrors get_options_market_history).
+    """
+    instr = _instr(asset_type)
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(
+            f"""
+            SELECT
+                fa.trade_date,
+                SUM(m.open_interest) AS open_int,
+                SUM(m.change_in_oi)  AS chng_in_oi
+            {_FUT_JOIN}
+            WHERE fa.instrument_type = ?
+            GROUP BY fa.trade_date
+            ORDER BY fa.trade_date ASC
+            """,
+            [instr],
+        ).df()
+    finally:
+        conn.close()
+
+    if not df.empty:
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.replace([np.nan, np.inf, -np.inf], None)
+
+
 def get_futures_market_dates(asset_type: str = "stock_futures") -> list[str]:
     instr = _instr(asset_type)
     conn = get_conn(read_only=True)

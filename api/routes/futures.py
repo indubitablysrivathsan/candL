@@ -26,6 +26,7 @@ from api.db import (
     get_futures_rollup,
     get_futures_market_dates,
     get_futures_cycle_history,
+    get_futures_market_history,
 )
 
 from api.schemas import (
@@ -154,6 +155,17 @@ def _make_futures_router(asset_type: str) -> APIRouter:
     @router.get("/market-dates")
     def _market_dates():
         return {"asset_type": asset_type, "dates": get_futures_market_dates(asset_type)}
+
+    @router.get("/market-history")
+    def _market_history():
+        df = get_futures_market_history(asset_type)
+        if df.empty:
+            raise HTTPException(404, "No market history found")
+
+        df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")
+        rows = df.where(df.notna(), other=None).to_dict(orient="records")
+
+        return {"asset_type": asset_type, "rows": rows}
 
     return router
 

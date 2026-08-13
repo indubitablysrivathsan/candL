@@ -19,7 +19,6 @@ import {
   getDates,
   getFuturesAnalytics,
   getFuturesRollup,
-  getFuturesCombinedHistory,
   getMarketDates,
   formatCurrency,
   formatNumber,
