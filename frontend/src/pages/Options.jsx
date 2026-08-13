@@ -5,12 +5,20 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import MetricCard from '../components/shared/MetricCard';
 import LoadingSpinner from '../components/shared/LoadingSpinner';
 import DateSlider from '../components/shared/DateSlider';
+import Divider from '../components/shared/Divider';
+import TerminalBtn from '../components/shared/TerminalBtn';
+import { PanelHeader } from '../components/shared/Panel';
+import PortalDropdown from '../components/shared/PortalDropdown';
+import ExpiryDropdown from '../components/shared/ExpiryDropdown';
+import { TerminalTable, TerminalTr, TerminalTh, TerminalTd } from '../components/shared/DataTable';
+import PageHeader from '../components/shared/PageHeader';
 
 import StrikeBarChart from '../components/charts/StrikeBarChart';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import PCRChart from '../components/charts/PCRChart';
 import TickerAnalysisTable from '../components/charts/TickerAnalysisTable';
 import { OptionsOIChart } from '../components/charts/OIChart';
+import { T } from '../theme';
 
 import {
   getTickers,
@@ -29,26 +37,6 @@ import {
   getOptionsMarketHistory,
   OPTIONS_COMBINED_TICKER,
 } from '../api/client';
-
-/* ─── design tokens ──────────────────────────────────────────── */
-const T = {
-  bg:         '#06080c',
-  surface:    '#0b0f16',
-  surfaceHi:  '#111720',
-  border:     'rgba(255,255,255,0.07)',
-  borderHi:   'rgba(255,255,255,0.14)',
-  amber:      '#F0A500',
-  amberDim:   'rgba(240,165,0,0.12)',
-  green:      '#00C896',
-  red:        '#E05252',
-  pink:       '#D66E9A',
-  blue:       '#4A9EFF',
-  purple:     '#A855F7',
-  textHi:     'rgba(255,255,255,0.90)',
-  textMid:    'rgba(255,255,255,0.50)',
-  textLo:     'rgba(255,255,255,0.25)',
-  textGhost:  'rgba(255,255,255,0.12)',
-};
 
 /* ─── shared inline style helpers ───────────────────────────── */
 const panelStyle = {
@@ -74,32 +62,6 @@ const monoSm = {
 
 /* ─── tiny sub-components ────────────────────────────────────── */
 
-function Divider({ vertical }) {
-  return vertical
-    ? <div style={{ width: 1, alignSelf: 'stretch', background: T.border, flexShrink: 0 }} />
-    : <div style={{ height: 1, background: T.border }} />;
-}
-
-function TerminalBtn({ active, children, onClick, disabled, style = {} }) {
-  const base = {
-    padding: '4px 11px',
-    fontSize: 10,
-    fontWeight: 600,
-    letterSpacing: '0.10em',
-    textTransform: 'uppercase',
-    border: `1px solid ${active ? T.amber : T.border}`,
-    background: active ? T.amberDim : 'transparent',
-    color: active ? T.amber : T.textMid,
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    opacity: disabled ? 0.4 : 1,
-    transition: 'color 0.15s, border-color 0.15s, background 0.15s',
-    whiteSpace: 'nowrap',
-    borderRadius: 0,
-    ...style,
-  };
-  return <button style={base} onClick={onClick} disabled={disabled}>{children}</button>;
-}
-
 /* ─── METRIC STRIP using MetricCard ─────────────────────────── */
 function MetricStrip({ items }) {
   return (
@@ -118,39 +80,6 @@ function MetricStrip({ items }) {
           accent={accent}
         />
       ))}
-    </div>
-  );
-}
-
-/* ─── PORTAL DROPDOWN ────────────────────────────────────────── */
-function PortalDropdown({ anchorRef, open, children, minWidth = 160 }) {
-  const [rect, setRect] = useState(null);
-
-  useEffect(() => {
-    if (!open || !anchorRef.current) return;
-    const r = anchorRef.current.getBoundingClientRect();
-    setRect(r);
-  }, [open, anchorRef]);
-
-  if (!open || !rect) return null;
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        top: rect.bottom + 2,
-        left: rect.left,
-        minWidth: Math.max(rect.width, minWidth),
-        maxHeight: 300,
-        overflowY: 'auto',
-        background: '#0b0f16',
-        border: `1px solid ${T.borderHi}`,
-        zIndex: 9999,
-        boxShadow: '0 12px 40px rgba(0,0,0,0.7)',
-        borderRadius: 0,
-      }}
-    >
-      {children}
     </div>
   );
 }
@@ -242,108 +171,6 @@ function TickerSearch({ tickerList, selectedTicker, onChange, disabled }) {
               {ticker}
             </button>
           ))
-        }
-      </PortalDropdown>
-    </div>
-  );
-}
-
-/* ─── EXPIRY MULTI-SELECT DROPDOWN ───────────────────────────── */
-function ExpiryDropdown({ expiries, selectedExpiries, onToggle, singleSelect, maxSelect, label: labelText }) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef(null);
-  const triggerRef = useRef(null);
-
-  useEffect(() => {
-    const handler = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  const triggerLabel = useMemo(() => {
-    if (selectedExpiries.length === 0) return 'Select expiry…';
-    if (selectedExpiries.length === 1) return selectedExpiries[0];
-    return `${selectedExpiries.length} selected`;
-  }, [selectedExpiries]);
-
-  const isAtMax = maxSelect && selectedExpiries.length >= maxSelect;
-
-  return (
-    <div ref={wrapRef} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-      <span style={sectionLabel()}>
-        {labelText}
-        {maxSelect ? <span style={{ color: T.textGhost, marginLeft: 5 }}>max {maxSelect}</span> : ''}
-      </span>
-      <div ref={triggerRef}>
-        <button
-          onClick={() => setOpen((v) => !v)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 10,
-            padding: '5px 10px',
-            minWidth: 200,
-            height: 30,
-            background: T.bg,
-            border: `1px solid ${open ? T.amber : T.border}`,
-            color: selectedExpiries.length ? T.textHi : T.textMid,
-            fontSize: 11,
-            fontFamily: 'inherit',
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
-            cursor: 'pointer',
-            transition: 'border-color 0.15s',
-            whiteSpace: 'nowrap',
-            borderRadius: 0,
-          }}
-        >
-          <span>{triggerLabel}</span>
-          <span style={{ fontSize: 10, color: T.textLo }}>▾</span>
-        </button>
-      </div>
-      <PortalDropdown anchorRef={triggerRef} open={open} minWidth={200}>
-        {expiries.length === 0
-          ? <div style={{ padding: '8px 12px', ...monoSm }}>No expiries</div>
-          : expiries.map((exp) => {
-            const active = selectedExpiries.includes(exp);
-            const disabled = !active && isAtMax;
-            return (
-              <button
-                key={exp}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  if (disabled) return;
-                  onToggle(exp);
-                  if (singleSelect) setOpen(false);
-                }}
-                style={{
-                  ...dropItem(active, disabled),
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                {/* checkbox — sharp, consistent */}
-                <span style={{
-                  width: 11,
-                  height: 11,
-                  flexShrink: 0,
-                  border: `1px solid ${active ? T.amber : T.border}`,
-                  background: active ? T.amber : 'transparent',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 0,
-                }}>
-                  {active && <span style={{ fontSize: 9, color: '#000', lineHeight: 1, fontWeight: 800 }}>✓</span>}
-                </span>
-                {exp}
-              </button>
-            );
-          })
         }
       </PortalDropdown>
     </div>
@@ -818,29 +645,6 @@ function ExpiryPanel({ assetType, ticker, expiry, metric, startDate, endDate }) 
   );
 }
 
-/* ─── shared panel header helper ────────────────────────────── */
-function PanelHeader({ title, meta, onExport }) {
-  return (
-    <div style={{
-      padding: '10px 16px',
-      borderBottom: `1px solid ${T.border}`,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: T.textHi, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-          {title}
-        </span>
-        {meta && <span style={monoSm}>{meta}</span>}
-      </div>
-      {onExport && (
-        <TerminalBtn onClick={onExport}>↓ CSV</TerminalBtn>
-      )}
-    </div>
-  );
-}
-
 function downloadCsv(csv, filename) {
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })),
@@ -849,56 +653,6 @@ function downloadCsv(csv, filename) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-}
-
-/* ─── terminal table helpers ─────────────────────────────────── */
-function TerminalTable({ children }) {
-  return (
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, letterSpacing: '0.03em' }}>
-      {children}
-    </table>
-  );
-}
-function TerminalTr({ children, header, atm }) {
-  return (
-    <tr style={{
-      borderBottom: `1px solid ${T.border}`,
-      background: atm
-        ? 'rgba(240,165,0,0.07)'
-        : header
-        ? 'rgba(255,255,255,0.025)'
-        : 'transparent',
-      transition: 'background 0.1s',
-    }}>
-      {children}
-    </tr>
-  );
-}
-function TerminalTh({ children }) {
-  return (
-    <th style={{
-      padding: '7px 14px',
-      textAlign: 'left',
-      fontSize: 11,
-      fontWeight: 700,
-      letterSpacing: '0.14em',
-      textTransform: 'uppercase',
-      color: T.textHi,
-    }}>
-      {children}
-    </th>
-  );
-}
-function TerminalTd({ children, accent, bold }) {
-  return (
-    <td style={{
-      padding: '6px 14px',
-      color: accent || T.textMid,
-      fontWeight: bold ? 600 : 400,
-    }}>
-      {children}
-    </td>
-  );
 }
 
 function sortExpiries(expiries, tradeDate) {
@@ -1081,52 +835,11 @@ export default function Options({ assetType = 'stock_options' }) {
       />
 
       {/* ── page header ── */}
-      <div style={{
-        padding: '8px 20px',
-        borderBottom: `1px solid ${T.border}`,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 16,
-        background: T.surface,
-      }}>
-        <span style={{
-          fontSize: 16,
-          fontWeight: 700,
-          color: T.textHi,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-        }}>
-          {selectedTicker || '—'}
-        </span>
-        <span style={{
-          fontSize: 10,
-          letterSpacing: '0.14em',
-          color: T.textLo,
-          textTransform: 'uppercase',
-          borderLeft: `1px solid ${T.border}`,
-          paddingLeft: 16,
-        }}>
-          NSE · {pageLabel}
-        </span>
-
-        {/* live indicator dot */}
-        <div style={{
-          marginLeft: 'auto',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-        }}>
-          <span style={{
-            width: 6,
-            height: 6,
-            borderRadius: '50%',
-            background: T.green,
-            boxShadow: `0 0 6px ${T.green}`,
-            display: 'inline-block',
-          }} />
-          <span style={{ fontSize: 9, letterSpacing: '0.12em', color: T.textLo, textTransform: 'uppercase' }}>NSE</span>
-        </div>
-      </div>
+      <PageHeader
+        title={selectedTicker || '—'}
+        extra={[`NSE · ${pageLabel}`]}
+        liveLabel="NSE"
+      />
 
       {/* ── main content ── */}
       <main style={{ flex: 1, padding: '16px 20px', overflowX: 'hidden' }}>
@@ -1153,8 +866,8 @@ export default function Options({ assetType = 'stock_options' }) {
             <div style={panelStyle}>
               <PanelHeader
                 title="Daily Expiry Snapshot"
-                meta={`${selectedExpiries[0] || '--'} · ${startDate || '--'}`}
-                onExport={() => {
+                subtitle={`${selectedExpiries[0] || '--'} · ${startDate || '--'}`}
+                right={<TerminalBtn onClick={() => {
                   if (!snapshotRows.length) return;
                   const headers = ['Ticker', 'Underlying', 'Max Pain', 'PCR', 'CE', 'PE'];
                   const csv = [
@@ -1162,7 +875,7 @@ export default function Options({ assetType = 'stock_options' }) {
                     ...snapshotRows.map((r) => [r.ticker, r.underlying_price, r.max_pain, r.pcr, r.ce, r.pe].join(',')),
                   ].join('\n');
                   downloadCsv(csv, `${selectedExpiries[0]}_${startDate}_daily_expiry_snapshot.csv`);
-                }}
+                }}>↓ CSV</TerminalBtn>}
               />
               {loadingSnapshot ? (
                 <div style={{ minHeight: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

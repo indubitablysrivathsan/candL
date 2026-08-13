@@ -12,131 +12,20 @@ import MetricCard        from '../components/shared/MetricCard';
 import LoadingSpinner    from '../components/shared/LoadingSpinner';
 import CandlestickChart  from '../components/charts/CandlestickChart';
 import DailyChangeChart  from '../components/charts/DailyChangeChart';
+import Divider           from '../components/shared/Divider';
+import TerminalBtn       from '../components/shared/TerminalBtn';
+import Panel, { PanelHeader } from '../components/shared/Panel';
+import DateRangeRow, { RangePresets } from '../components/shared/DateRangeRow';
+import TermSelect        from '../components/shared/TermSelect';
+import ChartTooltip      from '../components/shared/ChartTooltip';
+import { DataTable }     from '../components/shared/DataTable';
+import SubTabStrip       from '../components/shared/SubTabStrip';
+import PageHeader        from '../components/shared/PageHeader';
+import TabBar            from '../components/shared/TabBar';
+import { T, mono, labelStyle, chartAxisProps, gridProps } from '../theme';
+import { fmt, fmtInt, fmtK, pctColor, pctSign } from '../utils/formatters';
+import { defaultRange } from '../utils/dateRange';
 import { participant, fii, volatility, market } from '../api/client';
-
-/* ─── DESIGN TOKENS ──────────────────────────────────────────── */
-const T = {
-  bg:         '#06080c',
-  surface:    '#0b0f16',
-  surfaceHi:  '#111720',
-  border:     'rgba(255,255,255,0.07)',
-  borderHi:   'rgba(255,255,255,0.14)',
-  amber:      '#F0A500',
-  amberDim:   'rgba(240,165,0,0.12)',
-  amberBorder:'rgba(240,165,0,0.35)',
-  green:      '#00C896',
-  greenDim:   'rgba(0,200,150,0.10)',
-  red:        '#E05252',
-  redDim:     'rgba(224,82,82,0.10)',
-  pink:       '#D66E9A',
-  blue:       '#4A9EFF',
-  purple:     '#A855F7',
-  textHi:     'rgba(255,255,255,0.90)',
-  textMid:    'rgba(255,255,255,0.50)',
-  textLo:     'rgba(255,255,255,0.25)',
-  textGhost:  'rgba(255,255,255,0.10)',
-};
-
-/* ─── SHARED STYLE HELPERS ───────────────────────────────────── */
-const mono = { fontFamily: "'IBM Plex Mono', 'Fira Code', 'Consolas', monospace" };
-
-const labelStyle = (extra = {}) => ({
-  ...mono,
-  fontSize: 9,
-  fontWeight: 700,
-  letterSpacing: '0.14em',
-  textTransform: 'uppercase',
-  color: T.textLo,
-  ...extra,
-});
-
-/* ─── HELPERS ────────────────────────────────────────────────── */
-const fmt    = (n, dec = 2) => n == null ? '—' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: dec, minimumFractionDigits: dec });
-const fmtInt = (n)          => n == null ? '—' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-const fmtK   = (v) => {
-  if (v == null) return '—';
-  const abs = Math.abs(v);
-  if (abs >= 1_00_000) return `${(v / 1_00_000).toFixed(2)}L`;
-  if (abs >= 1_000)    return `${(v / 1_000).toFixed(1)}K`;
-  return fmtInt(v);
-};
-const pctColor = (v) => v > 0 ? T.green : v < 0 ? T.red : T.textLo;
-const pctSign  = (v) => v > 0 ? '+' : '';
-
-function defaultRange(allDates, months = 3) {
-  if (!allDates?.length) return { start: '', end: '' };
-  return { start: allDates.at(-(months * 22)) ?? allDates[0], end: allDates.at(-1) };
-}
-
-/* ─── CHART SHARED PROPS ─────────────────────────────────────── */
-const chartAxisProps = {
-  tick: { fill: T.textLo, fontSize: 9, fontFamily: 'IBM Plex Mono, monospace', letterSpacing: '0.04em' },
-  tickLine: false,
-  axisLine: { stroke: T.border },
-};
-const gridProps = { strokeDasharray: '2 4', stroke: T.textGhost, vertical: false };
-
-/* ─── SHARED COMPONENTS ──────────────────────────────────────── */
-
-function Divider({ vertical, style = {} }) {
-  return vertical
-    ? <div style={{ width: 1, alignSelf: 'stretch', background: T.border, flexShrink: 0, ...style }} />
-    : <div style={{ height: 1, background: T.border, ...style }} />;
-}
-
-function TerminalBtn({ active, children, onClick, disabled, color, style = {} }) {
-  const ac = color ?? T.amber;
-  const acDim = color ? `${color}20` : T.amberDim;
-  const acBorder = color ? `${color}50` : T.amberBorder;
-  return (
-    <button onClick={onClick} disabled={disabled} style={{
-      ...mono,
-      padding: '4px 11px',
-      fontSize: 10,
-      fontWeight: 600,
-      letterSpacing: '0.10em',
-      textTransform: 'uppercase',
-      border: `1px solid ${active ? acBorder : T.border}`,
-      background: active ? acDim : 'transparent',
-      color: active ? ac : T.textMid,
-      cursor: disabled ? 'not-allowed' : 'pointer',
-      opacity: disabled ? 0.4 : 1,
-      transition: 'all 0.12s',
-      whiteSpace: 'nowrap',
-      borderRadius: 0,
-      ...style,
-    }}>
-      {children}
-    </button>
-  );
-}
-
-function PanelHeader({ title, subtitle, right }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '8px 14px',
-      borderBottom: `1px solid ${T.border}`,
-      background: T.surfaceHi,
-      gap: 12,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <span style={labelStyle({ color: T.amber, letterSpacing: '0.16em' })}>{title}</span>
-        {subtitle && <span style={{ ...mono, fontSize: 10, color: T.textLo }}>{subtitle}</span>}
-      </div>
-      {right && <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>{right}</div>}
-    </div>
-  );
-}
-
-function Panel({ title, subtitle, right, children, style = {} }) {
-  return (
-    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 0, overflow: 'hidden', ...style }}>
-      <PanelHeader title={title} subtitle={subtitle} right={right} />
-      <div style={{ padding: '14px' }}>{children}</div>
-    </div>
-  );
-}
 
 // ── FIXED: uses MetricCard as specified ──────────────────────────
 function MetricStrip({ items }) {
@@ -161,87 +50,10 @@ function MetricStrip({ items }) {
   );
 }
 
-function RangePresets({ allDates, onStart, onEnd }) {
-  return (
-    <div style={{ display: 'flex', border: `1px solid ${T.border}` }}>
-      {[{ l: '1M', m: 1 }, { l: '3M', m: 3 }, { l: '6M', m: 6 }, { l: '1Y', m: 12 }].map(({ l, m }, i) => (
-        <TerminalBtn key={l}
-          onClick={() => { const r = defaultRange(allDates, m); onStart(r.start); onEnd(r.end); }}
-          style={{ borderWidth: 0, borderRight: i < 3 ? `1px solid ${T.border}` : 0 }}>
-          {l}
-        </TerminalBtn>
-      ))}
-    </div>
-  );
-}
-
-function DateRangeRow({ allDates, startDate, endDate, onStart, onEnd }) {
-  const inputStyle = {
-    ...mono, fontSize: 10, padding: '4px 8px',
-    background: T.surfaceHi, border: `1px solid ${T.border}`,
-    color: T.textMid, outline: 'none', borderRadius: 0, letterSpacing: '0.04em',
-  };
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      <RangePresets allDates={allDates} onStart={onStart} onEnd={onEnd} />
-      <input type="date" value={startDate} onChange={e => onStart(e.target.value)} style={inputStyle} />
-      <span style={{ color: T.textLo, fontSize: 10 }}>→</span>
-      <input type="date" value={endDate}   onChange={e => onEnd(e.target.value)}   style={inputStyle} />
-    </div>
-  );
-}
-
-function TermSelect({ value, onChange, children, style = {} }) {
-  return (
-    <select value={value} onChange={e => onChange(e.target.value)} style={{
-      ...mono,
-      fontSize: 10,
-      padding: '4px 24px 4px 8px',
-      background: T.surfaceHi,
-      border: `1px solid ${T.border}`,
-      color: T.textMid,
-      outline: 'none',
-      borderRadius: 0,
-      letterSpacing: '0.04em',
-      cursor: 'pointer',
-      appearance: 'none',
-      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,0.25)'/%3E%3C/svg%3E")`,
-      backgroundRepeat: 'no-repeat',
-      backgroundPosition: 'right 8px center',
-      ...style,
-    }}>
-      {children}
-    </select>
-  );
-}
-
 function SectionLabel({ children, style = {} }) {
   return (
     <div style={{ ...labelStyle({ color: T.amber }), marginBottom: 8, paddingTop: 2, ...style }}>
       {children}
-    </div>
-  );
-}
-
-function TermTooltip({ active, payload, label, valueFormatter }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{
-      background: T.surfaceHi, border: `1px solid ${T.borderHi}`,
-      padding: '10px 14px', minWidth: 180,
-    }}>
-      <div style={labelStyle({ color: T.amber, marginBottom: 8 })}>{label}</div>
-      {payload.map((p, i) => p.value != null && (
-        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 4 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 6, height: 6, background: p.color, flexShrink: 0 }} />
-            <span style={{ ...mono, fontSize: 10, color: p.color }}>{p.name}</span>
-          </div>
-          <span style={{ ...mono, fontSize: 11, color: T.textHi, fontWeight: 600 }}>
-            {valueFormatter ? valueFormatter(p.value, p.name) : fmt(p.value)}
-          </span>
-        </div>
-      ))}
     </div>
   );
 }
@@ -275,64 +87,6 @@ const thStyle = {
   whiteSpace: 'nowrap',
   background: T.surfaceHi,
 };
-
-function DataTable({ columns, rows, maxHeight = 480, rowKey }) {
-  return (
-    <div style={{ border: `1px solid ${T.border}`, overflowX: 'auto', overflowY: 'auto', maxHeight }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
-          <tr>
-            {columns.map(col => (
-              <th key={col.key} style={{ ...thStyle, textAlign: col.align || 'right' }}>{col.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr key={rowKey ? (row[rowKey] ?? i) : i} style={{ background: i % 2 === 0 ? T.surface : 'transparent' }}>
-              {columns.map(col => (
-                <td key={col.key} style={{
-                  ...mono, textAlign: col.align || 'right',
-                  padding: '5px 10px', fontSize: 11, color: T.textMid,
-                  borderBottom: `1px solid ${T.border}`,
-                }}>
-                  {col.render ? col.render(row) : row[col.key]}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/* ─── SUB-TAB STRIP ──────────────────────────────────────────── */
-function SubTabStrip({ tabs, active, onChange }) {
-  return (
-    <div style={{ display: 'flex', borderBottom: `1px solid ${T.border}`, marginBottom: 14 }}>
-      {tabs.map(({ key, label }) => (
-        <button key={key} onClick={() => onChange(key)} style={{
-          ...mono,
-          padding: '6px 14px',
-          fontSize: 10,
-          fontWeight: 600,
-          letterSpacing: '0.10em',
-          textTransform: 'uppercase',
-          background: 'transparent',
-          border: 'none',
-          borderBottom: active === key ? `2px solid ${T.blue}` : '2px solid transparent',
-          color: active === key ? T.blue : T.textLo,
-          cursor: 'pointer',
-          transition: 'all 0.12s',
-          marginBottom: -1,
-        }}>
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 /* ═══════════════════════════════════════════════════════════════
    INDICES
@@ -607,7 +361,7 @@ function BreadthSection({ marketDates }) {
                   <CartesianGrid {...gridProps} />
                   <XAxis dataKey="trade_date" {...chartAxisProps} tickFormatter={d => d.slice(5)} interval="preserveStartEnd" />
                   <YAxis {...chartAxisProps} width={46} />
-                  <Tooltip content={<TermTooltip valueFormatter={v => fmtInt(v)} />} />
+                  <Tooltip content={<ChartTooltip valueFormatter={v => fmtInt(v)} />} />
                   <Legend formatter={v => <span style={{ ...mono, fontSize: 9, color: T.textMid }}>{v}</span>} />
                   <Bar dataKey="advances" name="Advances" stackId="a" fill={T.green} opacity={0.8} radius={0} />
                   <Bar dataKey="declines" name="Declines" stackId="a" fill={T.red}   opacity={0.8} />
@@ -621,7 +375,7 @@ function BreadthSection({ marketDates }) {
                   <XAxis dataKey="trade_date" {...chartAxisProps} tickFormatter={d => d.slice(5)} interval="preserveStartEnd" />
                   <YAxis {...chartAxisProps} tickFormatter={v => fmt(v, 2)} width={40} domain={[0, 1]} />
                   <ReferenceLine y={0.5} stroke={T.borderHi} strokeDasharray="3 3" />
-                  <Tooltip content={<TermTooltip valueFormatter={v => fmt(v, 3)} />} />
+                  <Tooltip content={<ChartTooltip valueFormatter={v => fmt(v, 3)} />} />
                   <Line dataKey="ad_ratio" name="AD Ratio" stroke={T.blue} dot={false} strokeWidth={1.5} />
                 </LineChart>
               </ResponsiveContainer>
@@ -825,7 +579,7 @@ function FIIStats({ allDates }) {
                 <XAxis dataKey="trade_date" {...chartAxisProps} tickFormatter={d => d.slice(5)} interval="preserveStartEnd" />
                 <YAxis {...chartAxisProps} tickFormatter={v => `${(v / 1000).toFixed(0)}K`} width={46} />
                 <ReferenceLine y={0} stroke={T.borderHi} strokeDasharray="3 3" />
-                <Tooltip content={<TermTooltip valueFormatter={v => fmtInt(v)} />} />
+                <Tooltip content={<ChartTooltip valueFormatter={v => fmtInt(v)} />} />
                 <Bar dataKey="net_contracts" name="Net Contracts" radius={0}>
                   {data.map((row, i) => <Cell key={i} fill={(row.net_contracts ?? 0) >= 0 ? T.green : T.red} opacity={0.85} />)}
                 </Bar>
@@ -838,7 +592,7 @@ function FIIStats({ allDates }) {
                 <CartesianGrid {...gridProps} />
                 <XAxis dataKey="trade_date" {...chartAxisProps} tickFormatter={d => d.slice(5)} interval="preserveStartEnd" />
                 <YAxis {...chartAxisProps} tickFormatter={v => `${(v / 1e5).toFixed(1)}L`} width={46} />
-                <Tooltip content={<TermTooltip valueFormatter={v => fmtInt(v)} />} />
+                <Tooltip content={<ChartTooltip valueFormatter={v => fmtInt(v)} />} />
                 <Line dataKey="oi_contracts" name="OI" stroke={T.blue} dot={false} strokeWidth={1.5} />
               </LineChart>
             </ResponsiveContainer>
@@ -973,7 +727,7 @@ function VolatilitySection() {
                   <CartesianGrid {...gridProps} />
                   <XAxis dataKey="trade_date" {...chartAxisProps} tickFormatter={d => d.slice(5)} interval="preserveStartEnd" />
                   <YAxis {...chartAxisProps} tickFormatter={v => `${(v * 100).toFixed(0)}%`} width={40} />
-                  <Tooltip content={<TermTooltip valueFormatter={v => `${(v * 100).toFixed(1)}%`} />} />
+                  <Tooltip content={<ChartTooltip valueFormatter={v => `${(v * 100).toFixed(1)}%`} />} />
                   <Legend formatter={v => <span style={{ ...mono, fontSize: 9, color: T.textMid }}>{v}</span>} />
                   <Line dataKey="applicable_annual_vol" name="Applicable" stroke={T.blue}  dot={false} strokeWidth={2} />
                   <Line dataKey="underlying_annual_vol" name="Underlying" stroke={T.green} dot={false} strokeWidth={1.2} strokeDasharray="4 2" />
@@ -1024,45 +778,11 @@ export default function Market() {
   return (
     <div style={{ background: T.bg, minHeight: '100vh', ...mono }}>
       {/* ── Page Header ── */}
-      <div style={{ borderBottom: `1px solid ${T.border}`, background: T.surface, padding: '0 20px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0 0' }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: T.textHi, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-              Market & Institutional Flow
-            </span>
-            <span style={{ fontSize: 10, color: T.textLo, letterSpacing: '0.06em' }}>
-              Indices · Breadth · Stocks · FII · Volatility
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 6, height: 6, background: T.green, borderRadius: '50%' }} />
-            <span style={{ fontSize: 9, color: T.green, letterSpacing: '0.12em', fontWeight: 700 }}>NSE LIVE</span>
-          </div>
-        </div>
-
-        {/* Tab strip */}
-        <div style={{ display: 'flex', gap: 0, marginTop: 8 }}>
-          {TOP_TABS.map(({ key, label }) => (
-            <button key={key} onClick={() => setActive(key)} style={{
-              ...mono,
-              padding: '8px 14px',
-              fontSize: 10,
-              fontWeight: 600,
-              letterSpacing: '0.10em',
-              textTransform: 'uppercase',
-              background: 'transparent',
-              border: 'none',
-              borderBottom: activeSection === key ? `2px solid ${T.amber}` : '2px solid transparent',
-              color: activeSection === key ? T.amber : T.textMid,
-              cursor: 'pointer',
-              transition: 'all 0.12s',
-              marginBottom: -1,
-            }}>
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <PageHeader
+        title="Market & Institutional Flow"
+        subtitle="Indices · Breadth · Stocks · FII · Volatility"
+      />
+      <TabBar tabs={TOP_TABS} active={activeSection} onChange={setActive} />
 
       {/* ── Content ── */}
       <div style={{ padding: '16px 20px' }}>

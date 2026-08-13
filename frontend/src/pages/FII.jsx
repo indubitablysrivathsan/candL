@@ -5,101 +5,23 @@ import {
 } from "recharts";
 import LoadingSpinner from "../components/shared/LoadingSpinner";
 import DateSlider     from "../components/shared/DateSlider";
+import TerminalBtn    from "../components/shared/TerminalBtn";
+import { PanelHeader as SectionHeader } from "../components/shared/Panel";
+import ChartTooltip   from "../components/shared/ChartTooltip";
+import TabBar         from "../components/shared/TabBar";
+import PageHeader      from "../components/shared/PageHeader";
+import { T, mono, labelStyle, PARTICIPANTS } from "../theme";
+import { fmt, fmtK, fmtCr, sign, netCol, subtractDays } from "../utils/formatters";
+import { downloadCSV } from "../utils/csv";
 import { fii, participant } from "../api/client";
 
-// ─── Design Tokens ────────────────────────────────────────────────────────────
-const T = {
-  bg:        '#06080c',
-  surface:   '#0b0f16',
-  surfaceHi: '#111720',
-  border:    'rgba(255,255,255,0.07)',
-  borderHi:  'rgba(255,255,255,0.14)',
-  amber:     '#F0A500',
-  amberDim:  'rgba(240,165,0,0.12)',
-  green:     '#00C896',
-  greenDim:  'rgba(0,200,150,0.15)',
-  red:       '#E05252',
-  redDim:    'rgba(224,82,82,0.15)',
-  blue:      '#4A9EFF',
-  purple:    '#B39DDB',
-  textHi:    'rgba(255,255,255,0.90)',
-  textMid:   'rgba(255,255,255,0.50)',
-  textLo:    'rgba(255,255,255,0.25)',
-  textGhost: 'rgba(255,255,255,0.12)',
-};
-
-// participant accent colours — matches screenshot
+// participant accent colours — FII page-specific palette (differs from
+// Participants.jsx's PARTICIPANT_COLORS; kept local intentionally).
 const P_COLOR = { FII: '#4A9EFF', DII: '#F0A500', Client: '#00C896', Pro: '#B39DDB' };
-const PARTICIPANTS = ['FII', 'DII', 'Client', 'Pro'];
-
-// ─── Formatters ───────────────────────────────────────────────────────────────
-const fmt    = (n, dec = 0) => n == null ? '—' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: dec });
-const fmtK   = (v) => { if (v == null) return '—'; const a = Math.abs(v); if (a >= 1e5) return `${(v/1e5).toFixed(2)}L`; if (a >= 1e3) return `${(v/1e3).toFixed(1)}K`; return fmt(v); };
-const fmtCr  = (v) => v == null ? '—' : `₹${fmt(v,1)} Cr`;
-const sign   = (v) => v == null ? '' : v >= 0 ? '+' : '';
-const netCol = (v) => v == null ? T.textLo : v >= 0 ? T.green : T.red;
-const netBg  = (v) => v == null ? 'transparent' : v >= 0 ? T.greenDim : T.redDim;
-
-// ─── Date helpers ─────────────────────────────────────────────────────────────
-const subtractDays = (dateStr, n) => { const d = new Date(dateStr); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); };
-
-// ─── CSV ──────────────────────────────────────────────────────────────────────
-function downloadCSV(rows, filename, cols) {
-  if (!rows?.length) return;
-  const blob = new Blob(
-    [cols.map(c=>c.label).join(',') + '\n' + rows.map(r=>cols.map(c=>r[c.key]??'').join(',')).join('\n')],
-    { type: 'text/csv' }
-  );
-  Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: filename }).click();
-}
 
 // ─── Shared style helpers ─────────────────────────────────────────────────────
-const mono = { fontFamily: "'IBM Plex Mono','Fira Code','Consolas',monospace" };
-const label11 = { fontSize: 9, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: T.textLo };
+const label11 = labelStyle();
 const val14   = { fontSize: 13, fontWeight: 700, letterSpacing: '0.04em', fontFamily: mono.fontFamily };
-
-function TerminalBtn({ active, children, onClick, disabled, color, small }) {
-  const accent = color || T.amber;
-  return (
-    <button onClick={onClick} disabled={disabled} style={{
-      padding: small ? '3px 8px' : '4px 11px',
-      fontSize: small ? 9 : 10, fontWeight: 600, letterSpacing: '0.10em', textTransform: 'uppercase',
-      border: `1px solid ${active ? accent : T.border}`,
-      background: active ? `${accent}20` : 'transparent',
-      color: active ? accent : T.textMid,
-      cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.4 : 1,
-      transition: 'all 0.15s', whiteSpace: 'nowrap', borderRadius: 0, ...mono,
-    }}>{children}</button>
-  );
-}
-
-function SectionHeader({ label, subtitle, right }) {
-  return (
-    <div style={{ padding: '8px 14px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, background: T.surfaceHi }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <span style={{ ...label11, color: T.amber }}>{label}</span>
-        {subtitle && <span style={{ fontSize: 10, color: T.textLo, letterSpacing: '0.04em' }}>{subtitle}</span>}
-      </div>
-      {right && <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>{right}</div>}
-    </div>
-  );
-}
-
-// ─── Chart Tooltip ────────────────────────────────────────────────────────────
-function ChartTooltip({ active, payload, label, valueFmt }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{ background: T.surfaceHi, border: `1px solid ${T.borderHi}`, padding: '10px 14px', fontSize: 11, ...mono }}>
-      <div style={{ color: T.textLo, marginBottom: 6 }}>{label}</div>
-      {payload.map((p, i) => (
-        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 20, marginBottom: 3 }}>
-          <span style={{ color: T.textMid }}>{p.name}</span>
-          <span style={{ color: p.color, fontWeight: 700 }}>{valueFmt ? valueFmt(p.value) : fmtK(p.value)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OVERVIEW TAB
@@ -169,7 +91,7 @@ function OverviewTab({ latestDate }) {
       {/* All instruments table */}
       <div style={{ background: T.surface, border:`1px solid ${T.border}` }}>
         <SectionHeader
-          label="All Instruments"
+          title="All Instruments"
           subtitle={`Full FII activity snapshot · ${latestDate}`}
           right={<TerminalBtn onClick={()=>downloadCSV(rows,`fii_overview_${latestDate}.csv`,[
             {key:'instrument',label:'Instrument'},{key:'buy_contracts',label:'Bought (Lots)'},
@@ -220,7 +142,7 @@ function NetOITab({ latestDate }) {
     <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
       <div style={{ background: T.surface, border:`1px solid ${T.border}` }}>
         <SectionHeader
-          label="Net OI — Futures Positioning"
+          title="Net OI — Futures Positioning"
           subtitle="Net long − short contracts by participant"
           right={
             <div style={{ display:'flex', gap:6 }}>
@@ -260,7 +182,7 @@ function NetOITab({ latestDate }) {
                   interval={Math.max(1,Math.floor(chartData.length/9))} />
                 <YAxis tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
                   tickFormatter={fmtK} width={60} />
-                <Tooltip content={<ChartTooltip valueFmt={v=>`${fmtK(v)} lots`} />} />
+                <Tooltip content={<ChartTooltip valueFormatter={v=>`${fmtK(v)} lots`} />} />
                 <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 2" />
                 <Legend wrapperStyle={{fontSize:10,color:T.textLo,paddingTop:8,...mono}} iconType="circle" iconSize={7} />
                 {PARTICIPANTS.map(p=>visible.includes(p)&&(
@@ -302,7 +224,7 @@ function NetVolumeTab({ latestDate }) {
   return (
     <div style={{ background: T.surface, border:`1px solid ${T.border}` }}>
       <SectionHeader
-        label="Net Volume — Index Flow"
+        title="Net Volume — Index Flow"
         subtitle="FII net trading activity in index futures"
         right={
           <div style={{ display:'flex', gap:6 }}>
@@ -327,7 +249,7 @@ function NetVolumeTab({ latestDate }) {
                 interval={Math.max(1,Math.floor(chartData.length/9))} />
               <YAxis tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
                 tickFormatter={metric==='value'?v=>`₹${fmtK(v)}`:fmtK} width={68} />
-              <Tooltip content={<ChartTooltip valueFmt={metric==='value'?fmtCr:v=>`${fmtK(v)} lots`} />} />
+              <Tooltip content={<ChartTooltip valueFormatter={metric==='value'?fmtCr:v=>`${fmtK(v)} lots`} />} />
               <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 2" />
               <Bar dataKey="value" name={metric==='lots'?'Net Lots':'Net Value'} radius={[2,2,0,0]}
                 fill={T.blue}
@@ -372,7 +294,7 @@ function OptionsTab({ latestDate }) {
   return (
     <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
       <SectionHeader
-        label="Options OI Positioning"
+        title="Options OI Positioning"
         subtitle="Net long − short contracts by participant across calls and puts"
         right={
           <div style={{ display:'flex', gap:6 }}>
@@ -401,7 +323,7 @@ function OptionsTab({ latestDate }) {
                 interval={Math.max(1,Math.floor(chartData.length/9))} />
               <YAxis tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
                 tickFormatter={fmtK} width={60} />
-              <Tooltip content={<ChartTooltip valueFmt={v=>`${fmtK(v)} lots`} />} />
+              <Tooltip content={<ChartTooltip valueFormatter={v=>`${fmtK(v)} lots`} />} />
               <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 2" />
               <Legend wrapperStyle={{fontSize:10,color:T.textLo,paddingTop:8,...mono}} iconType="circle" iconSize={7} />
               {PARTICIPANTS.map(p=>(
@@ -444,7 +366,7 @@ function DailyTableTab({ dates }) {
       {dates?.length>0 && <DateSlider dates={dates} selectedDate={selectedDate} onChange={setSelectedDate} />}
       <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
         <SectionHeader
-          label="Instrument Breakdown"
+          title="Instrument Breakdown"
           subtitle={`NSE FII Statistics — all F&O instruments · ${selectedDate??''}`}
           right={<TerminalBtn onClick={()=>downloadCSV(rows,`fii_breakdown_${selectedDate}.csv`,CSV_COLS)}>↓ Export CSV</TerminalBtn>}
         />
@@ -564,7 +486,7 @@ function AnalysisTab({ dates }) {
       {/* PANEL 1 — Participant Flow Analysis */}
       <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
         <SectionHeader
-          label="Participant Flow Analysis"
+          title="Participant Flow Analysis"
           subtitle="Daily flow classification — mirrors NSE IDX/STK Analysis format"
           right={
             <div style={{ display:'flex', gap:6 }}>
@@ -621,7 +543,7 @@ function AnalysisTab({ dates }) {
 
       {/* PANEL 2 — OI Snapshot all segments */}
       <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
-        <SectionHeader label="Open Interest Snapshot — All Segments" />
+        <SectionHeader title="Open Interest Snapshot — All Segments" />
         <div style={{ overflowX:'auto' }}>
           <table style={{ width:'100%', borderCollapse:'collapse', ...mono, fontSize:11 }}>
             <thead>
@@ -671,7 +593,7 @@ function AnalysisTab({ dates }) {
 
       {/* PANEL 3 — Net Volume */}
       <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
-        <SectionHeader label="Net Volume — Current Session Trading Activity" />
+        <SectionHeader title="Net Volume — Current Session Trading Activity" />
         <div style={{ overflowX:'auto' }}>
           <table style={{ width:'100%', borderCollapse:'collapse', ...mono, fontSize:11 }}>
             <thead>
@@ -770,7 +692,7 @@ function StatsExplorerTab({ allInstruments, latestDate }) {
   return (
     <div style={{ background:T.surface, border:`1px solid ${T.border}` }}>
       <SectionHeader
-        label="Stats Explorer"
+        title="Stats Explorer"
         subtitle="Compare multiple instruments over a custom date range"
         right={
           <div style={{ display:'flex', gap:6 }}>
@@ -823,7 +745,7 @@ function StatsExplorerTab({ allInstruments, latestDate }) {
                         interval={Math.max(1,Math.floor(chartData.length/9))} />
                       <YAxis tick={{fontSize:9,fill:T.textLo,...mono}} tickLine={false} axisLine={false}
                         tickFormatter={metric==='value'?v=>`₹${fmtK(v)}`:fmtK} width={68} />
-                      <Tooltip content={<ChartTooltip valueFmt={metric==='value'?fmtCr:v=>`${fmtK(v)} lots`} />} />
+                      <Tooltip content={<ChartTooltip valueFormatter={metric==='value'?fmtCr:v=>`${fmtK(v)} lots`} />} />
                       <ReferenceLine y={0} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 2" />
                       <Legend wrapperStyle={{fontSize:10,color:T.textLo,paddingTop:8,...mono}} iconType="circle" iconSize={7} />
                       {selInstrs.map((ins,idx)=>{
@@ -973,20 +895,11 @@ export default function FII() {
     <div style={{ background:T.bg, minHeight:'100vh', display:'flex', flexDirection:'column', ...mono }}>
 
       {/* ── Page title bar ── */}
-      <div style={{ padding:'8px 20px', borderBottom:`1px solid ${T.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', background:T.surface, flexShrink:0 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-          <span style={{ fontSize:13, fontWeight:700, color:T.textHi, letterSpacing:'0.12em', textTransform:'uppercase' }}>
-            FII Activity
-          </span>
-          <span style={{ fontSize:9, color:T.textLo, letterSpacing:'0.1em' }}>
-            FII › DII › Client › Pro — net positioning across futures and options
-          </span>
-        </div>
-        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-          <span style={{ width:6,height:6,borderRadius:'50%',background:T.green,boxShadow:`0 0 6px ${T.green}`,display:'inline-block' }} />
-          <span style={{ fontSize:9,letterSpacing:'0.12em',color:T.green,textTransform:'uppercase' }}>NSE Live</span>
-        </div>
-      </div>
+      <PageHeader
+        title="FII Activity"
+        subtitle="FII › DII › Client › Pro — net positioning across futures and options"
+        liveLabel="NSE Live"
+      />
 
       {/* ── Metric strip ── */}
       {headerStats && (
@@ -1006,18 +919,7 @@ export default function FII() {
       )}
 
       {/* ── Tab bar ── */}
-      <div style={{ display:'flex', gap:0, borderBottom:`2px solid ${T.border}`, background:T.surface, overflowX:'auto', flexShrink:0 }}>
-        {TABS.map(t=>(
-          <button key={t.key} onClick={()=>setTab(t.key)} style={{
-            padding:'9px 18px', fontSize:10, letterSpacing:'0.09em', fontWeight:tab===t.key?700:400,
-            color:tab===t.key?T.amber:T.textMid,
-            background:tab===t.key?T.amberDim:'transparent',
-            border:'none', borderBottom:tab===t.key?`2px solid ${T.amber}`:'2px solid transparent',
-            cursor:'pointer', whiteSpace:'nowrap', textTransform:'uppercase',
-            transition:'color 0.15s', marginBottom:-2, borderRadius:0, ...mono,
-          }}>{t.label}</button>
-        ))}
-      </div>
+      <TabBar tabs={TABS} active={tab} onChange={setTab} />
 
       {/* ── Content ── */}
       <main style={{ flex:1, padding:'16px 20px', overflowX:'hidden', display:'flex', flexDirection:'column', gap:12 }}>

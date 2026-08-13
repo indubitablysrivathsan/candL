@@ -21,6 +21,7 @@ the trading calendar are handled correctly.
 """
 
 import pandas as pd
+import numpy as np
 import duckdb
 from pathlib import Path
 

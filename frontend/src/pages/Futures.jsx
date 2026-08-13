@@ -1,11 +1,17 @@
 // frontend/src/pages/Futures.jsx
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import LoadingSpinner from '../components/shared/LoadingSpinner';
 import MetricCard from '../components/shared/MetricCard';
 import DateSlider from '../components/shared/DateSlider';
+import TerminalBtn from '../components/shared/TerminalBtn';
+import { PanelHeader } from '../components/shared/Panel';
+import ExpiryDropdown from '../components/shared/ExpiryDropdown';
+import { TerminalTable, TerminalTr, TerminalTh, TerminalTd } from '../components/shared/DataTable';
+import PageHeader from '../components/shared/PageHeader';
 import OIChart, { ScreenerOIChart } from '../components/charts/OIChart';
+import { T } from '../theme';
 
 import {
   getTickers,
@@ -20,26 +26,6 @@ import {
   QUADRANT_META,
   FUTURES_COMBINED_TICKER,
 } from '../api/client';
-
-/* ─────────────────────────────────────────────────────────────────
-   DESIGN TOKENS  (matches Options.jsx terminal aesthetic)
-───────────────────────────────────────────────────────────────── */
-const T = {
-  bg:        '#06080c',
-  surface:   '#0b0f16',
-  surfaceHi: '#111720',
-  border:    'rgba(255,255,255,0.07)',
-  borderHi:  'rgba(255,255,255,0.14)',
-  amber:     '#F0A500',
-  amberDim:  'rgba(240,165,0,0.12)',
-  green:     '#00C896',
-  red:       '#E05252',
-  blue:      '#4A9EFF',
-  textHi:    'rgba(255,255,255,0.90)',
-  textMid:   'rgba(255,255,255,0.50)',
-  textLo:    'rgba(255,255,255,0.25)',
-  textGhost: 'rgba(255,255,255,0.12)',
-};
 
 /* ─────────────────────────────────────────────────────────────────
    CONSTANTS
@@ -110,97 +96,6 @@ const cellStyle = (extra = {}) => ({
   ...extra,
 });
 
-/* ─────────────────────────────────────────────────────────────────
-   TINY SHARED COMPONENTS
-───────────────────────────────────────────────────────────────── */
-function Divider() {
-  return <div style={{ height: 1, background: T.border }} />;
-}
-
-function TerminalBtn({ active, children, onClick, disabled, color, style = {} }) {
-  const accent     = color || T.amber;
-  const accentDim  = color ? `${color}20` : T.amberDim;
-  const base = {
-    padding: '4px 11px',
-    fontSize: 10,
-    fontWeight: 600,
-    letterSpacing: '0.10em',
-    textTransform: 'uppercase',
-    border: `1px solid ${active ? accent : T.border}`,
-    background: active ? accentDim : 'transparent',
-    color: active ? accent : T.textMid,
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    opacity: disabled ? 0.4 : 1,
-    transition: 'color 0.15s, border-color 0.15s, background 0.15s',
-    whiteSpace: 'nowrap',
-    borderRadius: 0,
-    fontFamily: 'inherit',
-    ...style,
-  };
-  return <button style={base} onClick={onClick} disabled={disabled}>{children}</button>;
-}
-
-function TerminalTable({ children }) {
-  return (
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, letterSpacing: '0.03em', fontFamily: 'inherit' }}>
-      {children}
-    </table>
-  );
-}
-function TerminalTr({ children, header }) {
-  return (
-    <tr style={{
-      borderBottom: `1px solid ${T.border}`,
-      background: header ? 'rgba(255,255,255,0.025)' : 'transparent',
-    }}>
-      {children}
-    </tr>
-  );
-}
-function TerminalTh({ children }) {
-  return (
-    <th style={{
-      padding: '7px 14px',
-      textAlign: 'left',
-      fontSize: 11,
-      fontWeight: 700,
-      letterSpacing: '0.14em',
-      textTransform: 'uppercase',
-      color: T.textHi,
-    }}>
-      {children}
-    </th>
-  );
-}
-function TerminalTd({ children, accent, bold }) {
-  return (
-    <td style={{ padding: '6px 14px', color: accent || T.textMid, fontWeight: bold ? 600 : 400 }}>
-      {children}
-    </td>
-  );
-}
-
-function PanelHeader({ title, meta, onExport }) {
-  return (
-    <div style={{
-      padding: '10px 16px',
-      borderBottom: `1px solid ${T.border}`,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: T.textHi, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-          {title}
-        </span>
-        {meta && <span style={monoSm}>{meta}</span>}
-      </div>
-      {onExport && (
-        <TerminalBtn onClick={onExport}>↓ CSV</TerminalBtn>
-      )}
-    </div>
-  );
-}
 
 /* ─────────────────────────────────────────────────────────────────
    ANALYTICS PANEL
@@ -323,7 +218,7 @@ function AnalyticsPanel({
       <div style={panelStyle}>
         <PanelHeader
           title={`Rolling Analytics — ${ticker} / ${expiry}`}
-          onExport={() => {
+          right={<TerminalBtn onClick={() => {
             const headers = ['Date','Close','Prev Close','Chng Price','Chng Price %','Chng OI','Chng OI %','Volume','Lot Size','Basis','CoC %','Vol/OI','DTE','Signal'];
             const csvRows = [...data].reverse().map((row) => [
               row.trade_date, row.close ?? '', row.prev_close ?? '',
@@ -342,7 +237,7 @@ function AnalyticsPanel({
             a.href = url; a.download = `futures_analytics_${ticker}_${expiry}.csv`;
             document.body.appendChild(a); a.click();
             document.body.removeChild(a); URL.revokeObjectURL(url);
-          }}
+          }}>↓ CSV</TerminalBtn>}
         />
         <div style={{ overflowX: 'auto' }}>
           <TerminalTable>
@@ -687,83 +582,6 @@ function RollupPanel({
   );
 }
 
-function ExpiryDropdown({ expiries, selectedExpiries, onToggle, singleSelect, maxSelect, label: labelText }) {
-  const [open, setOpen] = useState(false);
-  const wrapRef    = useRef(null);
-  const triggerRef = useRef(null);
-
-  useEffect(() => {
-    const handler = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  const triggerLabel = useMemo(() => {
-    if (selectedExpiries.length === 0) return 'Select expiry…';
-    if (selectedExpiries.length === 1) return selectedExpiries[0];
-    return `${selectedExpiries.length} selected`;
-  }, [selectedExpiries]);
-
-  const isAtMax = maxSelect && selectedExpiries.length >= maxSelect;
-
-  return (
-    <div ref={wrapRef} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-      <span style={sectionLabel()}>
-        {labelText}
-        {maxSelect ? <span style={{ color: T.textGhost, marginLeft: 5 }}>max {maxSelect}</span> : ''}
-      </span>
-      <div ref={triggerRef}>
-        <button onClick={() => setOpen((v) => !v)} style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-          padding: '5px 10px', minWidth: 200, height: 30, background: T.bg,
-          border: `1px solid ${open ? T.amber : T.border}`, color: selectedExpiries.length ? T.textHi : T.textMid,
-          fontSize: 11, fontFamily: 'inherit', letterSpacing: '0.06em', textTransform: 'uppercase',
-          cursor: 'pointer', transition: 'border-color 0.15s', whiteSpace: 'nowrap', borderRadius: 0,
-        }}>
-          <span>{triggerLabel}</span>
-          <span style={{ fontSize: 10, color: T.textLo }}>▾</span>
-        </button>
-      </div>
-      {open && (
-        <div style={{
-          position: 'fixed',
-          top: (() => { const r = triggerRef.current?.getBoundingClientRect(); return r ? r.bottom + 2 : 0; })(),
-          left: (() => { const r = triggerRef.current?.getBoundingClientRect(); return r ? r.left : 0; })(),
-          zIndex: 9999,
-          minWidth: 200, maxHeight: 300, overflowY: 'auto',
-          background: '#0b0f16', border: `1px solid ${T.borderHi}`,
-          boxShadow: '0 12px 40px rgba(0,0,0,0.7)',
-        }}>
-          {expiries.map((exp) => {
-            const active   = selectedExpiries.includes(exp);
-            const disabled = !active && !!isAtMax;
-            return (
-              <button key={exp} onMouseDown={(e) => { e.preventDefault(); if (!disabled) { onToggle(exp); if (singleSelect) setOpen(false); } }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
-                  padding: '7px 12px', fontSize: 11, fontFamily: 'inherit', letterSpacing: '0.05em',
-                  color: disabled ? T.textGhost : active ? T.amber : T.textHi,
-                  background: active ? T.amberDim : 'transparent', border: 'none',
-                  borderBottom: `1px solid ${T.border}`, cursor: disabled ? 'not-allowed' : 'pointer',
-                  opacity: disabled ? 0.4 : 1, textTransform: 'uppercase', borderRadius: 0,
-                }}>
-                <span style={{
-                  width: 11, height: 11, flexShrink: 0, borderRadius: 0,
-                  border: `1px solid ${active ? T.amber : T.border}`, background: active ? T.amber : 'transparent',
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  {active && <span style={{ fontSize: 9, color: '#000', fontWeight: 800 }}>✓</span>}
-                </span>
-                {exp}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 /* ─────────────────────────────────────────────────────────────────
    MAIN PAGE
 ───────────────────────────────────────────────────────────────── */
@@ -1096,55 +914,11 @@ export default function Futures({ assetType = 'stock_futures' }) {
       </div>
 
       {/* ── PAGE HEADER ── */}
-      <div style={{
-        padding: '8px 20px',
-        borderBottom: `1px solid ${T.border}`,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 16,
-        background: T.surface,
-        flexShrink: 0,
-      }}>
-        <span style={{
-          fontSize: 16,
-          fontWeight: 700,
-          color: T.textHi,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-        }}>
-          {mode === 'screener' ? label : (selectedTicker || '—')}
-        </span>
-        <span style={{
-          fontSize: 10,
-          letterSpacing: '0.14em',
-          color: T.textLo,
-          textTransform: 'uppercase',
-          borderLeft: `1px solid ${T.border}`,
-          paddingLeft: 16,
-        }}>
-          NSE · {label}
-        </span>
-        <span style={{
-          fontSize: 10,
-          letterSpacing: '0.12em',
-          color: T.textLo,
-          textTransform: 'uppercase',
-        }}>
-          {mode === 'screener'
-            ? 'Market-wide OI + Price signal'
-            : 'Single ticker analytics'}
-        </span>
-
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{
-            width: 6, height: 6, borderRadius: '50%',
-            background: T.green,
-            boxShadow: `0 0 6px ${T.green}`,
-            display: 'inline-block',
-          }} />
-          <span style={{ fontSize: 9, letterSpacing: '0.12em', color: T.textLo, textTransform: 'uppercase' }}>NSE</span>
-        </div>
-      </div>
+      <PageHeader
+        title={mode === 'screener' ? label : (selectedTicker || '—')}
+        extra={[`NSE · ${label}`, mode === 'screener' ? 'Market-wide OI + Price signal' : 'Single ticker analytics']}
+        liveLabel="NSE"
+      />
 
       {/* ── ANALYTICS SUB-TAB ROW (Ticker Analytics mode only) ── */}
       {mode === 'expiry' && (

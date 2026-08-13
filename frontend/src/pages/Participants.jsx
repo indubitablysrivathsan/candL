@@ -9,55 +9,25 @@ import {
 
 import LoadingSpinner from '../components/shared/LoadingSpinner';
 import DateSlider     from '../components/shared/DateSlider';
+import Divider        from '../components/shared/Divider';
+import TerminalBtn    from '../components/shared/TerminalBtn';
+import Panel, { PanelHeader } from '../components/shared/Panel';
+import DateRangeRow, { RangePresets } from '../components/shared/DateRangeRow';
+import ChartTooltip   from '../components/shared/ChartTooltip';
+import PageHeader     from '../components/shared/PageHeader';
+import TabBar         from '../components/shared/TabBar';
+import { T, mono, labelStyle, PARTICIPANT_COLORS, PARTICIPANTS, chartAxisProps, gridProps } from '../theme';
+import { fmtK, signed } from '../utils/formatters';
+import { defaultRange } from '../utils/dateRange';
+import { downloadCSV } from '../utils/csv';
 import { participant } from '../api/client';
 
 const toAssetClass = (ac) => ac === 'EQUITY' ? 'STOCK' : ac;
 
-/* ─── DESIGN TOKENS ──────────────────────────────────────────── */
-const T = {
-  bg:         '#06080c',
-  surface:    '#0b0f16',
-  surfaceHi:  '#111720',
-  border:     'rgba(255,255,255,0.07)',
-  borderHi:   'rgba(255,255,255,0.14)',
-  amber:      '#F0A500',
-  amberDim:   'rgba(240,165,0,0.12)',
-  amberBorder:'rgba(240,165,0,0.35)',
-  green:      '#00C896',
-  greenDim:   'rgba(0,200,150,0.12)',
-  red:        '#E05252',
-  redDim:     'rgba(224,82,82,0.12)',
-  pink:       '#D66E9A',
-  blue:       '#4A9EFF',
-  purple:     '#A855F7',
-  textHi:     'rgba(255,255,255,0.90)',
-  textMid:    'rgba(255,255,255,0.50)',
-  textLo:     'rgba(255,255,255,0.25)',
-  textGhost:  'rgba(255,255,255,0.10)',
-};
-
-const PARTICIPANT_COLORS = {
-  FII:    T.blue,
-  DII:    T.green,
-  Client: T.amber,
-  Pro:    T.purple,
-};
-
-const PARTICIPANTS  = ['FII', 'DII', 'Client', 'Pro'];
 const ASSET_CLASSES = ['INDEX', 'STOCK'];
 
 /* ─── SHARED STYLE HELPERS ───────────────────────────────────── */
-const mono = { fontFamily: "'IBM Plex Mono', 'Fira Code', 'Consolas', monospace" };
-
-const label = (extra = {}) => ({
-  ...mono,
-  fontSize: 9,
-  fontWeight: 700,
-  letterSpacing: '0.14em',
-  textTransform: 'uppercase',
-  color: T.textLo,
-  ...extra,
-});
+const label = labelStyle;
 
 const dataVal = (color = T.textHi, size = 14) => ({
   ...mono,
@@ -67,114 +37,13 @@ const dataVal = (color = T.textHi, size = 14) => ({
   letterSpacing: '0.04em',
 });
 
-/* ─── HELPERS ────────────────────────────────────────────────── */
-const fmt  = (n, dec = 0) => n == null ? '—' : Number(n).toLocaleString('en-IN', { maximumFractionDigits: dec });
-const fmtK = (v) => {
-  if (v == null) return '—';
-  const abs = Math.abs(v);
-  if (abs >= 1_00_000) return `${(v / 1_00_000).toFixed(2)}L`;
-  if (abs >= 1_000)    return `${(v / 1_000).toFixed(1)}K`;
-  return fmt(v);
-};
-const signed = (v) => v == null ? '—' : (v >= 0 ? '+' : '') + fmtK(v);
-
-function defaultRange(allDates, months = 3) {
-  if (!allDates.length) return { start: '', end: '' };
-  return { start: allDates.at(-(months * 22)) ?? allDates[0], end: allDates.at(-1) };
-}
-
-/* ─── CSV ────────────────────────────────────────────────────── */
-function downloadCSV(rows, filename) {
-  if (!rows?.length) return;
-  const headers = Object.keys(rows[0]);
-  const lines = [
-    headers.join(','),
-    ...rows.map(row => headers.map(h => {
-      const v = row[h]; if (v == null) return '';
-      const s = String(v);
-      return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
-    }).join(',')),
-  ];
-  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
-
 /* ─── SHARED COMPONENTS ──────────────────────────────────────── */
-
-function Divider({ vertical, style = {} }) {
-  return vertical
-    ? <div style={{ width: 1, alignSelf: 'stretch', background: T.border, flexShrink: 0, ...style }} />
-    : <div style={{ height: 1, background: T.border, ...style }} />;
-}
-
-function TerminalBtn({ active, children, onClick, disabled, style = {} }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        ...mono,
-        padding: '4px 11px',
-        fontSize: 10,
-        fontWeight: 600,
-        letterSpacing: '0.10em',
-        textTransform: 'uppercase',
-        border: `1px solid ${active ? T.amberBorder : T.border}`,
-        background: active ? T.amberDim : 'transparent',
-        color: active ? T.amber : T.textMid,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.4 : 1,
-        transition: 'all 0.12s',
-        whiteSpace: 'nowrap',
-        borderRadius: 0,
-        ...style,
-      }}
-    >
-      {children}
-    </button>
-  );
-}
 
 function CSVBtn({ rows, filename }) {
   return (
     <TerminalBtn onClick={() => downloadCSV(rows, filename)} disabled={!rows?.length}>
       ↓ Export CSV
     </TerminalBtn>
-  );
-}
-
-function PanelHeader({ title, subtitle, right }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '8px 14px',
-      borderBottom: `1px solid ${T.border}`,
-      background: T.surfaceHi,
-      gap: 12,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <span style={label({ color: T.amber, letterSpacing: '0.16em' })}>{title}</span>
-        {subtitle && <span style={{ ...mono, fontSize: 10, color: T.textLo }}>{subtitle}</span>}
-      </div>
-      {right && <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>{right}</div>}
-    </div>
-  );
-}
-
-function Panel({ title, subtitle, right, children, style = {} }) {
-  return (
-    <div style={{
-      background: T.surface,
-      border: `1px solid ${T.border}`,
-      borderRadius: 0,
-      overflow: 'hidden',
-      ...style,
-    }}>
-      <PanelHeader title={title} subtitle={subtitle} right={right} />
-      <div style={{ padding: '14px' }}>{children}</div>
-    </div>
   );
 }
 
@@ -187,42 +56,6 @@ function AssetToggle({ value, onChange }) {
           {ac}
         </TerminalBtn>
       ))}
-    </div>
-  );
-}
-
-function RangePresets({ allDates, onStart, onEnd }) {
-  return (
-    <div style={{ display: 'flex', border: `1px solid ${T.border}` }}>
-      {[1, 3, 6, 12].map((m, i) => (
-        <TerminalBtn key={m}
-          onClick={() => { const r = defaultRange(allDates, m); onStart(r.start); onEnd(r.end); }}
-          style={{ borderWidth: 0, borderRight: i < 3 ? `1px solid ${T.border}` : 0 }}>
-          {m < 12 ? `${m}M` : '1Y'}
-        </TerminalBtn>
-      ))}
-    </div>
-  );
-}
-
-function DateRangeRow({ allDates, startDate, endDate, onStart, onEnd }) {
-  const inputStyle = {
-    ...mono,
-    fontSize: 10,
-    padding: '4px 8px',
-    background: T.surfaceHi,
-    border: `1px solid ${T.border}`,
-    color: T.textMid,
-    outline: 'none',
-    borderRadius: 0,
-    letterSpacing: '0.04em',
-  };
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      <RangePresets allDates={allDates} onStart={onStart} onEnd={onEnd} />
-      <input type="date" value={startDate} onChange={e => onStart(e.target.value)} style={inputStyle} />
-      <span style={{ color: T.textLo, fontSize: 10 }}>→</span>
-      <input type="date" value={endDate}   onChange={e => onEnd(e.target.value)}   style={inputStyle} />
     </div>
   );
 }
@@ -256,31 +89,6 @@ function ParticipantToggles({ activeLines, onToggle }) {
     </div>
   );
 }
-
-function TermTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{
-      background: T.surfaceHi,
-      border: `1px solid ${T.borderHi}`,
-      padding: '10px 14px',
-      minWidth: 180,
-    }}>
-      <div style={label_({ color: T.amber, marginBottom: 8 })}>{label}</div>
-      {payload.map((p, i) => p.value != null && (
-        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 4 }}>
-          <span style={{ ...mono, fontSize: 10, color: p.color }}>{p.name}</span>
-          <span style={{ ...mono, fontSize: 11, color: T.textHi, fontWeight: 600 }}>{fmtK(p.value)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-// avoid collision with label helper
-const label_ = (extra = {}) => ({
-  ...mono, fontSize: 9, fontWeight: 700, letterSpacing: '0.14em',
-  textTransform: 'uppercase', color: T.textLo, ...extra,
-});
 
 function NetVal({ value, dim }) {
   if (value == null) return (
@@ -342,15 +150,6 @@ const tdStyle = (right = true) => ({
   borderBottom: `1px solid ${T.border}`,
   whiteSpace: 'nowrap',
 });
-
-/* ─── CHART SHARED PROPS ─────────────────────────────────────── */
-const chartAxisProps = {
-  tick: { fill: T.textLo, fontSize: 9, fontFamily: 'IBM Plex Mono, monospace', letterSpacing: '0.04em' },
-  tickLine: false,
-  axisLine: { stroke: T.border },
-};
-
-const gridProps = { strokeDasharray: '2 4', stroke: T.textGhost, vertical: false };
 
 /* ─── LOADING ────────────────────────────────────────────────── */
 function TerminalLoading() {
@@ -571,7 +370,7 @@ function NetOIChart({ allDates }) {
               tickFormatter={d => d.slice(5)} interval="preserveStartEnd" />
             <YAxis {...chartAxisProps} tickFormatter={fmtK} width={58} />
             <ReferenceLine y={0} stroke={T.borderHi} strokeDasharray="3 3" />
-            <Tooltip content={<TermTooltip />} />
+            <Tooltip content={<ChartTooltip />} />
             {PARTICIPANTS.map(p => activeLines.has(p) && (
               <Line key={p} dataKey={`${p}_NA`} name={p} stroke={PARTICIPANT_COLORS[p]}
                 dot={false} strokeWidth={p === 'FII' ? 2 : 1.5} />
@@ -648,7 +447,7 @@ function NetVolChart({ allDates }) {
               tickFormatter={d => d.slice(5)} interval="preserveStartEnd" />
             <YAxis {...chartAxisProps} tickFormatter={fmtK} width={58} />
             <ReferenceLine y={0} stroke={T.borderHi} strokeDasharray="3 3" />
-            <Tooltip content={<TermTooltip />} />
+            <Tooltip content={<ChartTooltip />} />
             {PARTICIPANTS.map(p => activeLines.has(p) && (
               <Bar key={p} dataKey={`${p}_NA`} name={p} fill={PARTICIPANT_COLORS[p]}
                 opacity={0.80} radius={0} />
@@ -745,7 +544,7 @@ function OptionsPositioning({ allDates }) {
               tickFormatter={d => d.slice(5)} interval="preserveStartEnd" />
             <YAxis {...chartAxisProps} tickFormatter={fmtK} width={58} />
             <ReferenceLine y={0} stroke={T.borderHi} strokeDasharray="3 3" />
-            <Tooltip content={<TermTooltip />} />
+            <Tooltip content={<ChartTooltip />} />
             <Line dataKey="ce" name={`${activeP} CE`} stroke={color}   dot={false} strokeWidth={2} />
             <Line dataKey="pe" name={`${activeP} PE`} stroke={T.pink}  dot={false} strokeWidth={2} strokeDasharray="5 3" />
           </LineChart>
@@ -1139,57 +938,11 @@ export default function Participants() {
   return (
     <div style={{ background: T.bg, minHeight: '100vh', ...mono }}>
       {/* ── Page Header ── */}
-      <div style={{
-        borderBottom: `1px solid ${T.border}`,
-        background: T.surface,
-        padding: '0 20px',
-      }}>
-        {/* Title row */}
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '10px 0 0',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: T.textHi, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-              Participant Activity
-            </span>
-            <span style={{ fontSize: 10, color: T.textLo, letterSpacing: '0.06em' }}>
-              FII · DII · Client · Pro — net positioning across futures and options
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 6, height: 6, background: T.green, borderRadius: '50%' }} />
-            <span style={{ fontSize: 9, color: T.green, letterSpacing: '0.12em', fontWeight: 700 }}>NSE LIVE</span>
-          </div>
-        </div>
-
-        {/* Tab strip */}
-        <div style={{ display: 'flex', gap: 0, marginTop: 8 }}>
-          {sections.map(s => (
-            <button
-              key={s.key}
-              onClick={() => setSection(s.key)}
-              style={{
-                ...mono,
-                padding: '8px 14px',
-                fontSize: 10,
-                fontWeight: 600,
-                letterSpacing: '0.10em',
-                textTransform: 'uppercase',
-                background: 'transparent',
-                border: 'none',
-                borderBottom: section === s.key ? `2px solid ${T.amber}` : '2px solid transparent',
-                color: section === s.key ? T.amber : T.textMid,
-                cursor: 'pointer',
-                transition: 'all 0.12s',
-                marginBottom: -1,
-              }}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <PageHeader
+        title="Participant Activity"
+        subtitle="FII · DII · Client · Pro — net positioning across futures and options"
+      />
+      <TabBar tabs={sections} active={section} onChange={setSection} />
 
       {/* ── Content ── */}
       <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
