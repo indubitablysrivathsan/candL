@@ -91,6 +91,8 @@ def load_manifest() -> pd.DataFrame:
         if col not in df.columns:
             df[col] = "" if col in ("trade_date", "status") else 0
 
+    df["status"] = df["status"].astype("object")
+
     for col in _FLAG_COLS:
         df[col] = (
             pd.to_numeric(df[col], errors="coerce")

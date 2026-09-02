@@ -756,6 +756,8 @@ export default function Options({ assetType = 'stock_options' }) {
 
         const list = sortExpiries(res?.expiries || [], dailySnapshotDate);
 
+        setExpiries(list);
+
         if (isDailySnapshot) {
             setSelectedExpiries(list.length ? [list[0]] : []);
         } else {
@@ -866,7 +868,7 @@ export default function Options({ assetType = 'stock_options' }) {
             <div style={panelStyle}>
               <PanelHeader
                 title="Daily Expiry Snapshot"
-                subtitle={`${selectedExpiries[0] || '--'} · ${startDate || '--'}`}
+                subtitle={`${selectedExpiries[0] || '--'} · ${dailySnapshotDate || '--'}`}
                 right={<TerminalBtn onClick={() => {
                   if (!snapshotRows.length) return;
                   const headers = ['Ticker', 'Underlying', 'Max Pain', 'PCR', 'CE', 'PE'];
@@ -874,7 +876,7 @@ export default function Options({ assetType = 'stock_options' }) {
                     headers.join(','),
                     ...snapshotRows.map((r) => [r.ticker, r.underlying_price, r.max_pain, r.pcr, r.ce, r.pe].join(',')),
                   ].join('\n');
-                  downloadCsv(csv, `${selectedExpiries[0]}_${startDate}_daily_expiry_snapshot.csv`);
+                  downloadCsv(csv, `${selectedExpiries[0]}_${dailySnapshotDate}_daily_expiry_snapshot.csv`);
                 }}>↓ CSV</TerminalBtn>}
               />
               {loadingSnapshot ? (
