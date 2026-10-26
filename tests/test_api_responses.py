@@ -28,9 +28,11 @@ def api_client(tmp_db, tmp_manifest, patch_raw_roots, monkeypatch):
     one date) then boots the FastAPI app against it, with startup_sync
     disabled.
     """
-    from pipeline.processors import eq_bhav, fo
-    import pipeline.startup_sync as startup_sync_mod
 
+    import pipeline.startup_sync as startup_sync_mod
+    from pipeline.processors import cm_bhav, eq_bhav, fo
+
+    cm_bhav.process(DATE_ROLLOVER)
     eq_bhav.process(DATE_ROLLOVER)
     fo.process(DATE_ROLLOVER)
 
@@ -45,12 +47,19 @@ def _get_known_eq_ticker(tmp_db):
     import api.db as db
     conn = db.get_conn(read_only=True)
     try:
-        row = conn.execute(
-            "SELECT ticker FROM instruments WHERE instrument_type = 'EQ' LIMIT 1"
-        ).fetchone()
+        row = conn.execute("""
+            SELECT i.ticker
+            FROM instruments i
+            JOIN market_data_daily m USING (instrument_key)
+            WHERE i.segment = 'CM'
+              AND i.series = 'EQ'
+              AND m.trade_date = '2026-07-01'
+            ORDER BY i.ticker
+            LIMIT 1
+        """).fetchone()
     finally:
         conn.close()
-    assert row is not None, "fixture must contain at least one EQ instrument"
+    assert row is not None, "fixture must contain at least one CM EQ-series instrument with prices"
     return row[0]
 
 

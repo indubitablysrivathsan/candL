@@ -11,7 +11,13 @@ we must patch the attribute on each *importing* module instead
 (e.g. `pipeline.processors.fo.FO_RAW_ROOT`, `api.db.NSE_DB_PATH`).
 
 This conftest patches:
-  - api.db.NSE_DB_PATH            -> tmp DuckDB file (fresh per test)
+  - api.db.NSE_DB_PATH              -> tmp DuckDB file (fresh per test)
+  - api.db.PART_OI_ROOT / PART_VOL_ROOT
+        -> fixture dirs. api.db._PROCESS_CHECK uses these (via a lambda that
+           reads the module global at call time) to decide whether
+           part_oi / part_vol are "already processed" because their source
+           file is absent. Unpatched, is_processed() would look at the REAL
+           data directory and could silently skip a test's processing.
   - pipeline.manifest.MANIFEST_PATH -> tmp copy of the real fixture manifest
   - each processor's *_ROOT constant -> tests/fixtures/raw/<subdir>
 
@@ -74,7 +80,10 @@ def patch_raw_roots(monkeypatch):
     Import processor modules lazily so this fixture doesn't hard-fail if a
     module has an unrelated import error unrelated to the test at hand.
     """
+    import api.db as db_mod
     import pipeline.processors.fo as fo_mod
+    import pipeline.processors.fo_contracts as fo_contracts_mod
+    import pipeline.processors.cm_securities as cm_securities_mod
     import pipeline.processors.eq_bhav as eq_bhav_mod
     import pipeline.processors.cm_bhav as cm_bhav_mod
     import pipeline.processors.fii as fii_mod
@@ -90,6 +99,16 @@ def patch_raw_roots(monkeypatch):
     monkeypatch.setattr(participant_mod, "PART_VOL_ROOT", FIXTURES_ROOT / "part_vol")
     monkeypatch.setattr(fo_volt_mod, "FO_VOLT_ROOT", FIXTURES_ROOT / "fo_volt")
     monkeypatch.setattr(mkt_act_mod, "MKT_ACT_ROOT", FIXTURES_ROOT / "mkt_act")
+
+    # Forward-looking master files (file_date != trade_date).
+    # NOTE: the fixture subdirectory names below are ASSUMED — adjust if your
+    # tests/fixtures/raw layout differs.
+    monkeypatch.setattr(fo_contracts_mod, "FO_CONTRACT_ROOT", FIXTURES_ROOT / "fo_contracts")
+    monkeypatch.setattr(cm_securities_mod, "CM_SECURITY_ROOT", FIXTURES_ROOT / "cm_security")
+
+    # api.db._PROCESS_CHECK looks these up as module globals at call time.
+    monkeypatch.setattr(db_mod, "PART_OI_ROOT", FIXTURES_ROOT / "part_oi")
+    monkeypatch.setattr(db_mod, "PART_VOL_ROOT", FIXTURES_ROOT / "part_vol")
 
 
 # ── Combined fixture for most processor tests ────────────────────────────────

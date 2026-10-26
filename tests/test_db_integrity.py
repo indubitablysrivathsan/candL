@@ -42,54 +42,53 @@ def test_options_analytics_primary_key_rejects_raw_duplicate_insert(tmp_db):
 def test_futures_analytics_primary_key_rejects_raw_duplicate_insert(tmp_db):
     import api.db as db
 
+    cols = """(instrument_type, ticker, expiry, trade_date, underlying_price,
+               chng_in_price, chng_price_per, chng_oi_per, quadrant, basis,
+               cost_of_carry, choi_volume_ratio, days_to_expiry)"""
     conn = db.get_conn()
     try:
-        conn.execute("""
-            INSERT INTO futures_analytics VALUES
-            ('STF', 'TESTCO', '2026-07-30', '2026-07-01', 1.0, 1.0, 1.0, 'long_buildup', 0.5, 0.1, 0.01, 29)
+        conn.execute(f"""
+            INSERT INTO futures_analytics {cols} VALUES
+            ('STF', 'TESTCO', '2026-07-30', '2026-07-01',
+             1500, 1.0, 1.0, 1.0, 'long_buildup', 0.5, 0.1, 0.01, 29)
         """)
         with pytest.raises(duckdb.ConstraintException):
-            conn.execute("""
-                INSERT INTO futures_analytics VALUES
-                ('STF', 'TESTCO', '2026-07-30', '2026-07-01', 2.0, 2.0, 2.0, 'short_buildup', 0.6, 0.2, 0.02, 29)
+            conn.execute(f"""
+                INSERT INTO futures_analytics {cols} VALUES
+                ('STF', 'TESTCO', '2026-07-30', '2026-07-01',
+                 1600, 2.0, 2.0, 2.0, 'short_buildup', 0.6, 0.2, 0.02, 29)
             """)
     finally:
         conn.close()
+
+
+_INSTR_COLS = "(instrument_key, exchange, segment, instrument_id, instrument_type, ticker, instrument_name, isin, series, expiry, strike, option_type)"
+
+
 
 
 def test_make_instrument_key_produces_primary_key_identity(tmp_db):
     import api.db as db
 
     key = make_instrument_key(
-        instrument_type="STF",
-        ticker="TESTCO",
-        expiry="2026-07-30",
-        strike=None,
-        option_type=None,
-        series="XX",
+        instrument_type="STF", ticker="TESTCO", expiry="2026-07-30",
+        strike=None, option_type=None, series="XX",
     )
 
     conn = db.get_conn()
     try:
-        conn.execute("""
-            INSERT INTO instruments VALUES
-            (?, 'NSE', 'FO', 'STF', 1,
-             'TESTCO', 'TESTCO-FUT',
-             NULL, 'XX',
-             '2026-07-30', '2026-07-30',
-             NULL, NULL, 100)
+        conn.execute(f"""
+            INSERT INTO instruments {_INSTR_COLS} VALUES
+            (?, 'NSE', 'FO', 1, 'STF', 'TESTCO', 'TESTCO-FUT',
+             NULL, 'XX', '2026-07-30', NULL, NULL)
         """, [key])
 
         with pytest.raises(duckdb.ConstraintException):
-            conn.execute("""
-                INSERT INTO instruments VALUES
-                (?, 'NSE', 'FO', 'STF', 2,
-                 'TESTCO', 'TESTCO-FUT-DUP',
-                 NULL, 'XX',
-                 '2026-07-30', '2026-07-30',
-                 NULL, NULL, 100)
+            conn.execute(f"""
+                INSERT INTO instruments {_INSTR_COLS} VALUES
+                (?, 'NSE', 'FO', 2, 'STF', 'TESTCO', 'TESTCO-FUT-DUP',
+                 NULL, 'XX', '2026-07-30', NULL, NULL)
             """, [key])
-
     finally:
         conn.close()
 
@@ -97,29 +96,23 @@ def test_make_instrument_key_produces_primary_key_identity(tmp_db):
 def test_market_data_daily_primary_key_rejects_duplicate_trade_date_instrument(tmp_db):
     import api.db as db
 
+    mdd_cols = """(trade_date, instrument_key, open, high, low, close, last,
+                   prev_close, volume, turnover, trade_count)"""
     conn = db.get_conn()
     try:
-        conn.execute("""
-            INSERT INTO instruments VALUES
-            (333, 'NSE', 'CM', 'EQ', NULL, 'TESTCO', 'TESTCO', NULL, 'EQ',
-             NULL, NULL, NULL, NULL, NULL)
+        conn.execute(f"""
+            INSERT INTO instruments {_INSTR_COLS} VALUES
+            (333, 'NSE', 'CM', NULL, 'EQ', 'TESTCO', 'TESTCO',
+             NULL, 'EQ', NULL, NULL, NULL)
         """)
-        conn.execute("""
-            INSERT INTO market_data_daily
-            (trade_date, instrument_key, open, high, low, close, last, prev_close,
-             avg_price, volume, turnover, trade_count, open_interest, change_in_oi,
-             settlement_price, underlying_price, delivery_qty, delivery_pct)
-            VALUES ('2026-07-01', 333, 100, 105, 99, 102, 102, 101,
-                     NULL, 1000, 100000, 50, NULL, NULL, NULL, NULL, NULL, NULL)
+        conn.execute(f"""
+            INSERT INTO market_data_daily {mdd_cols}
+            VALUES ('2026-07-01', 333, 100, 105, 99, 102, 102, 101, 1000, 100000, 50)
         """)
         with pytest.raises(duckdb.ConstraintException):
-            conn.execute("""
-                INSERT INTO market_data_daily
-                (trade_date, instrument_key, open, high, low, close, last, prev_close,
-                 avg_price, volume, turnover, trade_count, open_interest, change_in_oi,
-                 settlement_price, underlying_price, delivery_qty, delivery_pct)
-                VALUES ('2026-07-01', 333, 999, 999, 999, 999, 999, 999,
-                         NULL, 1, 1, 1, NULL, NULL, NULL, NULL, NULL, NULL)
+            conn.execute(f"""
+                INSERT INTO market_data_daily {mdd_cols}
+                VALUES ('2026-07-01', 333, 999, 999, 999, 999, 999, 999, 1, 1, 1)
             """)
     finally:
         conn.close()
